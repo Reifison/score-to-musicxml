@@ -1,0 +1,74 @@
+import type { AuditAction, AuditLog, Role, Score, ScoreStatus, Session, User } from "../domain.js";
+
+export type CreateUserInput = {
+  name: string;
+  email: string;
+  passwordHash: string;
+  role: Role;
+  isActive?: boolean;
+};
+
+export type UpdateUserInput = Partial<Pick<User, "name" | "email" | "passwordHash" | "role" | "isActive">>;
+
+export type CreateScoreInput = {
+  userId: string;
+  originalFilename: string;
+  storedFilename: string;
+  fileType: string;
+  mimeType: string;
+  fileSize: number;
+  uploadStatus: ScoreStatus;
+  conversionStatus: ScoreStatus;
+};
+
+export type UpdateScoreInput = Partial<Pick<Score, "uploadStatus" | "conversionStatus" | "errorMessage" | "warnings" | "confidence" | "musicxmlFilename" | "convertedAt">>;
+
+export type ScoreFilters = {
+  userId?: string;
+  status?: ScoreStatus;
+  from?: Date;
+  to?: Date;
+};
+
+export interface UserRepository {
+  create(input: CreateUserInput): Promise<User>;
+  findById(id: string): Promise<User | null>;
+  findByEmail(email: string): Promise<User | null>;
+  list(): Promise<User[]>;
+  update(id: string, input: UpdateUserInput): Promise<User>;
+  delete(id: string): Promise<void>;
+}
+
+export interface SessionRepository {
+  create(input: { tokenHash: string; userId: string; expiresAt: Date }): Promise<Session>;
+  findByTokenHash(tokenHash: string): Promise<Session | null>;
+  deleteByTokenHash(tokenHash: string): Promise<void>;
+  deleteExpired(now: Date): Promise<void>;
+}
+
+export interface ScoreRepository {
+  create(input: CreateScoreInput): Promise<Score>;
+  findById(id: string): Promise<Score | null>;
+  list(filters?: ScoreFilters): Promise<Score[]>;
+  update(id: string, input: UpdateScoreInput): Promise<Score>;
+  delete(id: string): Promise<void>;
+}
+
+export interface AuditRepository {
+  create(input: {
+    actorId?: string | null;
+    action: AuditAction;
+    entity?: string | null;
+    entityId?: string | null;
+    ipAddress?: string | null;
+    metadata?: Record<string, unknown> | null;
+  }): Promise<AuditLog>;
+  list(): Promise<AuditLog[]>;
+}
+
+export type Repositories = {
+  users: UserRepository;
+  sessions: SessionRepository;
+  scores: ScoreRepository;
+  audits: AuditRepository;
+};

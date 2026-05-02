@@ -1,0 +1,108 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum UserRole {
+  admin
+  user
+}
+
+enum ScoreStatus {
+  uploaded
+  queued
+  processing
+  converted
+  failed
+}
+
+enum AuditAction {
+  login_success
+  login_failed
+  logout
+  user_created
+  user_updated
+  user_deactivated
+  user_deleted
+  role_changed
+  score_uploaded
+  conversion_queued
+  conversion_started
+  conversion_completed
+  conversion_failed
+  score_downloaded
+  score_deleted
+}
+
+model User {
+  id           String     @id @default(uuid())
+  name         String
+  email        String     @unique
+  passwordHash String
+  role         UserRole   @default(user)
+  isActive     Boolean    @default(true)
+  createdAt    DateTime   @default(now())
+  updatedAt    DateTime   @updatedAt
+  sessions     Session[]
+  scores       Score[]
+  audits       AuditLog[] @relation("AuditActor")
+
+  @@index([role])
+  @@index([isActive])
+}
+
+model Session {
+  id        String   @id @default(uuid())
+  tokenHash String   @unique
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+
+  @@index([userId])
+  @@index([expiresAt])
+}
+
+model Score {
+  id               String      @id @default(uuid())
+  userId           String
+  user             User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  originalFilename String
+  storedFilename   String      @unique
+  fileType         String
+  mimeType         String
+  fileSize         Int
+  uploadStatus     ScoreStatus @default(uploaded)
+  conversionStatus ScoreStatus @default(uploaded)
+  errorMessage     String?
+  warnings         Json?
+  confidence       Float?
+  musicxmlFilename String?
+  createdAt        DateTime    @default(now())
+  updatedAt        DateTime    @updatedAt
+  convertedAt      DateTime?
+
+  @@index([userId])
+  @@index([conversionStatus])
+  @@index([createdAt])
+}
+
+model AuditLog {
+  id        String      @id @default(uuid())
+  actorId   String?
+  actor     User?       @relation("AuditActor", fields: [actorId], references: [id], onDelete: SetNull)
+  action    AuditAction
+  entity    String?
+  entityId  String?
+  ipAddress String?
+  metadata  Json?
+  createdAt DateTime    @default(now())
+
+  @@index([actorId])
+  @@index([action])
+  @@index([createdAt])
+}

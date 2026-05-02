@@ -1,0 +1,26 @@
+{
+  "name": "score-to-musicxml",
+  "version": "0.1.0",
+  "private": true,
+  "workspaces": [
+    "apps/api",
+    "apps/web"
+  ],
+  "scripts": {
+    "dev": "concurrently \"npm run dev -w apps/api\" \"npm run dev -w apps/web\" \"npm run worker -w apps/api\"",
+    "dev:api": "npm run dev -w apps/api",
+    "dev:web": "npm run dev -w apps/web",
+    "worker": "npm run worker -w apps/api",
+    "build": "npm run build -w apps/api && npm run build -w apps/web",
+    "test": "npm run test -w apps/api",
+    "lint": "npm run lint -w apps/api && npm run lint -w apps/web",
+    "db:migrate": "prisma migrate dev --schema prisma/schema.prisma",
+    "db:generate": "prisma generate --schema prisma/schema.prisma",
+    "db:seed": "npm run seed -w apps/api"
+  },
+  "devDependencies": {
+    "concurrently": "^9.1.2",
+    "prisma": "^6.7.0",
+    "typescript": "^5.8.3"
+  }
+}
