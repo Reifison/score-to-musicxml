@@ -23,11 +23,18 @@ export function ScoreCard({ score, onOpen, onDelete, onDownload }: { score: Scor
         </div>
       )}
       <div className="card-actions">
-        <button className="icon-button" title="Ver detalhes" aria-label="Ver detalhes" onClick={() => onOpen(score)}><Eye size={18} /></button>
+        <button className="icon-button" title="Ver detalhes" aria-label="Ver detalhes" onClick={() => onOpen(score)}>
+          <Eye size={18} />
+          <span>Detalhes</span>
+        </button>
         <button className={`icon-button ${score.conversionStatus !== "converted" ? "disabled" : ""}`} title="Baixar MusicXML" aria-label="Baixar MusicXML" onClick={() => onDownload(score)} disabled={score.conversionStatus !== "converted"}>
           <Download size={18} />
+          <span>Baixar</span>
         </button>
-        <button className="icon-button danger" title="Excluir" aria-label="Excluir" onClick={() => onDelete(score)}><Trash2 size={18} /></button>
+        <button className="icon-button danger" title="Excluir" aria-label="Excluir" onClick={() => onDelete(score)}>
+          <Trash2 size={18} />
+          <span>Excluir</span>
+        </button>
       </div>
     </article>
   );

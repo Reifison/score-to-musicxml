@@ -241,9 +241,9 @@ function AdminUsers({ currentUser, users, onRefresh }: { currentUser: User; user
           <tbody>
             {users.map((item) => (
               <tr key={item.id}>
-                <td>{item.name}</td>
-                <td>{item.email}</td>
-                <td>
+                <td data-label="Nome">{item.name}</td>
+                <td data-label="E-mail">{item.email}</td>
+                <td data-label="Perfil">
                   <select
                     value={item.role}
                     disabled={item.id === currentUser.id || busyId === item.id}
@@ -253,7 +253,7 @@ function AdminUsers({ currentUser, users, onRefresh }: { currentUser: User; user
                     <option value="admin">Admin</option>
                   </select>
                 </td>
-                <td>
+                <td data-label="Status">
                   <button
                     type="button"
                     disabled={item.id === currentUser.id || busyId === item.id}
@@ -262,7 +262,7 @@ function AdminUsers({ currentUser, users, onRefresh }: { currentUser: User; user
                     {item.isActive ? "Ativo" : "Inativo"}
                   </button>
                 </td>
-                <td>
+                <td data-label="Ações">
                   <button
                     className="danger-button"
                     type="button"
@@ -283,10 +283,16 @@ function AdminUsers({ currentUser, users, onRefresh }: { currentUser: User; user
 
 function AuditTable({ audits }: { audits: AuditLog[] }) {
   return (
-    <div className="table-wrap">
+    <div className="table-wrap audit-table-wrap">
       <table>
         <thead><tr><th>Ação</th><th>Entidade</th><th>Data</th></tr></thead>
-        <tbody>{audits.map((audit) => <tr key={audit.id}><td>{audit.action}</td><td>{audit.entity ?? "-"}</td><td>{new Date(audit.createdAt).toLocaleString()}</td></tr>)}</tbody>
+        <tbody>{audits.map((audit) => (
+          <tr key={audit.id}>
+            <td data-label="Ação">{audit.action}</td>
+            <td data-label="Entidade">{audit.entity ?? "-"}</td>
+            <td data-label="Data">{new Date(audit.createdAt).toLocaleString()}</td>
+          </tr>
+        ))}</tbody>
       </table>
     </div>
   );
