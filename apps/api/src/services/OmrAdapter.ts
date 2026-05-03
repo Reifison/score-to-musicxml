@@ -7,7 +7,12 @@ import { AppError } from "../errors/AppError.js";
 import { MusicXmlExportService } from "./MusicXmlExportService.js";
 
 const execFileAsync = promisify(execFile);
-const maxAudiverisDimension = 3000;
+const maxAudiverisDimension = 4400;
+
+type MusicXmlPart = {
+  id: string;
+  measures: string[];
+};
 
 export type OmrResult = {
   musicXml: string;
@@ -162,21 +167,46 @@ export class AudiverisOmrAdapter implements OmrAdapter {
   private mergePageMusicXml(pageXml: string[]): string {
     if (pageXml.length === 1) return pageXml[0];
     const first = pageXml[0];
-    const partMatch = first.match(/<part id="([^"]+)">([\s\S]*?)<\/part>/);
-    if (!partMatch) return first;
+    const firstParts = this.extractParts(first);
+    if (!firstParts.length) return first;
 
-    let measureNumber = 1;
-    const mergedMeasures = pageXml
-      .flatMap((xml) => {
-        const part = xml.match(/<part id="([^"]+)">([\s\S]*?)<\/part>/);
+    const pageParts = pageXml.map((xml) => new Map(this.extractParts(xml).map((part) => [part.id, part])));
+    const partIds = firstParts.map((part) => part.id);
+    const nextMeasureByPart = new Map(partIds.map((id) => [id, 1]));
+    const mergedByPart = new Map<string, string[]>();
+
+    for (const partId of partIds) {
+      const mergedMeasures = pageParts.flatMap((parts) => {
+        const part = parts.get(partId);
         if (!part) return [];
-        return [...part[2].matchAll(/<measure\b[^>]*>[\s\S]*?<\/measure>/g)].map((match) =>
-          match[0].replace(/<measure\b[^>]*>/, () => `<measure number="${measureNumber++}">`)
-        );
-      })
-      .join("\n");
+        return part.measures.map((measure) => {
+          const measureNumber = nextMeasureByPart.get(partId) ?? 1;
+          nextMeasureByPart.set(partId, measureNumber + 1);
+          return this.renumberMeasure(measure, measureNumber);
+        });
+      });
+      mergedByPart.set(partId, mergedMeasures);
+    }
 
-    return first.replace(/<part id="([^"]+)">[\s\S]*?<\/part>/, `<part id="${partMatch[1]}">\n${mergedMeasures}\n</part>`);
+    return first.replace(/<part\s+id=(["'])([^"']+)\1[^>]*>[\s\S]*?<\/part>/g, (partXml, _quote: string, partId: string) => {
+      const measures = mergedByPart.get(partId);
+      if (!measures) return partXml;
+      return `<part id="${partId}">\n${measures.join("\n")}\n</part>`;
+    });
+  }
+
+  private extractParts(xml: string): MusicXmlPart[] {
+    return [...xml.matchAll(/<part\s+id=(["'])([^"']+)\1[^>]*>([\s\S]*?)<\/part>/g)].map((match) => ({
+      id: match[2],
+      measures: [...match[3].matchAll(/<measure\b[^>]*>[\s\S]*?<\/measure>/g)].map((measure) => measure[0])
+    }));
+  }
+
+  private renumberMeasure(measure: string, number: number): string {
+    return measure.replace(/<measure\b([^>]*)>/, (_tag, attributes: string) => {
+      const attributesWithoutNumber = attributes.replace(/\snumber=(["'])[^"']*\1/, "");
+      return `<measure number="${number}"${attributesWithoutNumber}>`;
+    });
   }
 
   private async findCommand(candidates: string[]): Promise<string | null> {

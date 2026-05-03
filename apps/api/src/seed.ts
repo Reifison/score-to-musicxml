@@ -14,7 +14,12 @@ if (!existing) {
   });
   console.log(`Admin criado: ${env.ADMIN_EMAIL}`);
 } else {
-  console.log(`Admin já existe: ${env.ADMIN_EMAIL}`);
+  if (existing.role !== "admin" || !existing.isActive) {
+    await services.repositories.users.update(existing.id, { role: "admin", isActive: true });
+    console.log(`Admin atualizado: ${env.ADMIN_EMAIL}`);
+  } else {
+    console.log(`Admin já existe: ${env.ADMIN_EMAIL}`);
+  }
 }
 
 process.exit(0);

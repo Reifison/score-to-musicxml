@@ -12,7 +12,7 @@ export function ScoreDetails({ score, onClose, onDownload }: { score: Score; onC
             <h2>{score.originalFilename}</h2>
             <StatusBadge status={score.conversionStatus} />
           </div>
-          <button className="icon-button" onClick={onClose} title="Fechar"><X size={18} /></button>
+          <button className="icon-button" onClick={onClose} title="Fechar" aria-label="Fechar"><X size={18} /></button>
         </header>
         <dl className="details-grid">
           <dt>Envio</dt><dd>{new Date(score.createdAt).toLocaleString()}</dd>

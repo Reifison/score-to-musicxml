@@ -19,7 +19,7 @@ export function App() {
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
 
-  const isAdmin = user?.role === "admin";
+  const isAdmin = normalizeRole(user?.role) === "admin";
 
   async function refreshScores() {
     const response = await api<{ scores: Score[] }>("/api/scores");
@@ -102,7 +102,7 @@ export function App() {
         <header className="topbar">
           <div>
             <h1>{viewTitle(view)}</h1>
-            <p>{user.name} · {user.role === "admin" ? "Admin" : "Usuário"}</p>
+            <p>{user.name} · {isAdmin ? "Admin" : "Usuário"}</p>
           </div>
         </header>
 
@@ -239,4 +239,8 @@ function viewTitle(view: View) {
     "admin-scores": "Partituras",
     audits: "Auditoria"
   }[view];
+}
+
+function normalizeRole(role: User["role"] | string | undefined) {
+  return String(role ?? "").toLowerCase();
 }
