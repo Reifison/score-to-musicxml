@@ -678,6 +678,22 @@ td button:hover {
   border-color: #ddd8ff;
 }
 
+td button:disabled,
+td select:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+td .danger-button {
+  color: #b42318;
+}
+
+td .danger-button:hover {
+  background: #fff1f0;
+  color: #912018;
+  border-color: #fecdca;
+}
+
 td select {
   min-height: 34px;
 }

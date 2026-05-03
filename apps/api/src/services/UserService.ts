@@ -54,6 +54,9 @@ export class UserService {
     const data = updateUserSchema.parse(input);
     const existing = await this.users.findById(id);
     if (!existing) throw notFound();
+    if (id === actor.id && ((data.role && data.role !== existing.role) || data.isActive === false)) {
+      throw new AppError(400, "Você não pode remover seu próprio acesso de admin.", "SELF_ADMIN_CHANGE");
+    }
     const passwordHash = data.password ? await this.auth.hashPassword(data.password) : undefined;
     try {
       const user = await this.users.update(id, {
@@ -74,6 +77,9 @@ export class UserService {
   async delete(id: string, actor: User, ipAddress?: string): Promise<void> {
     const existing = await this.users.findById(id);
     if (!existing) throw notFound();
+    if (id === actor.id) {
+      throw new AppError(400, "Você não pode excluir seu próprio perfil.", "SELF_DELETE");
+    }
     await this.users.update(id, { isActive: false });
     await this.audits.create({ actorId: actor.id, action: "user_deleted", entity: "user", entityId: id, ipAddress });
   }

@@ -113,7 +113,7 @@ export function App() {
           </>
         )}
 
-        {view === "admin-users" && <AdminUsers users={users} onRefresh={refreshAdmin} />}
+        {view === "admin-users" && <AdminUsers currentUser={user} users={users} onRefresh={refreshAdmin} />}
         {view === "admin-scores" && <ScoreList scores={scores} onOpen={setSelected} onDelete={deleteScore} onDownload={downloadScore} />}
         {view === "audits" && <AuditTable audits={audits} />}
         {notice && <p className="success-text">{notice}</p>}
@@ -170,22 +170,54 @@ function musicXmlName(originalFilename: string) {
   return `${base || "score"}.musicxml`;
 }
 
-function AdminUsers({ users, onRefresh }: { users: User[]; onRefresh: () => Promise<void> }) {
+function AdminUsers({ currentUser, users, onRefresh }: { currentUser: User; users: User[]; onRefresh: () => Promise<void> }) {
   const [form, setForm] = useState({ name: "", email: "", password: "", role: "user" });
   const [message, setMessage] = useState("");
+  const [error, setError] = useState("");
+  const [busyId, setBusyId] = useState<string | null>(null);
 
   async function createUser(event: React.FormEvent) {
     event.preventDefault();
     setMessage("");
-    await api("/api/users", { method: "POST", body: JSON.stringify(form) });
-    setForm({ name: "", email: "", password: "", role: "user" });
-    setMessage("Usuário criado.");
-    await onRefresh();
+    setError("");
+    try {
+      await api("/api/users", { method: "POST", body: JSON.stringify(form) });
+      setForm({ name: "", email: "", password: "", role: "user" });
+      setMessage("Usuário criado.");
+      await onRefresh();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Não foi possível criar o usuário.");
+    }
   }
 
   async function updateUser(id: string, data: Partial<User>) {
-    await api(`/api/users/${id}`, { method: "PATCH", body: JSON.stringify(data) });
-    await onRefresh();
+    setMessage("");
+    setError("");
+    setBusyId(id);
+    try {
+      await api(`/api/users/${id}`, { method: "PATCH", body: JSON.stringify(data) });
+      await onRefresh();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Não foi possível atualizar o usuário.");
+    } finally {
+      setBusyId(null);
+    }
+  }
+
+  async function deleteUser(item: User) {
+    if (!window.confirm(`Excluir o perfil de ${item.name}?`)) return;
+    setMessage("");
+    setError("");
+    setBusyId(item.id);
+    try {
+      await api(`/api/users/${item.id}`, { method: "DELETE" });
+      setMessage("Perfil excluído.");
+      await onRefresh();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Não foi possível excluir o perfil.");
+    } finally {
+      setBusyId(null);
+    }
   }
 
   return (
@@ -201,17 +233,45 @@ function AdminUsers({ users, onRefresh }: { users: User[]; onRefresh: () => Prom
         </select>
         <button>Criar</button>
         {message && <p className="success-text">{message}</p>}
+        {error && <p className="error-text">{error}</p>}
       </form>
       <div className="table-wrap">
         <table>
-          <thead><tr><th>Nome</th><th>E-mail</th><th>Perfil</th><th>Status</th></tr></thead>
+          <thead><tr><th>Nome</th><th>E-mail</th><th>Perfil</th><th>Status</th><th>Ações</th></tr></thead>
           <tbody>
             {users.map((item) => (
               <tr key={item.id}>
                 <td>{item.name}</td>
                 <td>{item.email}</td>
-                <td><select value={item.role} onChange={(event) => updateUser(item.id, { role: event.target.value as User["role"] })}><option value="user">user</option><option value="admin">admin</option></select></td>
-                <td><button onClick={() => updateUser(item.id, { isActive: !item.isActive })}>{item.isActive ? "Ativo" : "Inativo"}</button></td>
+                <td>
+                  <select
+                    value={item.role}
+                    disabled={item.id === currentUser.id || busyId === item.id}
+                    onChange={(event) => updateUser(item.id, { role: event.target.value as User["role"] })}
+                  >
+                    <option value="user">Usuário</option>
+                    <option value="admin">Admin</option>
+                  </select>
+                </td>
+                <td>
+                  <button
+                    type="button"
+                    disabled={item.id === currentUser.id || busyId === item.id}
+                    onClick={() => updateUser(item.id, { isActive: !item.isActive })}
+                  >
+                    {item.isActive ? "Ativo" : "Inativo"}
+                  </button>
+                </td>
+                <td>
+                  <button
+                    className="danger-button"
+                    type="button"
+                    disabled={item.id === currentUser.id || busyId === item.id}
+                    onClick={() => deleteUser(item)}
+                  >
+                    Excluir
+                  </button>
+                </td>
               </tr>
             ))}
           </tbody>
