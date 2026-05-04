@@ -435,6 +435,10 @@ button:disabled,
   color: #344054;
 }
 
+.icon-button span {
+  display: none;
+}
+
 .icon-button:hover {
   background: var(--brand-soft);
   border-color: #ddd8ff;
@@ -746,26 +750,140 @@ td select {
 }
 
 @media (max-width: 640px) {
-  .centered,
-  .login-screen {
-    padding: 16px;
+  body {
+    background:
+      linear-gradient(180deg, rgb(255 255 255 / 72%) 0, rgb(233 238 243 / 0%) 260px),
+      var(--bg);
   }
 
-  .login-card,
-  .modal {
+  .centered,
+  .login-screen {
     padding: 18px;
   }
 
-  .topbar {
+  .login-screen {
+    align-items: start;
+    padding-top: 42px;
+  }
+
+  .login-card {
+    gap: 18px;
+    padding: 22px;
+  }
+
+  .login-card h1 {
+    font-size: 28px;
+  }
+
+  input,
+  select,
+  button,
+  .primary-link {
+    min-height: 46px;
+  }
+
+  .app-shell {
+    min-height: 100svh;
+    padding-bottom: calc(76px + env(safe-area-inset-bottom));
+  }
+
+  .sidebar {
+    position: fixed;
+    inset: auto 0 0;
+    z-index: 30;
+    display: grid;
+    grid-auto-flow: column;
+    grid-auto-columns: minmax(58px, 1fr);
+    gap: 2px;
     min-height: auto;
+    padding: 8px 8px calc(8px + env(safe-area-inset-bottom));
+    overflow-x: auto;
+    overscroll-behavior-x: contain;
+    background: rgb(255 255 255 / 96%);
+    border-top: 1px solid var(--line);
+    border-bottom: 0;
+    box-shadow: 0 -14px 38px rgb(15 23 42 / 12%);
+    backdrop-filter: blur(12px);
+  }
+
+  .brand {
+    display: none;
+  }
+
+  .sidebar button {
+    min-width: 58px;
+    min-height: 56px;
+    display: grid;
+    justify-items: center;
+    align-content: center;
+    gap: 5px;
+    padding: 5px 3px;
+    border-radius: 8px;
+    font-size: 11px;
+    line-height: 1.1;
+    white-space: normal;
+    text-align: center;
+  }
+
+  .sidebar button svg {
+    width: 20px;
+    height: 20px;
+  }
+
+  .sidebar button.active {
+    background: var(--brand-soft);
+    box-shadow: inset 0 3px 0 var(--brand);
+  }
+
+  .sidebar button:last-child {
+    margin-top: 0;
+  }
+
+  .content {
+    gap: 14px;
+    padding: 18px 14px 0;
+  }
+
+  .topbar {
+    min-height: 118px;
+    align-items: end;
+    padding: 18px;
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    background:
+      linear-gradient(135deg, rgb(83 71 206 / 9%), rgb(22 200 199 / 10%)),
+      var(--surface);
+    box-shadow: var(--shadow-card);
+  }
+
+  .topbar p {
+    margin-top: 7px;
+    font-size: 12px;
   }
 
   .topbar h1 {
-    font-size: 24px;
+    font-size: 26px;
+    line-height: 1.05;
   }
 
   .upload-panel {
-    grid-template-columns: auto minmax(0, 1fr);
+    grid-template-columns: 1fr;
+    gap: 13px;
+    padding: 16px;
+    border-style: solid;
+  }
+
+  .upload-panel > svg {
+    width: 48px;
+    height: 48px;
+  }
+
+  .upload-panel strong {
+    font-size: 16px;
+  }
+
+  .upload-panel span {
+    max-width: 26ch;
   }
 
   .upload-panel button {
@@ -773,51 +891,200 @@ td select {
   }
 
   .upload-panel button:first-of-type {
-    grid-column: 1 / -1;
+    grid-column: auto;
   }
 
   .upload-panel button:last-of-type {
-    grid-column: 1 / -1;
+    grid-column: auto;
   }
 
   .upload-panel .error-text {
-    grid-column: 1 / -1;
+    grid-column: auto;
   }
 
   .score-grid {
     grid-template-columns: 1fr;
+    gap: 12px;
+  }
+
+  .card {
+    padding: 15px;
+  }
+
+  .score-card {
+    min-height: auto;
+    gap: 12px;
+  }
+
+  .score-card h3 {
+    font-size: 15px;
+  }
+
+  .score-card p {
+    font-size: 12px;
+  }
+
+  .score-card .status {
+    justify-self: start;
   }
 
   .card-actions {
     display: grid;
-    grid-template-columns: repeat(3, 40px);
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 7px;
+  }
+
+  .icon-button {
+    width: 100%;
+    min-width: 0;
+    min-height: 48px;
+    gap: 6px;
+    padding: 0 8px;
+  }
+
+  .icon-button span {
+    display: inline;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    font-size: 12px;
   }
 
   .modal-backdrop {
-    padding: 12px;
+    padding: 10px;
     align-items: end;
   }
 
   .modal {
     width: 100%;
-    max-height: 94vh;
+    max-height: 96svh;
+    gap: 14px;
+    padding: 16px;
+    border-radius: 8px 8px 0 0;
   }
 
   .modal header {
+    position: sticky;
+    top: -16px;
+    z-index: 1;
     align-items: flex-start;
+    padding: 0 0 10px;
+    background: var(--surface);
+  }
+
+  .modal h2 {
+    font-size: 18px;
   }
 
   .details-grid {
     grid-template-columns: 1fr;
     gap: 3px;
+    padding: 12px;
   }
 
   .details-grid dd {
     margin-bottom: 8px;
   }
 
+  .preview {
+    min-height: 240px;
+  }
+
   .preview img,
   .preview iframe {
-    height: 340px;
+    height: 300px;
+  }
+
+  .modal > .primary-link {
+    position: sticky;
+    bottom: 0;
+    z-index: 1;
+  }
+
+  .empty-state {
+    min-height: 150px;
+    padding: 22px;
+    text-align: center;
+  }
+
+  .admin-layout {
+    gap: 12px;
+  }
+
+  .form-panel {
+    padding: 15px;
+  }
+
+  .table-wrap {
+    overflow: visible;
+    background: transparent;
+    border: 0;
+    box-shadow: none;
+  }
+
+  table,
+  thead,
+  tbody,
+  tr,
+  td {
+    display: block;
+    width: 100%;
+  }
+
+  table {
+    min-width: 0;
+  }
+
+  thead {
+    display: none;
+  }
+
+  tbody {
+    display: grid;
+    gap: 10px;
+  }
+
+  tr {
+    padding: 12px;
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    box-shadow: var(--shadow-card);
+  }
+
+  tbody tr:hover {
+    background: var(--surface);
+  }
+
+  td {
+    display: grid;
+    grid-template-columns: minmax(82px, 34%) minmax(0, 1fr);
+    gap: 10px;
+    align-items: center;
+    padding: 9px 0;
+    border-bottom: 1px solid var(--line);
+    white-space: normal;
+    overflow-wrap: anywhere;
+  }
+
+  td:last-child {
+    border-bottom: 0;
+  }
+
+  td::before {
+    content: attr(data-label);
+    color: var(--faint);
+    font-size: 11px;
+    font-weight: 850;
+    text-transform: uppercase;
+  }
+
+  td button,
+  td select {
+    width: 100%;
+  }
+
+  .audit-table-wrap td {
+    align-items: start;
   }
 }
