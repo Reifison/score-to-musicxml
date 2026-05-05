@@ -37,22 +37,31 @@ export class StubOmrAdapter implements OmrAdapter {
 }
 
 export class AudiverisOmrAdapter implements OmrAdapter {
-  async convert(inputPath: string, _originalFilename: string, outputDir: string): Promise<OmrResult> {
+  async convert(inputPath: string, originalFilename: string, outputDir: string): Promise<OmrResult> {
     if (!env.AUDIVERIS_BIN) {
       throw new AppError(500, "AUDIVERIS_BIN não configurado.", "OMR_NOT_CONFIGURED");
     }
     await fs.mkdir(outputDir, { recursive: true, mode: 0o700 });
     const preprocessing = await this.preprocessInput(inputPath, outputDir);
     const pageResults: OmrResult[] = [];
+    const pageFailures: string[] = [];
 
     for (const [index, pagePath] of preprocessing.paths.entries()) {
       const pageOutputDir = path.join(outputDir, `page-${String(index + 1).padStart(3, "0")}`);
       await fs.mkdir(pageOutputDir, { recursive: true, mode: 0o700 });
-      pageResults.push(await this.convertPage(pagePath, pageOutputDir));
+      try {
+        pageResults.push(await this.convertPage(pagePath, originalFilename, pageOutputDir));
+      } catch (error) {
+        pageFailures.push(`Pagina ${index + 1}: ${this.summarizePageFailure(error)}`);
+      }
     }
 
     if (!pageResults.length) {
-      throw new AppError(422, "Nenhuma página foi preparada para OMR.", "OMR_NO_PAGES");
+      throw new AppError(
+        422,
+        pageFailures.length ? pageFailures.join("\n") : "Nenhuma página foi preparada para OMR.",
+        pageFailures.length ? "OMR_ALL_PAGES_FAILED" : "OMR_NO_PAGES"
+      );
     }
 
     return {
@@ -61,12 +70,13 @@ export class AudiverisOmrAdapter implements OmrAdapter {
       warnings: [
         ...preprocessing.warnings,
         ...pageResults.flatMap((result) => result.warnings),
+        ...pageFailures.map((failure) => `${failure}. A pagina foi ignorada no MusicXML parcial.`),
         "Conversao automatica concluida. Revise o resultado para corrigir possiveis erros de OMR."
       ]
     };
   }
 
-  private async convertPage(pagePath: string, pageOutputDir: string): Promise<OmrResult> {
+  private async convertPage(pagePath: string, originalFilename: string, pageOutputDir: string): Promise<OmrResult> {
     try {
       await this.runAudiveris(pagePath, pageOutputDir);
     } catch (error) {
@@ -74,10 +84,11 @@ export class AudiverisOmrAdapter implements OmrAdapter {
       const exportedAfterError = await this.findExportedMusicXml(pageOutputDir);
       if (exportedAfterError) {
         return {
-          musicXml: await fs.readFile(exportedAfterError, "utf8"),
+          musicXml: this.cleanAudiverisText(await fs.readFile(exportedAfterError, "utf8"), originalFilename),
           confidence: 0.55,
           warnings: [
             "Audiveris gerou MusicXML, mas retornou avisos/erro no processo. Revise cuidadosamente no MuseScore.",
+            "Textos OCR de cabecalho removidos para evitar titulos e creditos sobrepostos.",
             this.summarizeAudiverisOutput(output)
           ]
         };
@@ -90,9 +101,9 @@ export class AudiverisOmrAdapter implements OmrAdapter {
       throw new AppError(422, "A engine OMR não gerou MusicXML.", "OMR_NO_OUTPUT");
     }
     return {
-      musicXml: await fs.readFile(exported, "utf8"),
+      musicXml: this.cleanAudiverisText(await fs.readFile(exported, "utf8"), originalFilename),
       confidence: 0.75,
-      warnings: []
+      warnings: ["Textos OCR de cabecalho removidos para evitar titulos e creditos sobrepostos."]
     };
   }
 
@@ -209,6 +220,31 @@ export class AudiverisOmrAdapter implements OmrAdapter {
     });
   }
 
+  private cleanAudiverisText(musicXml: string, originalFilename: string): string {
+    const title = this.escapeXml(path.parse(originalFilename).name);
+    const withoutCredits = musicXml
+      .replace(/\n?\s*<credit\b[\s\S]*?<\/credit>\s*/g, "\n")
+      .replace(/\n?\s*<movement-title>[\s\S]*?<\/movement-title>\s*/g, "\n");
+
+    if (/<work>[\s\S]*?<\/work>/.test(withoutCredits)) {
+      return withoutCredits.replace(/<work>[\s\S]*?<\/work>/, `<work>\n    <work-title>${title}</work-title>\n  </work>`);
+    }
+
+    return withoutCredits.replace(
+      /(<score-partwise\b[^>]*>)/,
+      `$1\n  <work>\n    <work-title>${title}</work-title>\n  </work>`
+    );
+  }
+
+  private escapeXml(value: string): string {
+    return value
+      .replaceAll("&", "&amp;")
+      .replaceAll("<", "&lt;")
+      .replaceAll(">", "&gt;")
+      .replaceAll('"', "&quot;")
+      .replaceAll("'", "&apos;");
+  }
+
   private async findCommand(candidates: string[]): Promise<string | null> {
     for (const candidate of candidates) {
       if (candidate.includes("/")) {
@@ -257,6 +293,11 @@ export class AudiverisOmrAdapter implements OmrAdapter {
       return `${compact}\nInstale pelo menos um idioma OCR no Audiveris, por exemplo English ou Portuguese, em Tools > Languages/OCR languages.`;
     }
     return compact.slice(0, 3000) || "Audiveris falhou sem mensagem detalhada.";
+  }
+
+  private summarizePageFailure(error: unknown): string {
+    if (error instanceof AppError) return error.message;
+    return this.summarizeAudiverisOutput(this.errorOutput(error));
   }
 
   private errorOutput(error: unknown): string {
