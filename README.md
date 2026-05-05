@@ -56,6 +56,8 @@ O login cria um token aleatório, salva apenas o hash no banco e envia o token e
 
 Com `OMR_ENGINE=stub`, o sistema valida o fluxo, mas não gera notas reais e marca a conversão como falha para não entregar um MusicXML enganoso. Para OMR real, configure `OMR_ENGINE=audiveris` e `AUDIVERIS_BIN` para o binário do Audiveris. O adaptador usa `execFile` com argumentos separados, timeout e sem shell.
 
+Se a API e o worker estiverem rodando localmente no macOS, o caminho costuma ser `/Applications/Audiveris.app/Contents/MacOS/Audiveris`. Se estiverem rodando em Docker, esse app do macOS não existe dentro do container; nesse caso rode API/worker localmente para usar o Audiveris instalado no Mac ou instale uma versão Linux do Audiveris na imagem/container e aponte `AUDIVERIS_BIN` para esse executável.
+
 Antes de chamar o Audiveris, PDFs são divididos página por página e renderizados em resolução controlada com `pdftoppm` quando disponível. Cada página é processada separadamente e o resultado é reunido em um MusicXML final. Isso evita que PDFs vetoriais sejam convertidos em imagens gigantes acima do limite aceito pelo Audiveris.
 
 ## Segurança

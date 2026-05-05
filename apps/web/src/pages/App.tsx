@@ -4,7 +4,7 @@ import { api, downloadMusicXml } from "../api/client.js";
 import { ScoreCard } from "../components/ScoreCard.js";
 import { ScoreDetails } from "../components/ScoreDetails.js";
 import { UploadPanel } from "../components/UploadPanel.js";
-import type { AuditLog, Score, User } from "../types/domain.js";
+import type { AuditLog, Score, ScoreStatus, User } from "../types/domain.js";
 
 type View = "scores" | "profile" | "admin-users" | "admin-scores" | "audits";
 
@@ -117,7 +117,7 @@ export function App() {
         {view === "profile" && <Profile user={user} onUpdated={setUser} />}
         {view === "admin-users" && <AdminUsers currentUser={user} users={users} onRefresh={refreshAdmin} />}
         {view === "admin-scores" && <ScoreList scores={scores} onOpen={setSelected} onDelete={deleteScore} onDownload={downloadScore} />}
-        {view === "audits" && <AuditTable audits={audits} />}
+        {view === "audits" && <AuditPanel audits={audits} scores={scores} users={users} />}
         {notice && <p className="success-text">{notice}</p>}
         {error && <p className="error-text">{error}</p>}
       </section>
@@ -266,7 +266,16 @@ function AdminUsers({ currentUser, users, onRefresh }: { currentUser: User; user
         <h2>Novo usuário</h2>
         <input placeholder="Nome" value={form.name} onChange={(event) => setForm({ ...form, name: event.target.value })} required />
         <input placeholder="E-mail" type="email" value={form.email} onChange={(event) => setForm({ ...form, email: event.target.value })} required />
-        <input placeholder="Senha inicial" type="password" value={form.password} onChange={(event) => setForm({ ...form, password: event.target.value })} required />
+        <input
+          placeholder="Senha inicial"
+          type="password"
+          value={form.password}
+          onChange={(event) => setForm({ ...form, password: event.target.value })}
+          minLength={8}
+          aria-describedby="initial-password-help"
+          required
+        />
+        <p id="initial-password-help" className="field-hint">Mínimo de 8 caracteres.</p>
         <select value={form.role} onChange={(event) => setForm({ ...form, role: event.target.value })}>
           <option value="user">Usuário</option>
           <option value="admin">Admin</option>
@@ -321,20 +330,145 @@ function AdminUsers({ currentUser, users, onRefresh }: { currentUser: User; user
   );
 }
 
-function AuditTable({ audits }: { audits: AuditLog[] }) {
+type AuditTab = "events" | "score-counts";
+type ScoreQuantityFilter = "all" | "with-scores" | "without-scores" | "converted" | "failed";
+
+function AuditPanel({ audits, scores, users }: { audits: AuditLog[]; scores: Score[]; users: User[] }) {
+  const [tab, setTab] = useState<AuditTab>("events");
+
+  return (
+    <section className="logs-panel">
+      <div className="tab-bar" role="tablist" aria-label="Logs">
+        <button type="button" className={tab === "events" ? "active" : ""} onClick={() => setTab("events")}>Eventos</button>
+        <button type="button" className={tab === "score-counts" ? "active" : ""} onClick={() => setTab("score-counts")}>Partituras por usuário</button>
+      </div>
+      {tab === "events" ? <AuditTable audits={audits} users={users} /> : <ScoreQuantityTable scores={scores} users={users} />}
+    </section>
+  );
+}
+
+function AuditTable({ audits, users }: { audits: AuditLog[]; users: User[] }) {
+  const usersById = useMemo(() => new Map(users.map((item) => [item.id, item])), [users]);
+
   return (
     <div className="table-wrap audit-table-wrap">
       <table>
-        <thead><tr><th>Ação</th><th>Entidade</th><th>Data</th></tr></thead>
-        <tbody>{audits.map((audit) => (
-          <tr key={audit.id}>
-            <td data-label="Ação">{audit.action}</td>
-            <td data-label="Entidade">{audit.entity ?? "-"}</td>
-            <td data-label="Data">{new Date(audit.createdAt).toLocaleString()}</td>
-          </tr>
-        ))}</tbody>
+        <thead><tr><th>Usuário</th><th>Ação</th><th>Entidade</th><th>Data</th></tr></thead>
+        <tbody>{audits.map((audit) => {
+          const actor = audit.actorId ? usersById.get(audit.actorId) : null;
+          return (
+            <tr key={audit.id}>
+              <td data-label="Usuário">{actor ? `${actor.name} (${actor.email})` : "Não identificado"}</td>
+              <td data-label="Ação">{audit.action}</td>
+              <td data-label="Entidade">{audit.entity ?? "-"}</td>
+              <td data-label="Data">{new Date(audit.createdAt).toLocaleString()}</td>
+            </tr>
+          );
+        })}</tbody>
       </table>
     </div>
+  );
+}
+
+function ScoreQuantityTable({ scores, users }: { scores: Score[]; users: User[] }) {
+  const [search, setSearch] = useState("");
+  const [filter, setFilter] = useState<ScoreQuantityFilter>("all");
+
+  const rows = useMemo(() => {
+    const totals = new Map<string, {
+      total: number;
+      byStatus: Record<ScoreStatus, number>;
+      lastUpload: string | null;
+    }>();
+
+    for (const score of scores) {
+      const row = totals.get(score.userId) ?? {
+        total: 0,
+        byStatus: {
+          uploaded: 0,
+          queued: 0,
+          processing: 0,
+          converted: 0,
+          failed: 0
+        },
+        lastUpload: null
+      };
+      row.total += 1;
+      row.byStatus[score.conversionStatus] += 1;
+      if (!row.lastUpload || new Date(score.createdAt) > new Date(row.lastUpload)) {
+        row.lastUpload = score.createdAt;
+      }
+      totals.set(score.userId, row);
+    }
+
+    return users
+      .map((item) => ({
+        user: item,
+        total: totals.get(item.id)?.total ?? 0,
+        byStatus: totals.get(item.id)?.byStatus ?? {
+          uploaded: 0,
+          queued: 0,
+          processing: 0,
+          converted: 0,
+          failed: 0
+        },
+        lastUpload: totals.get(item.id)?.lastUpload ?? null
+      }))
+      .sort((a, b) => b.total - a.total || a.user.name.localeCompare(b.user.name));
+  }, [scores, users]);
+
+  const filteredRows = useMemo(() => {
+    const term = search.trim().toLowerCase();
+    return rows.filter((row) => {
+      const matchesSearch = !term || row.user.name.toLowerCase().includes(term) || row.user.email.toLowerCase().includes(term);
+      const matchesFilter =
+        filter === "all" ||
+        (filter === "with-scores" && row.total > 0) ||
+        (filter === "without-scores" && row.total === 0) ||
+        (filter === "converted" && row.byStatus.converted > 0) ||
+        (filter === "failed" && row.byStatus.failed > 0);
+      return matchesSearch && matchesFilter;
+    });
+  }, [filter, rows, search]);
+
+  return (
+    <>
+      <div className="filter-bar">
+        <label>Buscar usuário<input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Nome ou e-mail" /></label>
+        <label>Situação
+          <select value={filter} onChange={(event) => setFilter(event.target.value as ScoreQuantityFilter)}>
+            <option value="all">Todos</option>
+            <option value="with-scores">Com partituras</option>
+            <option value="without-scores">Sem partituras</option>
+            <option value="converted">Com convertidas</option>
+            <option value="failed">Com falhas</option>
+          </select>
+        </label>
+      </div>
+      {!filteredRows.length ? (
+        <section className="empty-state">Nenhum usuário encontrado.</section>
+      ) : (
+        <div className="table-wrap quantity-table-wrap">
+          <table>
+            <thead><tr><th>Usuário</th><th>E-mail</th><th>Total</th><th>Convertidas</th><th>Em andamento</th><th>Falhas</th><th>Último envio</th></tr></thead>
+            <tbody>{filteredRows.map((row) => {
+              const activeCount = row.byStatus.uploaded + row.byStatus.queued + row.byStatus.processing;
+              return (
+                <tr key={row.user.id}>
+                  <td data-label="Usuário">{row.user.name}</td>
+                  <td data-label="E-mail">{row.user.email}</td>
+                  <td data-label="Total" className="number-cell">{row.total}</td>
+                  <td data-label="Convertidas" className="number-cell">{row.byStatus.converted}</td>
+                  <td data-label="Em andamento" className="number-cell">{activeCount}</td>
+                  <td data-label="Falhas" className="number-cell">{row.byStatus.failed}</td>
+                  <td data-label="Último envio">{row.lastUpload ? new Date(row.lastUpload).toLocaleString() : "-"}</td>
+                </tr>
+              );
+            })}</tbody>
+          </table>
+        </div>
+      )}
+    </>
   );
 }
 

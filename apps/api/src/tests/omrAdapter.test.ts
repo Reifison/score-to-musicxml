@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
+import { env } from "../config/env.js";
 import { AppError } from "../errors/AppError.js";
 import { AudiverisOmrAdapter } from "../services/OmrAdapter.js";
 
@@ -29,6 +30,23 @@ const partBody = (musicXml: string, partId: string) => {
 };
 
 describe("AudiverisOmrAdapter", () => {
+  it("retorna mensagem clara quando o executavel configurado nao existe", async () => {
+    const originalBin = env.AUDIVERIS_BIN;
+    env.AUDIVERIS_BIN = "/tmp/audiveris-inexistente/Audiveris";
+    const adapter = new AudiverisOmrAdapter() as unknown as {
+      resolveAudiverisBin(): Promise<string>;
+    };
+
+    try {
+      await expect(adapter.resolveAudiverisBin()).rejects.toMatchObject({
+        code: "AUDIVERIS_NOT_FOUND",
+        message: expect.stringContaining("Audiveris não encontrado em /tmp/audiveris-inexistente/Audiveris")
+      });
+    } finally {
+      env.AUDIVERIS_BIN = originalBin;
+    }
+  });
+
   it("preserva todos os instrumentos ao juntar MusicXMLs de paginas diferentes", () => {
     const adapter = new AudiverisOmrAdapter() as unknown as {
       mergePageMusicXml(pageXml: string[]): string;

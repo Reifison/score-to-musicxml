@@ -1,4 +1,5 @@
 import { execFile } from "node:child_process";
+import { constants as fsConstants } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
@@ -8,6 +9,14 @@ import { MusicXmlExportService } from "./MusicXmlExportService.js";
 
 const execFileAsync = promisify(execFile);
 const maxAudiverisDimension = 4400;
+const audiverisCandidates = [
+  "/Applications/Audiveris.app/Contents/MacOS/Audiveris",
+  "/opt/audiveris/bin/Audiveris",
+  "/usr/local/bin/Audiveris",
+  "/opt/homebrew/bin/Audiveris",
+  "Audiveris",
+  "audiveris"
+];
 
 type MusicXmlPart = {
   id: string;
@@ -38,9 +47,7 @@ export class StubOmrAdapter implements OmrAdapter {
 
 export class AudiverisOmrAdapter implements OmrAdapter {
   async convert(inputPath: string, originalFilename: string, outputDir: string): Promise<OmrResult> {
-    if (!env.AUDIVERIS_BIN) {
-      throw new AppError(500, "AUDIVERIS_BIN não configurado.", "OMR_NOT_CONFIGURED");
-    }
+    await this.resolveAudiverisBin();
     await fs.mkdir(outputDir, { recursive: true, mode: 0o700 });
     const preprocessing = await this.preprocessInput(inputPath, outputDir);
     const pageResults: OmrResult[] = [];
@@ -108,24 +115,29 @@ export class AudiverisOmrAdapter implements OmrAdapter {
   }
 
   private async runAudiveris(pagePath: string, outputDir: string): Promise<void> {
-    if (!env.AUDIVERIS_BIN) {
-      throw new AppError(500, "AUDIVERIS_BIN não configurado.", "OMR_NOT_CONFIGURED");
-    }
+    const audiverisBin = await this.resolveAudiverisBin();
     // Critical: execFile passes arguments separately and never invokes a shell.
-    await execFileAsync(env.AUDIVERIS_BIN, [
-      "-batch",
-      "-transcribe",
-      "-export",
-      "-constant",
-      "org.audiveris.omr.sheet.BookManager.useCompression=false",
-      "-output",
-      outputDir,
-      "--",
-      pagePath
-    ], {
-      timeout: 600_000,
-      maxBuffer: 10 * 1024 * 1024
-    });
+    try {
+      await execFileAsync(audiverisBin, [
+        "-batch",
+        "-transcribe",
+        "-export",
+        "-constant",
+        "org.audiveris.omr.sheet.BookManager.useCompression=false",
+        "-output",
+        outputDir,
+        "--",
+        pagePath
+      ], {
+        timeout: 600_000,
+        maxBuffer: 10 * 1024 * 1024
+      });
+    } catch (error) {
+      if (this.isMissingExecutableError(error)) {
+        throw this.audiverisNotFoundError(audiverisBin);
+      }
+      throw error;
+    }
   }
 
   private async preprocessInput(inputPath: string, outputDir: string): Promise<{ paths: string[]; warnings: string[] }> {
@@ -263,6 +275,46 @@ export class AudiverisOmrAdapter implements OmrAdapter {
       }
     }
     return null;
+  }
+
+  private async resolveAudiverisBin(): Promise<string> {
+    if (env.AUDIVERIS_BIN) {
+      await this.assertExecutable(env.AUDIVERIS_BIN);
+      return env.AUDIVERIS_BIN;
+    }
+
+    const detected = await this.findCommand(audiverisCandidates);
+    if (detected) return detected;
+
+    throw new AppError(
+      500,
+      "Audiveris não encontrado. Configure AUDIVERIS_BIN no .env com o caminho do executável do Audiveris e reinicie a API e o worker.",
+      "AUDIVERIS_NOT_FOUND"
+    );
+  }
+
+  private async assertExecutable(binaryPath: string): Promise<void> {
+    if (!binaryPath.includes("/")) return;
+    try {
+      await fs.access(binaryPath, fsConstants.X_OK);
+    } catch {
+      throw this.audiverisNotFoundError(binaryPath);
+    }
+  }
+
+  private audiverisNotFoundError(binaryPath: string): AppError {
+    const dockerHint = binaryPath.startsWith("/Applications/")
+      ? " Se a API estiver rodando em Docker, esse caminho do macOS não existe dentro do container; rode a API/worker localmente ou instale uma versão Linux do Audiveris no container."
+      : "";
+    return new AppError(
+      500,
+      `Audiveris não encontrado em ${binaryPath}. Ajuste AUDIVERIS_BIN no .env para o executável correto e reinicie a API e o worker.${dockerHint}`,
+      "AUDIVERIS_NOT_FOUND"
+    );
+  }
+
+  private isMissingExecutableError(error: unknown): boolean {
+    return typeof (error as { code?: unknown }).code === "string" && (error as { code: string }).code === "ENOENT";
   }
 
   private async findExportedMusicXml(dir: string): Promise<string | null> {

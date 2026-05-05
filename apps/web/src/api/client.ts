@@ -1,6 +1,31 @@
 const isLocalHost = ["localhost", "127.0.0.1", "0.0.0.0"].includes(window.location.hostname);
 const API_URL = import.meta.env.VITE_API_URL ?? (isLocalHost ? "http://localhost:4000" : window.location.origin);
 
+type ApiErrorBody = {
+  error?: string;
+  details?: {
+    fieldErrors?: Record<string, string[] | undefined>;
+    formErrors?: string[];
+  };
+};
+
+const fieldLabels: Record<string, string> = {
+  name: "Nome",
+  email: "E-mail",
+  password: "Senha",
+  role: "Perfil",
+  isActive: "Status"
+};
+
+function apiErrorMessage(body: ApiErrorBody) {
+  const fieldError = Object.entries(body.details?.fieldErrors ?? {}).find(([, messages]) => messages?.length);
+  if (fieldError) {
+    const [field, messages] = fieldError;
+    return `${fieldLabels[field] ?? "Campo"}: ${messages?.[0]}`;
+  }
+  return body.error ?? "Erro inesperado.";
+}
+
 export async function api<T>(path: string, options: RequestInit = {}): Promise<T> {
   const headers = new Headers(options.headers);
   if (!(options.body instanceof FormData)) headers.set("Content-Type", "application/json");
@@ -11,7 +36,7 @@ export async function api<T>(path: string, options: RequestInit = {}): Promise<T
   });
   if (!response.ok) {
     const body = await response.json().catch(() => ({ error: "Erro inesperado." }));
-    throw new Error(body.error ?? "Erro inesperado.");
+    throw new Error(apiErrorMessage(body));
   }
   if (response.status === 204) return undefined as T;
   return response.json() as Promise<T>;

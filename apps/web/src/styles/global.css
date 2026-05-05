@@ -504,6 +504,13 @@ button:disabled,
   line-height: 1.45;
 }
 
+.field-hint {
+  color: var(--muted);
+  margin: -6px 0 0;
+  font-size: 12px;
+  line-height: 1.35;
+}
+
 .empty-state {
   min-height: 180px;
   display: grid;
@@ -612,6 +619,12 @@ button:disabled,
   display: grid;
   grid-template-columns: minmax(260px, 340px) 1fr;
   gap: 16px;
+  align-items: start;
+}
+
+.profile-layout {
+  display: grid;
+  grid-template-columns: minmax(280px, 420px);
 }
 
 .profile-layout {
@@ -629,6 +642,10 @@ button:disabled,
   box-shadow: var(--shadow-card);
 }
 
+.admin-layout > .form-panel {
+  align-self: start;
+}
+
 .form-panel h2 {
   margin: 0 0 2px;
   color: var(--text);
@@ -643,6 +660,57 @@ button:disabled,
   border: 1px solid var(--line);
   border-radius: var(--radius);
   box-shadow: var(--shadow-card);
+}
+
+.logs-panel {
+  display: grid;
+  gap: 14px;
+  align-content: start;
+}
+
+.tab-bar {
+  width: fit-content;
+  display: inline-flex;
+  gap: 4px;
+  padding: 4px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-card);
+}
+
+.tab-bar button {
+  min-height: 34px;
+  background: transparent;
+  color: var(--muted);
+}
+
+.tab-bar button.active,
+.tab-bar button:hover {
+  background: var(--brand-soft);
+  color: var(--brand);
+  transform: none;
+}
+
+.filter-bar {
+  display: grid;
+  grid-template-columns: minmax(220px, 1fr) minmax(180px, 240px);
+  gap: 12px;
+  align-items: end;
+  padding: 14px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-card);
+}
+
+.quantity-table-wrap table {
+  min-width: 780px;
+}
+
+.number-cell {
+  color: var(--text);
+  font-weight: 850;
 }
 
 table {
@@ -1023,6 +1091,21 @@ td select {
 
   .admin-layout {
     gap: 12px;
+  }
+
+  .tab-bar {
+    width: 100%;
+  }
+
+  .tab-bar button {
+    flex: 1;
+    min-width: 0;
+    white-space: normal;
+  }
+
+  .filter-bar {
+    grid-template-columns: 1fr;
+    padding: 13px;
   }
 
   .form-panel {

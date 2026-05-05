@@ -6,23 +6,23 @@ import type { AuditRepository, UserRepository } from "../repositories/contracts.
 import type { AuthService } from "./AuthService.js";
 
 export const createUserSchema = z.object({
-  name: z.string().trim().min(2).max(120),
-  email: z.string().trim().email().max(180),
-  password: z.string().min(8).max(200),
-  role: z.enum(["admin", "user"]),
+  name: z.string({ required_error: "Informe o nome." }).trim().min(2, "Nome precisa ter pelo menos 2 caracteres.").max(120, "Nome muito longo."),
+  email: z.string({ required_error: "Informe o e-mail." }).trim().email("Informe um e-mail válido.").max(180, "E-mail muito longo."),
+  password: z.string({ required_error: "Informe a senha." }).min(8, "Senha precisa ter pelo menos 8 caracteres.").max(200, "Senha muito longa."),
+  role: z.enum(["admin", "user"], { required_error: "Escolha o perfil.", invalid_type_error: "Perfil inválido." }),
   isActive: z.boolean().optional()
 });
 
 export const updateUserSchema = z.object({
-  name: z.string().trim().min(2).max(120).optional(),
-  email: z.string().trim().email().max(180).optional(),
-  password: z.string().min(8).max(200).optional(),
-  role: z.enum(["admin", "user"]).optional(),
+  name: z.string().trim().min(2, "Nome precisa ter pelo menos 2 caracteres.").max(120, "Nome muito longo.").optional(),
+  email: z.string().trim().email("Informe um e-mail válido.").max(180, "E-mail muito longo.").optional(),
+  password: z.string().min(8, "Senha precisa ter pelo menos 8 caracteres.").max(200, "Senha muito longa.").optional(),
+  role: z.enum(["admin", "user"], { invalid_type_error: "Perfil inválido." }).optional(),
   isActive: z.boolean().optional()
 });
 
 export const updateOwnPasswordSchema = z.object({
-  password: z.string().min(8).max(200)
+  password: z.string({ required_error: "Informe a senha." }).min(8, "Senha precisa ter pelo menos 8 caracteres.").max(200, "Senha muito longa.")
 });
 
 export class UserService {
