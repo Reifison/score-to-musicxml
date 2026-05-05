@@ -125,6 +125,59 @@ describe("AudiverisOmrAdapter", () => {
     expect(result.warnings.join("\n")).toContain("MusicXML parcial");
   });
 
+  it("resume falta de idioma OCR sem expor o comando bruto do Audiveris", () => {
+    const adapter = new AudiverisOmrAdapter() as unknown as {
+      summarizeAudiverisOutput(output: string): string;
+    };
+
+    const summary = adapter.summarizeAudiverisOutput(
+      "Command failed: /opt/audiveris/bin/Audiveris -batch -transcribe -export /tmp/audiveris-input.png WARN [] Languages 142 | *** No installed OCR languages *** Input \"/tmp/audiveris-input.png\" WARN Book 2044 | Error processing stub"
+    );
+
+    expect(summary).toContain("não há nenhum idioma OCR instalado");
+    expect(summary).toContain("reinicie a API e o worker");
+    expect(summary).not.toContain("Command failed");
+    expect(summary).not.toContain("/tmp/audiveris-input.png");
+  });
+
+  it("explica falha de reconhecimento da pagina como problema de qualidade da imagem", () => {
+    const adapter = new AudiverisOmrAdapter() as unknown as {
+      summarizeAudiverisOutput(output: string): string;
+    };
+
+    const summary = adapter.summarizeAudiverisOutput(
+      "Command failed: /opt/audiveris/bin/Audiveris -batch -transcribe WARN [audiveris-input] Book 2044 | Error processing stub WARN [audiveris-input] CLI 956 | Exception occurred java.lang.Exception: Error in reaching step PAGE"
+    );
+
+    expect(summary).toContain("Não foi possível reconhecer a página");
+    expect(summary).toContain("imagem está inclinada");
+    expect(summary).toContain("modo documento/scan");
+    expect(summary).not.toContain("Command failed");
+    expect(summary).not.toContain("java.lang.Exception");
+  });
+
+  it("prepara fotos de celular antes de chamar o Audiveris", () => {
+    const adapter = new AudiverisOmrAdapter() as unknown as {
+      imagePreprocessArgs(inputPath: string, outputPath: string): string[];
+    };
+
+    const args = adapter.imagePreprocessArgs("/tmp/foto.jpg", "/tmp/audiveris-input.png");
+
+    expect(args).toEqual(expect.arrayContaining([
+      "-auto-orient",
+      "-deskew",
+      "40%",
+      "-colorspace",
+      "Gray",
+      "-contrast-stretch",
+      "2%x2%",
+      "-sharpen",
+      "0x1"
+    ]));
+    expect(args.at(0)).toBe("/tmp/foto.jpg");
+    expect(args.at(-1)).toBe("/tmp/audiveris-input.png");
+  });
+
   it("remove creditos OCR sobrepostos e usa o nome do arquivo como titulo", () => {
     const adapter = new AudiverisOmrAdapter() as unknown as {
       cleanAudiverisText(musicXml: string, originalFilename: string): string;

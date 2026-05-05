@@ -9,6 +9,8 @@ import { MusicXmlExportService } from "./MusicXmlExportService.js";
 
 const execFileAsync = promisify(execFile);
 const maxAudiverisDimension = 4400;
+const missingOcrLanguagesPattern = /No installed OCR languages/i;
+const pageRecognitionFailurePattern = /Error in reaching step PAGE|Error processing stub/i;
 const audiverisCandidates = [
   "/Applications/Audiveris.app/Contents/MacOS/Audiveris",
   "/opt/audiveris/bin/Audiveris",
@@ -161,18 +163,40 @@ export class AudiverisOmrAdapter implements OmrAdapter {
     const magick = await this.findCommand(["/usr/local/bin/magick", "/opt/homebrew/bin/magick", "magick", "/usr/local/bin/convert", "/opt/homebrew/bin/convert", "convert"]);
     if (magick) {
       const outputPath = path.join(outputDir, "audiveris-input.png");
-      const args = magick.endsWith("convert")
-        ? [inputPath, "-resize", `${maxAudiverisDimension}x${maxAudiverisDimension}>`, outputPath]
-        : [inputPath, "-resize", `${maxAudiverisDimension}x${maxAudiverisDimension}>`, outputPath];
+      const args = this.imagePreprocessArgs(inputPath, outputPath);
       await execFileAsync(magick, args, {
         timeout: 120_000,
         maxBuffer: 5 * 1024 * 1024
       });
-      warnings.push("Arquivo redimensionado antes do OMR para respeitar o limite de tamanho do Audiveris.");
+      warnings.push("Imagem preparada antes do OMR: orientação, contraste, nitidez e tamanho ajustados para leitura pelo Audiveris.");
       return { paths: [outputPath], warnings };
     }
 
     return { paths: [inputPath], warnings };
+  }
+
+  private imagePreprocessArgs(inputPath: string, outputPath: string): string[] {
+    return [
+      inputPath,
+      "-auto-orient",
+      "-resize",
+      `${maxAudiverisDimension}x${maxAudiverisDimension}>`,
+      "-background",
+      "white",
+      "-alpha",
+      "remove",
+      "-alpha",
+      "off",
+      "-deskew",
+      "40%",
+      "-colorspace",
+      "Gray",
+      "-contrast-stretch",
+      "2%x2%",
+      "-sharpen",
+      "0x1",
+      outputPath
+    ];
   }
 
   private async findRenderedPages(dir: string): Promise<string[]> {
@@ -333,6 +357,21 @@ export class AudiverisOmrAdapter implements OmrAdapter {
   }
 
   private summarizeAudiverisOutput(output: string): string {
+    if (missingOcrLanguagesPattern.test(output)) {
+      return [
+        "O Audiveris não conseguiu iniciar o OCR porque não há nenhum idioma OCR instalado no ambiente onde o worker está rodando.",
+        "Instale pelo menos um idioma OCR/Tesseract, como English/eng ou Portuguese/por, reinicie a API e o worker e envie a partitura novamente.",
+        "Se estiver usando o Audiveris no macOS, abra o Audiveris e instale em Tools > Languages/OCR languages. Se estiver usando Docker/Linux, instale os pacotes de idioma do Tesseract no container."
+      ].join("\n");
+    }
+
+    if (pageRecognitionFailurePattern.test(output)) {
+      return [
+        "Não foi possível reconhecer a página da partitura. Isso costuma acontecer quando a imagem está inclinada, com sombra, desfocada, cortada ou com margem grande demais.",
+        "Tire uma nova foto em modo documento/scan, com a folha plana, bem iluminada, sem sombras e ocupando quase toda a imagem, e envie novamente."
+      ].join("\n");
+    }
+
     const compact = output
       .split(/\r?\n/)
       .map((line) => line.trim())
@@ -341,9 +380,6 @@ export class AudiverisOmrAdapter implements OmrAdapter {
       .slice(-20)
       .join("\n");
 
-    if (compact.includes("No installed OCR languages")) {
-      return `${compact}\nInstale pelo menos um idioma OCR no Audiveris, por exemplo English ou Portuguese, em Tools > Languages/OCR languages.`;
-    }
     return compact.slice(0, 3000) || "Audiveris falhou sem mensagem detalhada.";
   }
 

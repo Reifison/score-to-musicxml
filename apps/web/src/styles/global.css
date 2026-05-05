@@ -199,6 +199,17 @@ button:disabled,
   transform: none;
 }
 
+.secondary-button {
+  border-color: var(--line-strong);
+  background: var(--surface);
+  color: var(--text);
+}
+
+.secondary-button:hover {
+  border-color: #c4cde0;
+  background: var(--surface-hover);
+}
+
 .app-shell {
   min-height: 100vh;
   display: grid;
@@ -314,7 +325,7 @@ button:disabled,
 
 .upload-panel {
   display: grid;
-  grid-template-columns: auto minmax(0, 1fr) auto auto;
+  grid-template-columns: auto minmax(0, 1fr) auto auto auto;
   gap: 14px;
   align-items: center;
   border: 1px dashed #c8d3df;
