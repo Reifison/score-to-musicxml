@@ -49,6 +49,7 @@ export type AuditAction =
   | "user_updated"
   | "user_deactivated"
   | "user_deleted"
+  | "password_changed"
   | "role_changed"
   | "score_uploaded"
   | "conversion_queued"

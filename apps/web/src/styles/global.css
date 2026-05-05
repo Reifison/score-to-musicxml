@@ -159,6 +159,11 @@ select:focus {
   border-color: var(--brand-2);
 }
 
+input:read-only {
+  background: var(--surface-soft);
+  color: var(--muted);
+}
+
 button,
 .primary-link {
   min-height: 40px;
@@ -609,6 +614,11 @@ button:disabled,
   gap: 16px;
 }
 
+.profile-layout {
+  display: grid;
+  grid-template-columns: minmax(280px, 420px);
+}
+
 .form-panel {
   display: grid;
   gap: 12px;
@@ -745,6 +755,10 @@ td select {
   }
 
   .admin-layout {
+    grid-template-columns: 1fr;
+  }
+
+  .profile-layout {
     grid-template-columns: 1fr;
   }
 }
