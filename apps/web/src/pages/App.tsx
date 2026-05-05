@@ -1,4 +1,4 @@
-import { FileMusic, LogOut, Shield, Users } from "lucide-react";
+import { FileMusic, KeyRound, LogOut, Shield, UserRound, Users } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { api, downloadMusicXml } from "../api/client.js";
 import { ScoreCard } from "../components/ScoreCard.js";
@@ -6,7 +6,7 @@ import { ScoreDetails } from "../components/ScoreDetails.js";
 import { UploadPanel } from "../components/UploadPanel.js";
 import type { AuditLog, Score, User } from "../types/domain.js";
 
-type View = "scores" | "admin-users" | "admin-scores" | "audits";
+type View = "scores" | "profile" | "admin-users" | "admin-scores" | "audits";
 
 export function App() {
   const [user, setUser] = useState<User | null>(null);
@@ -92,6 +92,7 @@ export function App() {
       <aside className="sidebar">
         <div className="brand"><FileMusic size={24} /><strong>MusicXML</strong></div>
         <button className={view === "scores" ? "active" : ""} onClick={() => setView("scores")}><FileMusic size={18} /> Partituras</button>
+        <button className={view === "profile" ? "active" : ""} onClick={() => setView("profile")}><UserRound size={18} /> Perfil</button>
         {isAdmin && <button className={view === "admin-users" ? "active" : ""} onClick={() => setView("admin-users")}><Users size={18} /> Usuários</button>}
         {isAdmin && <button className={view === "admin-scores" ? "active" : ""} onClick={() => setView("admin-scores")}><Shield size={18} /> Todas</button>}
         {isAdmin && <button className={view === "audits" ? "active" : ""} onClick={() => setView("audits")}><Shield size={18} /> Logs</button>}
@@ -113,6 +114,7 @@ export function App() {
           </>
         )}
 
+        {view === "profile" && <Profile user={user} onUpdated={setUser} />}
         {view === "admin-users" && <AdminUsers currentUser={user} users={users} onRefresh={refreshAdmin} />}
         {view === "admin-scores" && <ScoreList scores={scores} onOpen={setSelected} onDelete={deleteScore} onDownload={downloadScore} />}
         {view === "audits" && <AuditTable audits={audits} />}
@@ -161,6 +163,44 @@ function Login({ onLogged }: { onLogged: (user: User) => void }) {
 function ScoreList({ scores, onOpen, onDelete, onDownload }: { scores: Score[]; onOpen: (score: Score) => void; onDelete: (score: Score) => void; onDownload: (score: Score) => void }) {
   if (!scores.length) return <section className="empty-state">Nenhuma partitura enviada ainda.</section>;
   return <section className="score-grid">{scores.map((score) => <ScoreCard key={score.id} score={score} onOpen={onOpen} onDelete={onDelete} onDownload={onDownload} />)}</section>;
+}
+
+function Profile({ user, onUpdated }: { user: User; onUpdated: (user: User) => void }) {
+  const [password, setPassword] = useState("");
+  const [message, setMessage] = useState("");
+  const [error, setError] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  async function updatePassword(event: React.FormEvent) {
+    event.preventDefault();
+    setMessage("");
+    setError("");
+    setBusy(true);
+    try {
+      const response = await api<{ user: User }>("/api/users/me/password", { method: "PATCH", body: JSON.stringify({ password }) });
+      onUpdated(response.user);
+      setPassword("");
+      setMessage("Senha atualizada.");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Não foi possível atualizar a senha.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <section className="profile-layout">
+      <form className="form-panel profile-panel" onSubmit={updatePassword}>
+        <h2>Dados do usuário</h2>
+        <label>Nome<input value={user.name} readOnly /></label>
+        <label>E-mail<input value={user.email} type="email" readOnly /></label>
+        <label>Nova senha<input value={password} onChange={(event) => setPassword(event.target.value)} type="password" minLength={8} required /></label>
+        <button disabled={busy || password.length < 8}><KeyRound size={18} /> {busy ? "Salvando..." : "Salvar senha"}</button>
+        {message && <p className="success-text">{message}</p>}
+        {error && <p className="error-text">{error}</p>}
+      </form>
+    </section>
+  );
 }
 
 function musicXmlName(originalFilename: string) {
@@ -301,6 +341,7 @@ function AuditTable({ audits }: { audits: AuditLog[] }) {
 function viewTitle(view: View) {
   return {
     scores: "Minhas partituras",
+    profile: "Perfil",
     "admin-users": "Usuários",
     "admin-scores": "Partituras",
     audits: "Auditoria"

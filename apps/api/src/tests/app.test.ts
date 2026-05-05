@@ -75,6 +75,20 @@ describe("API", () => {
     await request(ctx.app).get("/api/users").set("Cookie", adminCookie).expect(200);
   });
 
+  it("permite usuário comum alterar a própria senha", async () => {
+    const userCookie = await login(ctx.app, "user@example.com");
+    const response = await request(ctx.app)
+      .patch("/api/users/me/password")
+      .set("Cookie", userCookie)
+      .send({ password: "NovaSenha123!" })
+      .expect(200);
+
+    expect(response.body.user.email).toBe("user@example.com");
+    expect(response.body.user.passwordHash).toBeUndefined();
+    await request(ctx.app).post("/api/auth/login").send({ email: "user@example.com", password: "Password123!" }).expect(401);
+    await request(ctx.app).post("/api/auth/login").send({ email: "user@example.com", password: "NovaSenha123!" }).expect(200);
+  });
+
   it("admin cria usuário", async () => {
     const adminCookie = await login(ctx.app, "admin@example.com");
     const response = await request(ctx.app)

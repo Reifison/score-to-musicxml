@@ -21,6 +21,10 @@ export const updateUserSchema = z.object({
   isActive: z.boolean().optional()
 });
 
+export const updateOwnPasswordSchema = z.object({
+  password: z.string().min(8).max(200)
+});
+
 export class UserService {
   constructor(
     private users: UserRepository,
@@ -72,6 +76,14 @@ export class UserService {
     } catch {
       throw new AppError(409, "Não foi possível atualizar este usuário.", "USER_UPDATE_FAILED");
     }
+  }
+
+  async updateOwnPassword(actor: User, input: z.infer<typeof updateOwnPasswordSchema>, ipAddress?: string): Promise<PublicUser> {
+    const data = updateOwnPasswordSchema.parse(input);
+    const passwordHash = await this.auth.hashPassword(data.password);
+    const user = await this.users.update(actor.id, { passwordHash });
+    await this.audits.create({ actorId: actor.id, action: "password_changed", entity: "user", entityId: actor.id, ipAddress });
+    return toPublicUser(user);
   }
 
   async delete(id: string, actor: User, ipAddress?: string): Promise<void> {

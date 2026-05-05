@@ -3,7 +3,14 @@ import { requireAdmin, requireAuth } from "../middleware/auth.js";
 
 export const userRoutes = Router();
 
-userRoutes.use(requireAuth, requireAdmin);
+userRoutes.use(requireAuth);
+
+userRoutes.patch("/me/password", async (req, res) => {
+  const user = await req.services.users.updateOwnPassword(req.user!, req.body, req.ip);
+  res.json({ user });
+});
+
+userRoutes.use(requireAdmin);
 
 userRoutes.get("/", async (req, res) => {
   res.json({ users: await req.services.users.list() });
