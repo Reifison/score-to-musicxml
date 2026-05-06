@@ -9,8 +9,10 @@ import { MusicXmlExportService } from "./MusicXmlExportService.js";
 
 const execFileAsync = promisify(execFile);
 const maxAudiverisDimension = 4400;
+const pdfRenderTimeoutMs = 180_000;
 const missingOcrLanguagesPattern = /No installed OCR languages/i;
 const pageRecognitionFailurePattern = /Error in reaching step PAGE|Error processing stub/i;
+const pdfPageRangeFailurePattern = /page range|first page|last page|beyond last page|Syntax Error/i;
 const audiverisCandidates = [
   "/Applications/Audiveris.app/Contents/MacOS/Audiveris",
   "/opt/audiveris/bin/Audiveris",
@@ -51,7 +53,7 @@ export class AudiverisOmrAdapter implements OmrAdapter {
   async convert(inputPath: string, originalFilename: string, outputDir: string): Promise<OmrResult> {
     await this.resolveAudiverisBin();
     await fs.mkdir(outputDir, { recursive: true, mode: 0o700 });
-    const preprocessing = await this.preprocessInput(inputPath, outputDir);
+    const preprocessing = await this.prepareInputForOmr(inputPath, outputDir);
     const pageResults: OmrResult[] = [];
     const pageFailures: string[] = [];
 
@@ -83,6 +85,14 @@ export class AudiverisOmrAdapter implements OmrAdapter {
         "Conversao automatica concluida. Revise o resultado para corrigir possiveis erros de OMR."
       ]
     };
+  }
+
+  private async prepareInputForOmr(inputPath: string, outputDir: string): Promise<{ paths: string[]; warnings: string[] }> {
+    try {
+      return await this.preprocessInput(inputPath, outputDir);
+    } catch (error) {
+      throw new AppError(422, this.summarizePreprocessFailure(error), "OMR_PREPROCESS_FAILED");
+    }
   }
 
   private async convertPage(pagePath: string, originalFilename: string, pageOutputDir: string): Promise<OmrResult> {
@@ -150,10 +160,7 @@ export class AudiverisOmrAdapter implements OmrAdapter {
       const pdftoppm = await this.findCommand(["/usr/local/bin/pdftoppm", "/opt/homebrew/bin/pdftoppm", "pdftoppm"]);
       const outputPrefix = path.join(outputDir, "audiveris-input");
       if (pdftoppm) {
-        await execFileAsync(pdftoppm, ["-png", "-scale-to", String(maxAudiverisDimension), inputPath, outputPrefix], {
-          timeout: 120_000,
-          maxBuffer: 5 * 1024 * 1024
-        });
+        await this.renderPdfPages(pdftoppm, inputPath, outputPrefix);
         const paths = await this.findRenderedPages(outputDir);
         warnings.push(`PDF dividido em ${paths.length} pagina(s) e renderizado em resolucao controlada antes do OMR.`);
         return { paths, warnings };
@@ -173,6 +180,53 @@ export class AudiverisOmrAdapter implements OmrAdapter {
     }
 
     return { paths: [inputPath], warnings };
+  }
+
+  private async renderPdfPages(pdftoppm: string, inputPath: string, outputPrefix: string): Promise<void> {
+    const pageCount = await this.findPdfPageCount(inputPath);
+
+    if (!pageCount) {
+      await execFileAsync(pdftoppm, ["-png", "-scale-to", String(maxAudiverisDimension), inputPath, outputPrefix], {
+        timeout: pdfRenderTimeoutMs,
+        maxBuffer: 5 * 1024 * 1024
+      });
+      return;
+    }
+
+    for (let page = 1; page <= pageCount; page += 1) {
+      await execFileAsync(pdftoppm, [
+        "-png",
+        "-f",
+        String(page),
+        "-l",
+        String(page),
+        "-scale-to",
+        String(maxAudiverisDimension),
+        inputPath,
+        outputPrefix
+      ], {
+        timeout: pdfRenderTimeoutMs,
+        maxBuffer: 5 * 1024 * 1024
+      });
+    }
+  }
+
+  private async findPdfPageCount(inputPath: string): Promise<number | null> {
+    const pdfinfo = await this.findCommand(["/usr/local/bin/pdfinfo", "/opt/homebrew/bin/pdfinfo", "pdfinfo"]);
+    if (!pdfinfo) return null;
+
+    try {
+      const { stdout } = await execFileAsync(pdfinfo, [inputPath], {
+        timeout: 10_000,
+        maxBuffer: 1024 * 1024
+      });
+      const match = stdout.match(/^Pages:\s+(\d+)\s*$/im);
+      if (!match) return null;
+      const pages = Number(match[1]);
+      return Number.isInteger(pages) && pages > 0 ? pages : null;
+    } catch {
+      return null;
+    }
   }
 
   private imagePreprocessArgs(inputPath: string, outputPath: string): string[] {
@@ -381,6 +435,30 @@ export class AudiverisOmrAdapter implements OmrAdapter {
       .join("\n");
 
     return compact.slice(0, 3000) || "Audiveris falhou sem mensagem detalhada.";
+  }
+
+  private summarizePreprocessFailure(error: unknown): string {
+    const output = this.errorOutput(error);
+    if (pdfPageRangeFailurePattern.test(output)) {
+      return [
+        "Não foi possível ler todas as páginas do PDF antes do OMR.",
+        "Abra o arquivo em um leitor de PDF e exporte/salve uma nova cópia antes de enviar novamente. Isso costuma resolver PDFs com índice de páginas corrompido ou estrutura interna incompatível."
+      ].join("\n");
+    }
+
+    const compact = output
+      .split(/\r?\n/)
+      .map((line) => line.trim())
+      .filter(Boolean)
+      .filter((line) => !line.startsWith("Command failed:"))
+      .slice(-12)
+      .join("\n");
+
+    return [
+      "Não foi possível preparar o PDF para leitura OMR.",
+      "Tente exportar/salvar uma nova cópia do PDF ou dividir a partitura em arquivos menores e enviar novamente.",
+      compact
+    ].filter(Boolean).join("\n");
   }
 
   private summarizePageFailure(error: unknown): string {

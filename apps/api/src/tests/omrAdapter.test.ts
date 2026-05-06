@@ -156,6 +156,39 @@ describe("AudiverisOmrAdapter", () => {
     expect(summary).not.toContain("java.lang.Exception");
   });
 
+  it("resume falha de renderizacao do PDF sem expor o comando bruto", () => {
+    const adapter = new AudiverisOmrAdapter() as unknown as {
+      summarizePreprocessFailure(error: unknown): string;
+    };
+
+    const summary = adapter.summarizePreprocessFailure(new Error(
+      "Command failed: pdftoppm -png -scale-to 4400 /app/storage/uploads/arquivo.pdf /tmp/score-omr/audiveris-input\nSyntax Error: Couldn't find trailer dictionary"
+    ));
+
+    expect(summary).toContain("Não foi possível ler todas as páginas do PDF");
+    expect(summary).toContain("salve uma nova cópia");
+    expect(summary).not.toContain("Command failed");
+    expect(summary).not.toContain("/app/storage/uploads/arquivo.pdf");
+  });
+
+  it("ordena paginas renderizadas numericamente", async () => {
+    const adapter = new AudiverisOmrAdapter() as unknown as {
+      findRenderedPages(dir: string): Promise<string[]>;
+    };
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "omr-pages-"));
+    await fs.writeFile(path.join(dir, "audiveris-input-10.png"), "");
+    await fs.writeFile(path.join(dir, "audiveris-input-2.png"), "");
+    await fs.writeFile(path.join(dir, "audiveris-input-1.png"), "");
+
+    const pages = await adapter.findRenderedPages(dir);
+
+    expect(pages.map((page) => path.basename(page))).toEqual([
+      "audiveris-input-1.png",
+      "audiveris-input-2.png",
+      "audiveris-input-10.png"
+    ]);
+  });
+
   it("prepara fotos de celular antes de chamar o Audiveris", () => {
     const adapter = new AudiverisOmrAdapter() as unknown as {
       imagePreprocessArgs(inputPath: string, outputPath: string): string[];
