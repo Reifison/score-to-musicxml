@@ -260,6 +260,28 @@ function AdminUsers({ currentUser, users, onRefresh }: { currentUser: User; user
     }
   }
 
+  async function resetPassword(item: User) {
+    const password = window.prompt(`Digite a nova senha temporária para ${item.name}.`);
+    if (password === null) return;
+    if (password.length < 8) {
+      setMessage("");
+      setError("Senha: Senha precisa ter pelo menos 8 caracteres.");
+      return;
+    }
+    setMessage("");
+    setError("");
+    setBusyId(item.id);
+    try {
+      await api(`/api/users/${item.id}`, { method: "PATCH", body: JSON.stringify({ password }) });
+      setMessage(`Senha temporária atualizada para ${item.name}.`);
+      await onRefresh();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Não foi possível resetar a senha.");
+    } finally {
+      setBusyId(null);
+    }
+  }
+
   return (
     <section className="admin-layout">
       <form className="form-panel" onSubmit={createUser}>
@@ -312,6 +334,14 @@ function AdminUsers({ currentUser, users, onRefresh }: { currentUser: User; user
                   </button>
                 </td>
                 <td data-label="Ações">
+                  <button
+                    type="button"
+                    disabled={busyId === item.id}
+                    onClick={() => resetPassword(item)}
+                  >
+                    <KeyRound size={16} />
+                    Resetar senha
+                  </button>
                   <button
                     className="danger-button"
                     type="button"
