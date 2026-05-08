@@ -95,7 +95,8 @@ describe("AudiverisOmrAdapter", () => {
         confidence: number;
         warnings: string[];
       }>;
-      preprocessInput(inputPath: string, outputDir: string): Promise<{ paths: string[]; warnings: string[] }>;
+      resolveAudiverisBin(): Promise<string>;
+      preprocessInput(inputPath: string, outputDir: string): Promise<{ pages: Array<{ paths: string[] }>; warnings: string[] }>;
       convertPage(pagePath: string, originalFilename: string, pageOutputDir: string): Promise<{ musicXml: string; confidence: number; warnings: string[] }>;
     };
 
@@ -104,8 +105,9 @@ describe("AudiverisOmrAdapter", () => {
       ['<measure number="1"><note><pitch><step>E</step><octave>4</octave></pitch></note></measure>']
     );
 
+    adapter.resolveAudiverisBin = async () => "/tmp/Audiveris";
     adapter.preprocessInput = async () => ({
-      paths: ["/tmp/page-1.png", "/tmp/page-2.png"],
+      pages: [{ paths: ["/tmp/page-1.png"] }, { paths: ["/tmp/page-2.png"] }],
       warnings: ["PDF dividido em 2 pagina(s)."]
     });
     adapter.convertPage = async (pagePath) => {
@@ -121,7 +123,8 @@ describe("AudiverisOmrAdapter", () => {
     expect(result.musicXml).toContain("<score-partwise");
     expect(result.musicXml).toContain("<step>C</step>");
     expect(result.confidence).toBe(0.75);
-    expect(result.warnings.join("\n")).toContain("Pagina 2: Error in reaching step PAGE");
+    expect(result.warnings.join("\n")).toContain("Pagina 2: Tentamos 1 preparacao");
+    expect(result.warnings.join("\n")).toContain("Error in reaching step PAGE");
     expect(result.warnings.join("\n")).toContain("MusicXML parcial");
   });
 
@@ -191,12 +194,16 @@ describe("AudiverisOmrAdapter", () => {
 
   it("prepara fotos de celular antes de chamar o Audiveris", () => {
     const adapter = new AudiverisOmrAdapter() as unknown as {
-      imagePreprocessArgs(inputPath: string, outputPath: string): string[];
+      imagePreprocessVariants(inputPath: string, outputDir: string): Array<{ name: string; outputPath: string; args: string[] }>;
     };
 
-    const args = adapter.imagePreprocessArgs("/tmp/foto.jpg", "/tmp/audiveris-input.png");
+    const variants = adapter.imagePreprocessVariants("/tmp/foto.jpg", "/tmp");
+    const softArgs = variants.find((variant) => variant.name === "contraste-suave")?.args ?? [];
+    const documentArgs = variants.find((variant) => variant.name === "documento")?.args ?? [];
+    const highContrastArgs = variants.find((variant) => variant.name === "alto-contraste")?.args ?? [];
 
-    expect(args).toEqual(expect.arrayContaining([
+    expect(variants).toHaveLength(3);
+    expect(softArgs).toEqual(expect.arrayContaining([
       "-auto-orient",
       "-deskew",
       "40%",
@@ -207,8 +214,10 @@ describe("AudiverisOmrAdapter", () => {
       "-sharpen",
       "0x1"
     ]));
-    expect(args.at(0)).toBe("/tmp/foto.jpg");
-    expect(args.at(-1)).toBe("/tmp/audiveris-input.png");
+    expect(documentArgs).toEqual(expect.arrayContaining(["-normalize", "-adaptive-sharpen", "0x1.1"]));
+    expect(highContrastArgs).toEqual(expect.arrayContaining(["-lat", "35x35-8%", "-morphology", "Close", "Octagon:1"]));
+    expect(softArgs.at(0)).toBe("/tmp/foto.jpg");
+    expect(softArgs.at(-1)).toBe("/tmp/audiveris-input-soft.png");
   });
 
   it("remove creditos OCR sobrepostos e usa o nome do arquivo como titulo", () => {

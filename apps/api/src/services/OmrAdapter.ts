@@ -27,6 +27,10 @@ type MusicXmlPart = {
   measures: string[];
 };
 
+type PreparedPage = {
+  paths: string[];
+};
+
 export type OmrResult = {
   musicXml: string;
   confidence: number;
@@ -57,11 +61,11 @@ export class AudiverisOmrAdapter implements OmrAdapter {
     const pageResults: OmrResult[] = [];
     const pageFailures: string[] = [];
 
-    for (const [index, pagePath] of preprocessing.paths.entries()) {
+    for (const [index, page] of preprocessing.pages.entries()) {
       const pageOutputDir = path.join(outputDir, `page-${String(index + 1).padStart(3, "0")}`);
       await fs.mkdir(pageOutputDir, { recursive: true, mode: 0o700 });
       try {
-        pageResults.push(await this.convertPage(pagePath, originalFilename, pageOutputDir));
+        pageResults.push(await this.convertPreparedPage(page, originalFilename, pageOutputDir));
       } catch (error) {
         pageFailures.push(`Pagina ${index + 1}: ${this.summarizePageFailure(error)}`);
       }
@@ -87,12 +91,45 @@ export class AudiverisOmrAdapter implements OmrAdapter {
     };
   }
 
-  private async prepareInputForOmr(inputPath: string, outputDir: string): Promise<{ paths: string[]; warnings: string[] }> {
+  private async prepareInputForOmr(inputPath: string, outputDir: string): Promise<{ pages: PreparedPage[]; warnings: string[] }> {
     try {
       return await this.preprocessInput(inputPath, outputDir);
     } catch (error) {
       throw new AppError(422, this.summarizePreprocessFailure(error), "OMR_PREPROCESS_FAILED");
     }
+  }
+
+  private async convertPreparedPage(page: PreparedPage, originalFilename: string, pageOutputDir: string): Promise<OmrResult> {
+    const failures: string[] = [];
+
+    for (const [index, pagePath] of page.paths.entries()) {
+      const attemptOutputDir = path.join(pageOutputDir, `attempt-${String(index + 1).padStart(2, "0")}`);
+      await fs.mkdir(attemptOutputDir, { recursive: true, mode: 0o700 });
+      try {
+        const result = await this.convertPage(pagePath, originalFilename, attemptOutputDir);
+        return index === 0
+          ? result
+          : {
+              ...result,
+              confidence: Math.min(result.confidence, 0.65),
+              warnings: [
+                `A leitura só funcionou após preparar uma versão alternativa da imagem (${path.basename(pagePath)}).`,
+                ...result.warnings
+              ]
+            };
+      } catch (error) {
+        failures.push(this.summarizePageFailure(error));
+      }
+    }
+
+    throw new AppError(
+      422,
+      [
+        `Tentamos ${page.paths.length} preparacao(oes) da imagem antes do OMR, mas nenhuma foi reconhecida.`,
+        failures.at(-1)
+      ].filter(Boolean).join("\n"),
+      "AUDIVERIS_FAILED"
+    );
   }
 
   private async convertPage(pagePath: string, originalFilename: string, pageOutputDir: string): Promise<OmrResult> {
@@ -152,7 +189,7 @@ export class AudiverisOmrAdapter implements OmrAdapter {
     }
   }
 
-  private async preprocessInput(inputPath: string, outputDir: string): Promise<{ paths: string[]; warnings: string[] }> {
+  private async preprocessInput(inputPath: string, outputDir: string): Promise<{ pages: PreparedPage[]; warnings: string[] }> {
     const extension = path.extname(inputPath).toLowerCase();
     const warnings: string[] = [];
 
@@ -163,23 +200,33 @@ export class AudiverisOmrAdapter implements OmrAdapter {
         await this.renderPdfPages(pdftoppm, inputPath, outputPrefix);
         const paths = await this.findRenderedPages(outputDir);
         warnings.push(`PDF dividido em ${paths.length} pagina(s) e renderizado em resolucao controlada antes do OMR.`);
-        return { paths, warnings };
+        return { pages: paths.map((pagePath) => ({ paths: [pagePath] })), warnings };
       }
     }
 
     const magick = await this.findCommand(["/usr/local/bin/magick", "/opt/homebrew/bin/magick", "magick", "/usr/local/bin/convert", "/opt/homebrew/bin/convert", "convert"]);
     if (magick) {
-      const outputPath = path.join(outputDir, "audiveris-input.png");
-      const args = this.imagePreprocessArgs(inputPath, outputPath);
-      await execFileAsync(magick, args, {
-        timeout: 120_000,
-        maxBuffer: 5 * 1024 * 1024
-      });
-      warnings.push("Imagem preparada antes do OMR: orientação, contraste, nitidez e tamanho ajustados para leitura pelo Audiveris.");
-      return { paths: [outputPath], warnings };
+      const paths: string[] = [];
+      const failures: string[] = [];
+      for (const variant of this.imagePreprocessVariants(inputPath, outputDir)) {
+        try {
+          await execFileAsync(magick, variant.args, {
+            timeout: 120_000,
+            maxBuffer: 5 * 1024 * 1024
+          });
+          paths.push(variant.outputPath);
+        } catch (error) {
+          failures.push(`${variant.name}: ${this.summarizePreprocessFailure(error)}`);
+        }
+      }
+      if (!paths.length) {
+        throw new AppError(422, failures.join("\n") || "Não foi possível preparar a imagem para leitura OMR.", "IMAGE_PREPROCESS_FAILED");
+      }
+      warnings.push(`Imagem preparada em ${paths.length} versao(oes) antes do OMR: orientacao, contraste, nitidez e tamanho ajustados para leitura pelo Audiveris.`);
+      return { pages: [{ paths }], warnings };
     }
 
-    return { paths: [inputPath], warnings };
+    return { pages: [{ paths: [inputPath] }], warnings };
   }
 
   private async renderPdfPages(pdftoppm: string, inputPath: string, outputPrefix: string): Promise<void> {
@@ -229,8 +276,8 @@ export class AudiverisOmrAdapter implements OmrAdapter {
     }
   }
 
-  private imagePreprocessArgs(inputPath: string, outputPath: string): string[] {
-    return [
+  private imagePreprocessVariants(inputPath: string, outputDir: string): Array<{ name: string; outputPath: string; args: string[] }> {
+    const baseArgs = [
       inputPath,
       "-auto-orient",
       "-resize",
@@ -241,15 +288,55 @@ export class AudiverisOmrAdapter implements OmrAdapter {
       "remove",
       "-alpha",
       "off",
-      "-deskew",
-      "40%",
       "-colorspace",
-      "Gray",
-      "-contrast-stretch",
-      "2%x2%",
-      "-sharpen",
-      "0x1",
-      outputPath
+      "Gray"
+    ];
+
+    return [
+      {
+        name: "contraste-suave",
+        outputPath: path.join(outputDir, "audiveris-input-soft.png"),
+        args: [
+          ...baseArgs,
+          "-deskew",
+          "40%",
+          "-contrast-stretch",
+          "2%x2%",
+          "-sharpen",
+          "0x1",
+          path.join(outputDir, "audiveris-input-soft.png")
+        ]
+      },
+      {
+        name: "documento",
+        outputPath: path.join(outputDir, "audiveris-input-document.png"),
+        args: [
+          ...baseArgs,
+          "-deskew",
+          "40%",
+          "-normalize",
+          "-adaptive-sharpen",
+          "0x1.1",
+          "-contrast-stretch",
+          "4%x4%",
+          path.join(outputDir, "audiveris-input-document.png")
+        ]
+      },
+      {
+        name: "alto-contraste",
+        outputPath: path.join(outputDir, "audiveris-input-high-contrast.png"),
+        args: [
+          ...baseArgs,
+          "-deskew",
+          "40%",
+          "-lat",
+          "35x35-8%",
+          "-morphology",
+          "Close",
+          "Octagon:1",
+          path.join(outputDir, "audiveris-input-high-contrast.png")
+        ]
+      }
     ];
   }
 
