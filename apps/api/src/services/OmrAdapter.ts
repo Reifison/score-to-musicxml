@@ -139,8 +139,10 @@ export class AudiverisOmrAdapter implements OmrAdapter {
       const output = this.errorOutput(error);
       const exportedAfterError = await this.findExportedMusicXml(pageOutputDir);
       if (exportedAfterError) {
+        const musicXml = this.cleanAudiverisText(await fs.readFile(exportedAfterError, "utf8"), originalFilename);
+        this.assertUsefulMusicXml(musicXml, originalFilename);
         return {
-          musicXml: this.cleanAudiverisText(await fs.readFile(exportedAfterError, "utf8"), originalFilename),
+          musicXml,
           confidence: 0.55,
           warnings: [
             "Audiveris gerou MusicXML, mas retornou avisos/erro no processo. Revise cuidadosamente no MuseScore.",
@@ -156,8 +158,10 @@ export class AudiverisOmrAdapter implements OmrAdapter {
     if (!exported) {
       throw new AppError(422, "A engine OMR não gerou MusicXML.", "OMR_NO_OUTPUT");
     }
+    const musicXml = this.cleanAudiverisText(await fs.readFile(exported, "utf8"), originalFilename);
+    this.assertUsefulMusicXml(musicXml, originalFilename);
     return {
-      musicXml: this.cleanAudiverisText(await fs.readFile(exported, "utf8"), originalFilename),
+      musicXml,
       confidence: 0.75,
       warnings: ["Textos OCR de cabecalho removidos para evitar titulos e creditos sobrepostos."]
     };
@@ -410,6 +414,26 @@ export class AudiverisOmrAdapter implements OmrAdapter {
     return withoutCredits.replace(
       /(<score-partwise\b[^>]*>)/,
       `$1\n  <work>\n    <work-title>${title}</work-title>\n  </work>`
+    );
+  }
+
+  private assertUsefulMusicXml(musicXml: string, originalFilename: string): void {
+    if (!/\.(jpe?g|png|webp)$/i.test(originalFilename)) return;
+
+    const measureCount = (musicXml.match(/<measure\b/g) ?? []).length;
+    const noteCount = (musicXml.match(/<note\b/g) ?? []).length;
+    const partCount = (musicXml.match(/<score-part\b/g) ?? []).length;
+
+    if (measureCount >= 4 && noteCount >= 8 && partCount >= 1) return;
+
+    throw new AppError(
+      422,
+      [
+        "O Audiveris gerou um MusicXML pequeno demais para esta foto, então o resultado foi rejeitado para evitar uma conversão enganosa.",
+        `Detectado no resultado: ${measureCount} compasso(s), ${noteCount} nota(s) e ${partCount} instrumento(s).`,
+        "Tente reenviar como PDF de scanner ou tire a foto em modo documento, com a folha reta, ocupando quase toda a imagem e sem sombras."
+      ].join("\n"),
+      "OMR_LOW_QUALITY_OUTPUT"
     );
   }
 

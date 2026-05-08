@@ -220,6 +220,22 @@ describe("AudiverisOmrAdapter", () => {
     expect(softArgs.at(-1)).toBe("/tmp/audiveris-input-soft.png");
   });
 
+  it("rejeita MusicXML pequeno demais gerado a partir de foto", () => {
+    const adapter = new AudiverisOmrAdapter() as unknown as {
+      assertUsefulMusicXml(musicXml: string, originalFilename: string): void;
+    };
+    const tinyMusicXml = `<?xml version="1.0" encoding="UTF-8"?>
+<score-partwise version="4.0">
+  <part-list><score-part id="P1"><part-name>Voice</part-name></score-part></part-list>
+  <part id="P1">
+    <measure number="1"><note><pitch><step>C</step><octave>4</octave></pitch></note></measure>
+  </part>
+</score-partwise>`;
+
+    expect(() => adapter.assertUsefulMusicXml(tinyMusicXml, "foto.jpg")).toThrow(/MusicXML pequeno demais/);
+    expect(() => adapter.assertUsefulMusicXml(tinyMusicXml, "scan.pdf")).not.toThrow();
+  });
+
   it("remove creditos OCR sobrepostos e usa o nome do arquivo como titulo", () => {
     const adapter = new AudiverisOmrAdapter() as unknown as {
       cleanAudiverisText(musicXml: string, originalFilename: string): string;
