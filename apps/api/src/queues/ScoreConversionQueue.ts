@@ -27,6 +27,11 @@ export class BullMqScoreConversionQueue implements ScoreConversionQueue {
   }
 
   async enqueue(scoreId: string): Promise<void> {
-    await this.queue.add("convert-score", { scoreId }, { attempts: 2, backoff: { type: "exponential", delay: 3000 }, removeOnComplete: 100, removeOnFail: 200 });
+    await this.queue.add("convert-score", { scoreId }, {
+      attempts: 2,
+      backoff: { type: "exponential", delay: 3000 },
+      removeOnComplete: 100,
+      removeOnFail: 200
+    });
   }
 }

@@ -1,32 +1,48 @@
 import type { User } from "../domain.js";
 import { env } from "../config/env.js";
-import type { AuditRepository, ScoreRepository } from "../repositories/contracts.js";
+import type { AuditRepository } from "../repositories/contracts.js";
 import type { ScoreConversionQueue } from "../queues/ScoreConversionQueue.js";
+import { AppError } from "../errors/AppError.js";
 import { validateUploadedFile } from "../utils/fileValidation.js";
+import { EntitlementService } from "./EntitlementService.js";
 import { FileStorageService } from "./FileStorageService.js";
+import { FileSecurityService } from "./FileSecurityService.js";
 
 export class ScoreUploadService {
   constructor(
-    private scores: ScoreRepository,
     private audits: AuditRepository,
     private storage: FileStorageService,
-    private queue: ScoreConversionQueue
+    private queue: ScoreConversionQueue,
+    private entitlements: EntitlementService,
+    private fileSecurity: FileSecurityService
   ) {}
 
   async upload(input: { user: User; filename: string; buffer: Buffer; ipAddress?: string }) {
     const validated = validateUploadedFile(input.filename, input.buffer, env.MAX_UPLOAD_BYTES);
+    await this.entitlements.assertCanUpload(input.user);
+    await this.fileSecurity.scan(input.buffer, validated.originalFilename);
+    const safeBuffer = await this.fileSecurity.stripImageMetadata(input.buffer, validated.mimeType);
+    if (safeBuffer.length > env.MAX_UPLOAD_BYTES) {
+      throw new AppError(413, "Imagem processada ficou acima do tamanho máximo permitido.", "FILE_TOO_LARGE");
+    }
     const storedFilename = this.storage.generateStoredFilename(validated.originalFilename);
-    await this.storage.saveUpload(storedFilename, input.buffer);
-    const score = await this.scores.create({
-      userId: input.user.id,
-      originalFilename: validated.originalFilename,
-      storedFilename,
-      fileType: validated.fileType,
-      mimeType: validated.mimeType,
-      fileSize: input.buffer.length,
-      uploadStatus: "uploaded",
-      conversionStatus: "queued"
-    });
+    await this.storage.saveUpload(storedFilename, safeBuffer);
+    let score;
+    try {
+      score = await this.entitlements.createScoreForUpload({
+        userId: input.user.id,
+        originalFilename: validated.originalFilename,
+        storedFilename,
+        fileType: validated.fileType,
+        mimeType: validated.mimeType,
+        fileSize: safeBuffer.length,
+        uploadStatus: "uploaded",
+        conversionStatus: "queued"
+      }, input.ipAddress);
+    } catch (error) {
+      await this.storage.deleteUpload(storedFilename);
+      throw error;
+    }
     await this.audits.create({ actorId: input.user.id, action: "score_uploaded", entity: "score", entityId: score.id, ipAddress: input.ipAddress, metadata: { originalFilename: validated.originalFilename } });
     await this.audits.create({ actorId: input.user.id, action: "conversion_queued", entity: "score", entityId: score.id, ipAddress: input.ipAddress });
     await this.queue.enqueue(score.id);

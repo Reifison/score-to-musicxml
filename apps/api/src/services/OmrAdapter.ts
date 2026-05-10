@@ -182,7 +182,7 @@ export class AudiverisOmrAdapter implements OmrAdapter {
         "--",
         pagePath
       ], {
-        timeout: 600_000,
+        timeout: env.OMR_AUDIVERIS_TIMEOUT_MS,
         maxBuffer: 10 * 1024 * 1024
       });
     } catch (error) {

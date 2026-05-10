@@ -15,7 +15,7 @@ new Worker(
   async (job) => {
     await services.conversion.convertScore(job.data.scoreId);
   },
-  { connection, concurrency: 2 }
+  { connection, concurrency: env.OMR_WORKER_CONCURRENCY }
 );
 
 console.log("Score conversion worker started");

@@ -14,7 +14,7 @@ declare global {
 }
 
 export async function requireAuth(req: Request, _res: Response, next: NextFunction) {
-  const token = req.cookies?.[env.SESSION_COOKIE_NAME];
+  const token = req.cookies?.[env.SESSION_COOKIE_NAME] ?? bearerToken(req.headers.authorization);
   const user = await req.services.auth.authenticate(token);
   if (!user) return next(unauthorized());
   req.user = user;
@@ -25,4 +25,9 @@ export function requireAdmin(req: Request, _res: Response, next: NextFunction) {
   if (!req.user) return next(unauthorized());
   if (req.user.role !== "admin") return next(forbidden());
   next();
+}
+
+export function bearerToken(header: string | undefined): string | undefined {
+  if (!header?.startsWith("Bearer ")) return undefined;
+  return header.slice("Bearer ".length).trim() || undefined;
 }

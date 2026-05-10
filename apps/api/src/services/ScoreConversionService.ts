@@ -1,7 +1,9 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { env } from "../config/env.js";
 import type { Score } from "../domain.js";
+import { AppError } from "../errors/AppError.js";
 import type { AuditRepository, ScoreRepository } from "../repositories/contracts.js";
 import { basenameWithoutExtension } from "../utils/filenames.js";
 import { FileStorageService } from "./FileStorageService.js";
@@ -25,7 +27,10 @@ export class ScoreConversionService {
     const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "score-omr-"));
     try {
       const inputPath = this.storage.resolveUploadPath(score.storedFilename);
-      const result = await this.omr.convert(inputPath, score.originalFilename, tempDir);
+      const result = await withTimeout(
+        this.omr.convert(inputPath, score.originalFilename, tempDir),
+        env.OMR_CONVERSION_TIMEOUT_MS
+      );
       const exportStoredFilename = this.storage.generateExportStoredFilename(score.id);
       await this.storage.saveExport(exportStoredFilename, result.musicXml);
       const updated = await this.scores.update(scoreId, {
@@ -55,5 +60,21 @@ export class ScoreConversionService {
     } finally {
       await fs.rm(tempDir, { recursive: true, force: true });
     }
+  }
+}
+
+async function withTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T> {
+  let timer: NodeJS.Timeout | undefined;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<T>((_resolve, reject) => {
+        timer = setTimeout(() => {
+          reject(new AppError(504, "Tempo máximo de conversão excedido.", "OMR_CONVERSION_TIMEOUT"));
+        }, timeoutMs);
+      })
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
   }
 }

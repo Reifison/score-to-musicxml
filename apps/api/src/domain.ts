@@ -1,5 +1,6 @@
 export type Role = "admin" | "user";
 export type ScoreStatus = "uploaded" | "queued" | "processing" | "converted" | "failed";
+export type EntitlementPlan = "free" | "paid";
 
 export type User = {
   id: string;
@@ -57,7 +58,23 @@ export type AuditAction =
   | "conversion_completed"
   | "conversion_failed"
   | "score_downloaded"
-  | "score_deleted";
+  | "score_deleted"
+  | "purchase_started"
+  | "purchase_completed"
+  | "purchase_failed"
+  | "purchase_restored"
+  | "purchase_revoked"
+  | "entitlement_changed"
+  | "free_scan_used";
+
+export type EntitlementSummary = {
+  plan: EntitlementPlan;
+  freeScanLimit: number;
+  freeScansUsed: number;
+  freeScansRemaining: number | null;
+  purchasedAt: Date | null;
+  appleProductId: string | null;
+};
 
 export type AuditLog = {
   id: string;

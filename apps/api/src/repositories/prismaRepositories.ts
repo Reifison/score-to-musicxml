@@ -1,10 +1,12 @@
 import { Prisma, type ScoreStatus as PrismaScoreStatus } from "@prisma/client";
 import { prisma } from "../db/prisma.js";
-import type { AuditLog, Score, Session, User } from "../domain.js";
+import type { AuditLog, EntitlementSummary, Score, Session, User } from "../domain.js";
+import { AppError } from "../errors/AppError.js";
 import type {
   AuditRepository,
   CreateScoreInput,
   CreateUserInput,
+  EntitlementRepository,
   Repositories,
   ScoreFilters,
   ScoreRepository,
@@ -26,6 +28,22 @@ function mapAudit(log: Awaited<ReturnType<typeof prisma.auditLog.findFirst>>): A
   if (!log) return null;
   const metadata = log.metadata && typeof log.metadata === "object" && !Array.isArray(log.metadata) ? log.metadata as Record<string, unknown> : null;
   return { ...log, metadata };
+}
+
+function entitlementSummary(input: {
+  plan: "free" | "paid";
+  freeScansUsed: number;
+  purchasedAt: Date | null;
+  appleProductId: string | null;
+}, freeScanLimit: number): EntitlementSummary {
+  return {
+    plan: input.plan,
+    freeScanLimit,
+    freeScansUsed: input.freeScansUsed,
+    freeScansRemaining: input.plan === "paid" ? null : Math.max(0, freeScanLimit - input.freeScansUsed),
+    purchasedAt: input.purchasedAt,
+    appleProductId: input.appleProductId
+  };
 }
 
 class PrismaUserRepository implements UserRepository {
@@ -97,6 +115,11 @@ class PrismaScoreRepository implements ScoreRepository {
     return scores.map((score) => mapScore(score)!);
   }
 
+  async listOlderThan(date: Date): Promise<Score[]> {
+    const scores = await prisma.score.findMany({ where: { createdAt: { lt: date } }, orderBy: { createdAt: "asc" } });
+    return scores.map((score) => mapScore(score)!);
+  }
+
   async update(id: string, input: UpdateScoreInput): Promise<Score> {
     const score = await prisma.score.update({
       where: { id },
@@ -110,6 +133,106 @@ class PrismaScoreRepository implements ScoreRepository {
 
   async delete(id: string): Promise<void> {
     await prisma.score.delete({ where: { id } });
+  }
+}
+
+class PrismaEntitlementRepository implements EntitlementRepository {
+  async getSummary(userId: string, freeScanLimit: number): Promise<EntitlementSummary> {
+    const entitlement = await prisma.entitlement.upsert({
+      where: { userId },
+      create: { userId },
+      update: {}
+    });
+    return entitlementSummary(entitlement, freeScanLimit);
+  }
+
+  async createScoreForUpload(input: CreateScoreInput, freeScanLimit: number): Promise<{ score: Score; debitedFreeScan: boolean }> {
+    return prisma.$transaction(async (tx) => {
+      const entitlement = await tx.entitlement.upsert({
+        where: { userId: input.userId },
+        create: { userId: input.userId },
+        update: {}
+      });
+
+      let reason = "paid_scan";
+      let debitedFreeScan = false;
+      let freeScanNumber: number | null = null;
+
+      if (entitlement.plan === "free") {
+        const updated = await tx.entitlement.updateMany({
+          where: {
+            userId: input.userId,
+            plan: "free",
+            freeScansUsed: { lt: freeScanLimit }
+          },
+          data: { freeScansUsed: { increment: 1 } }
+        });
+        if (updated.count !== 1) {
+          throw new AppError(402, "Limite gratuito atingido. Desbloqueie a versão paga para continuar.", "FREE_SCAN_LIMIT_REACHED");
+        }
+        reason = "free_scan";
+        debitedFreeScan = true;
+        freeScanNumber = entitlement.freeScansUsed + 1;
+      }
+
+      const score = await tx.score.create({ data: input });
+      await tx.scanUsage.create({
+        data: {
+          userId: input.userId,
+          scoreId: score.id,
+          reason,
+          metadata: freeScanNumber ? { freeScanNumber, freeScanLimit } : Prisma.JsonNull
+        }
+      });
+      return { score: mapScore(score)!, debitedFreeScan };
+    });
+  }
+
+  async recordApplePurchase(input: {
+    userId: string;
+    productId: string;
+    originalTransactionId: string;
+    purchasedAt: Date;
+    restored?: boolean;
+  }, freeScanLimit: number): Promise<EntitlementSummary> {
+    const entitlement = await prisma.entitlement.upsert({
+      where: { userId: input.userId },
+      create: {
+        userId: input.userId,
+        plan: "paid",
+        appleOriginalTransactionId: input.originalTransactionId,
+        appleProductId: input.productId,
+        purchasedAt: input.purchasedAt
+      },
+      update: {
+        plan: "paid",
+        appleOriginalTransactionId: input.originalTransactionId,
+        appleProductId: input.productId,
+        purchasedAt: input.purchasedAt
+      }
+    });
+    return entitlementSummary(entitlement, freeScanLimit);
+  }
+
+  async revokeApplePurchase(originalTransactionId: string, freeScanLimit: number): Promise<{ entitlement: EntitlementSummary; userId: string } | null> {
+    const existing = await prisma.entitlement.findFirst({
+      where: {
+        appleOriginalTransactionId: originalTransactionId,
+        appleProductId: { not: null }
+      }
+    });
+    if (!existing) return null;
+
+    const entitlement = await prisma.entitlement.update({
+      where: { userId: existing.userId },
+      data: {
+        plan: "free",
+        appleOriginalTransactionId: null,
+        appleProductId: null,
+        purchasedAt: null
+      }
+    });
+    return { entitlement: entitlementSummary(entitlement, freeScanLimit), userId: entitlement.userId };
   }
 }
 
@@ -132,6 +255,11 @@ class PrismaAuditRepository implements AuditRepository {
     const logs = await prisma.auditLog.findMany({ orderBy: { createdAt: "desc" }, take: 200 });
     return logs.map((log) => mapAudit(log)!);
   }
+
+  async deleteOlderThan(date: Date): Promise<number> {
+    const result = await prisma.auditLog.deleteMany({ where: { createdAt: { lt: date } } });
+    return result.count;
+  }
 }
 
 export function createPrismaRepositories(): Repositories {
@@ -139,6 +267,7 @@ export function createPrismaRepositories(): Repositories {
     users: new PrismaUserRepository(),
     sessions: new PrismaSessionRepository(),
     scores: new PrismaScoreRepository(),
+    entitlements: new PrismaEntitlementRepository(),
     audits: new PrismaAuditRepository()
   };
 }

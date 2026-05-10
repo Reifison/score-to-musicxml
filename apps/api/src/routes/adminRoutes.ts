@@ -8,3 +8,7 @@ adminRoutes.use(requireAuth, requireAdmin);
 adminRoutes.get("/audits", async (req, res) => {
   res.json({ audits: await req.services.repositories.audits.list() });
 });
+
+adminRoutes.post("/retention/cleanup", async (req, res) => {
+  res.json(await req.services.retention.cleanup(req.ip));
+});

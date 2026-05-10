@@ -1,0 +1,47 @@
+{
+  "expo": {
+    "name": "Score to MusicXML",
+    "slug": "score-to-musicxml",
+    "scheme": "scoretomusicxml",
+    "version": "0.1.0",
+    "orientation": "portrait",
+    "icon": "./assets/icon.png",
+    "userInterfaceStyle": "automatic",
+    "newArchEnabled": true,
+    "splash": {
+      "image": "./assets/splash.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#f7f8f8"
+    },
+    "ios": {
+      "bundleIdentifier": "com.scoretomusicxml.app",
+      "icon": "./assets/icon.png",
+      "supportsTablet": true,
+      "infoPlist": {
+        "NSCameraUsageDescription": "Usamos a camera para escanear partituras e enviar ao conversor.",
+        "NSPhotoLibraryUsageDescription": "Usamos sua biblioteca para selecionar fotos de partituras.",
+        "NSPhotoLibraryAddUsageDescription": "O app pode salvar arquivos temporarios exportados quando voce escolher compartilhar."
+      }
+    },
+    "plugins": [
+      "expo-router",
+      "expo-secure-store",
+      [
+        "expo-document-picker",
+        {
+          "iCloudContainerEnvironment": "Production"
+        }
+      ],
+      [
+        "expo-image-picker",
+        {
+          "photosPermission": "Selecione fotos de partituras para converter em MusicXML.",
+          "cameraPermission": "Tire fotos de partituras para converter em MusicXML."
+        }
+      ]
+    ],
+    "extra": {
+      "apiUrl": "${EXPO_PUBLIC_API_URL}"
+    }
+  }
+}

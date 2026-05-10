@@ -1,9 +1,11 @@
 import { nanoid } from "nanoid";
-import type { AuditLog, Score, Session, User } from "../domain.js";
+import type { AuditLog, EntitlementPlan, EntitlementSummary, Score, Session, User } from "../domain.js";
+import { AppError } from "../errors/AppError.js";
 import type {
   AuditRepository,
   CreateScoreInput,
   CreateUserInput,
+  EntitlementRepository,
   Repositories,
   ScoreFilters,
   ScoreRepository,
@@ -119,6 +121,12 @@ export class InMemoryScoreRepository implements ScoreRepository {
       .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime());
   }
 
+  async listOlderThan(date: Date): Promise<Score[]> {
+    return [...this.scores.values()]
+      .filter((score) => score.createdAt < date)
+      .sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime());
+  }
+
   async update(id: string, input: UpdateScoreInput): Promise<Score> {
     const existing = this.scores.get(id);
     if (!existing) throw new Error("Score not found");
@@ -153,13 +161,104 @@ export class InMemoryAuditRepository implements AuditRepository {
   async list(): Promise<AuditLog[]> {
     return [...this.logs].reverse();
   }
+
+  async deleteOlderThan(date: Date): Promise<number> {
+    const before = this.logs.length;
+    this.logs = this.logs.filter((log) => log.createdAt >= date);
+    return before - this.logs.length;
+  }
+}
+
+export class InMemoryEntitlementRepository implements EntitlementRepository {
+  private entitlements = new Map<string, {
+    plan: EntitlementPlan;
+    freeScansUsed: number;
+    purchasedAt: Date | null;
+    appleProductId: string | null;
+    appleOriginalTransactionId: string | null;
+  }>();
+
+  constructor(private scores: ScoreRepository) {}
+
+  async getSummary(userId: string, freeScanLimit: number): Promise<EntitlementSummary> {
+    return this.summary(userId, freeScanLimit);
+  }
+
+  async createScoreForUpload(input: CreateScoreInput, freeScanLimit: number): Promise<{ score: Score; debitedFreeScan: boolean }> {
+    const entitlement = this.ensure(input.userId);
+    let debitedFreeScan = false;
+    if (entitlement.plan === "free") {
+      if (entitlement.freeScansUsed >= freeScanLimit) {
+        throw new AppError(402, "Limite gratuito atingido. Desbloqueie a versão paga para continuar.", "FREE_SCAN_LIMIT_REACHED");
+      }
+      entitlement.freeScansUsed += 1;
+      debitedFreeScan = true;
+    }
+    const score = await this.scores.create(input);
+    return { score, debitedFreeScan };
+  }
+
+  async recordApplePurchase(input: {
+    userId: string;
+    productId: string;
+    originalTransactionId: string;
+    purchasedAt: Date;
+    restored?: boolean;
+  }, freeScanLimit: number): Promise<EntitlementSummary> {
+    const entitlement = this.ensure(input.userId);
+    entitlement.plan = "paid";
+    entitlement.appleProductId = input.productId;
+    entitlement.appleOriginalTransactionId = input.originalTransactionId;
+    entitlement.purchasedAt = input.purchasedAt;
+    return this.summary(input.userId, freeScanLimit);
+  }
+
+  async revokeApplePurchase(originalTransactionId: string, freeScanLimit: number): Promise<{ entitlement: EntitlementSummary; userId: string } | null> {
+    for (const [userId, entitlement] of this.entitlements) {
+      if (entitlement.appleOriginalTransactionId !== originalTransactionId) continue;
+      entitlement.plan = "free";
+      entitlement.appleProductId = null;
+      entitlement.appleOriginalTransactionId = null;
+      entitlement.purchasedAt = null;
+      return { entitlement: await this.summary(userId, freeScanLimit), userId };
+    }
+    return null;
+  }
+
+  private ensure(userId: string) {
+    const existing = this.entitlements.get(userId);
+    if (existing) return existing;
+    const entitlement = {
+      plan: "free" as EntitlementPlan,
+      freeScansUsed: 0,
+      purchasedAt: null,
+      appleProductId: null,
+      appleOriginalTransactionId: null
+    };
+    this.entitlements.set(userId, entitlement);
+    return entitlement;
+  }
+
+  private summary(userId: string, freeScanLimit: number): EntitlementSummary {
+    const entitlement = this.ensure(userId);
+    return {
+      plan: entitlement.plan,
+      freeScanLimit,
+      freeScansUsed: entitlement.freeScansUsed,
+      freeScansRemaining: entitlement.plan === "paid" ? null : Math.max(0, freeScanLimit - entitlement.freeScansUsed),
+      purchasedAt: entitlement.purchasedAt,
+      appleProductId: entitlement.appleProductId
+    };
+  }
 }
 
 export function createInMemoryRepositories(): Repositories {
+  const scores = new InMemoryScoreRepository();
   return {
     users: new InMemoryUserRepository(),
     sessions: new InMemorySessionRepository(),
-    scores: new InMemoryScoreRepository(),
+    scores,
+    entitlements: new InMemoryEntitlementRepository(scores),
     audits: new InMemoryAuditRepository()
   };
 }

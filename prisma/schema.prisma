@@ -20,6 +20,11 @@ enum ScoreStatus {
   failed
 }
 
+enum EntitlementPlan {
+  free
+  paid
+}
+
 enum AuditAction {
   login_success
   login_failed
@@ -37,6 +42,13 @@ enum AuditAction {
   conversion_failed
   score_downloaded
   score_deleted
+  purchase_started
+  purchase_completed
+  purchase_failed
+  purchase_restored
+  purchase_revoked
+  entitlement_changed
+  free_scan_used
 }
 
 model User {
@@ -50,6 +62,8 @@ model User {
   updatedAt    DateTime   @updatedAt
   sessions     Session[]
   scores       Score[]
+  entitlement  Entitlement?
+  scanUsages   ScanUsage[]
   audits       AuditLog[] @relation("AuditActor")
 
   @@index([role])
@@ -86,9 +100,39 @@ model Score {
   createdAt        DateTime    @default(now())
   updatedAt        DateTime    @updatedAt
   convertedAt      DateTime?
+  scanUsage        ScanUsage?
 
   @@index([userId])
   @@index([conversionStatus])
+  @@index([createdAt])
+}
+
+model Entitlement {
+  id                         String          @id @default(uuid())
+  userId                     String          @unique
+  user                       User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+  plan                       EntitlementPlan @default(free)
+  freeScansUsed              Int             @default(0)
+  appleOriginalTransactionId String?         @unique
+  appleProductId             String?
+  purchasedAt                DateTime?
+  createdAt                  DateTime        @default(now())
+  updatedAt                  DateTime        @updatedAt
+
+  @@index([plan])
+}
+
+model ScanUsage {
+  id        String   @id @default(uuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  scoreId   String?  @unique
+  score     Score?   @relation(fields: [scoreId], references: [id], onDelete: SetNull)
+  reason    String
+  metadata  Json?
+  createdAt DateTime @default(now())
+
+  @@index([userId])
   @@index([createdAt])
 }
 

@@ -8,7 +8,10 @@ import { createServices, type AppServices } from "./container.js";
 import { errorHandler } from "./middleware/errorHandler.js";
 import { attachServices } from "./middleware/services.js";
 import { adminRoutes } from "./routes/adminRoutes.js";
+import { appleRoutes } from "./routes/appleRoutes.js";
 import { authRoutes } from "./routes/authRoutes.js";
+import { debugRoutes } from "./routes/debugRoutes.js";
+import { meRoutes } from "./routes/meRoutes.js";
 import { scoreRoutes } from "./routes/scoreRoutes.js";
 import { userRoutes } from "./routes/userRoutes.js";
 
@@ -23,7 +26,10 @@ export function createApp(services: AppServices = createServices()) {
   app.use(attachServices(services));
 
   app.get("/health", (_req, res) => res.json({ ok: true }));
+  app.use("/debug", debugRoutes);
+  app.use("/api/apple", appleRoutes);
   app.use("/api/auth", authRoutes);
+  app.use("/api/me", meRoutes);
   app.use("/api/users", userRoutes);
   app.use("/api/scores", scoreRoutes);
   app.use("/api/admin", adminRoutes);

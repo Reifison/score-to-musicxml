@@ -11,3 +11,10 @@ storage/exports/*
 *.log
 *.tsbuildinfo
 .DS_Store
+dump.rdb
+
+# Mobile/iOS generated artifacts
+apps/mobile/.expo/
+apps/mobile/ios/Pods/
+apps/mobile/ios/build/
+apps/mobile/ios/DerivedData/

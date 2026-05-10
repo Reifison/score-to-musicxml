@@ -1,0 +1,137 @@
+import { z } from "zod";
+import { env } from "../config/env.js";
+import type { EntitlementSummary, User } from "../domain.js";
+import { AppError } from "../errors/AppError.js";
+import type { AuditRepository, CreateScoreInput, EntitlementRepository } from "../repositories/contracts.js";
+import { ApplePurchaseValidationService } from "./ApplePurchaseValidationService.js";
+
+const applePurchaseSchema = z.object({
+  productId: z.string().min(1),
+  originalTransactionId: z.string().min(6),
+  purchaseToken: z.string().min(20).optional(),
+  transactionId: z.string().min(1).optional(),
+  purchasedAt: z.coerce.date().optional(),
+  restored: z.boolean().optional()
+});
+
+export class EntitlementService {
+  constructor(
+    private entitlements: EntitlementRepository,
+    private audits: AuditRepository,
+    private appleValidator = new ApplePurchaseValidationService()
+  ) {}
+
+  async getFor(user: User): Promise<EntitlementSummary> {
+    return this.entitlements.getSummary(user.id, env.FREE_SCAN_LIMIT);
+  }
+
+  async assertCanUpload(user: User): Promise<void> {
+    const summary = await this.getFor(user);
+    if (summary.plan === "free" && (summary.freeScansRemaining ?? 0) <= 0) {
+      throw new AppError(402, "Limite gratuito atingido. Desbloqueie a versão paga para continuar.", "FREE_SCAN_LIMIT_REACHED");
+    }
+  }
+
+  async createScoreForUpload(input: CreateScoreInput, ipAddress?: string) {
+    const result = await this.entitlements.createScoreForUpload(input, env.FREE_SCAN_LIMIT);
+    if (result.debitedFreeScan) {
+      await this.audits.create({
+        actorId: input.userId,
+        action: "free_scan_used",
+        entity: "score",
+        entityId: result.score.id,
+        ipAddress,
+        metadata: { freeScanLimit: env.FREE_SCAN_LIMIT }
+      });
+    }
+    return result.score;
+  }
+
+  async registerApplePurchase(user: User, body: unknown, ipAddress?: string): Promise<EntitlementSummary> {
+    const input = applePurchaseSchema.parse(body);
+    if (input.productId !== env.APPLE_PREMIUM_PRODUCT_ID) {
+      await this.audits.create({ actorId: user.id, action: "purchase_failed", ipAddress, metadata: { reason: "invalid_product", productId: input.productId } });
+      throw new AppError(400, "Produto de compra inválido.", "INVALID_PURCHASE_PRODUCT");
+    }
+
+    let purchase: { originalTransactionId: string; purchasedAt?: Date } = {
+      originalTransactionId: input.originalTransactionId,
+      purchasedAt: input.purchasedAt ?? new Date()
+    };
+
+    if (env.NODE_ENV === "production" && !this.appleValidator.isConfigured()) {
+      await this.audits.create({ actorId: user.id, action: "purchase_failed", ipAddress, metadata: { reason: "apple_validation_not_configured" } });
+      throw new AppError(501, "Validação server-side da Apple ainda não está configurada.", "APPLE_VALIDATION_NOT_CONFIGURED");
+    }
+
+    if (env.NODE_ENV === "production" || this.appleValidator.isConfigured()) {
+      try {
+        purchase = await this.appleValidator.validate(input);
+      } catch (error) {
+        await this.audits.create({ actorId: user.id, action: "purchase_failed", ipAddress, metadata: { reason: "apple_validation_failed", productId: input.productId } });
+        throw error;
+      }
+    }
+
+    const summary = await this.entitlements.recordApplePurchase({
+      userId: user.id,
+      productId: input.productId,
+      originalTransactionId: purchase.originalTransactionId,
+      purchasedAt: purchase.purchasedAt ?? input.purchasedAt ?? new Date(),
+      restored: input.restored
+    }, env.FREE_SCAN_LIMIT);
+
+    await this.audits.create({
+      actorId: user.id,
+      action: input.restored ? "purchase_restored" : "purchase_completed",
+      entity: "entitlement",
+      entityId: user.id,
+      ipAddress,
+      metadata: { productId: input.productId }
+    });
+    await this.audits.create({
+      actorId: user.id,
+      action: "entitlement_changed",
+      entity: "user",
+      entityId: user.id,
+      ipAddress,
+      metadata: { plan: summary.plan }
+    });
+    return summary;
+  }
+
+  async handleAppleNotification(body: unknown, ipAddress?: string): Promise<{ handled: boolean; notificationType?: string }> {
+    const { signedPayload } = z.object({ signedPayload: z.string().min(20) }).parse(body);
+    const notification = await this.appleValidator.validateNotification(signedPayload);
+    if (!this.appleValidator.isRevocationNotification(notification.notificationType)) {
+      return { handled: false, notificationType: notification.notificationType };
+    }
+    if (!notification.originalTransactionId) {
+      throw new AppError(400, "Notificação Apple sem transação original.", "APPLE_NOTIFICATION_TRANSACTION_MISSING");
+    }
+
+    const revoked = await this.entitlements.revokeApplePurchase(notification.originalTransactionId, env.FREE_SCAN_LIMIT);
+    if (!revoked) {
+      return { handled: false, notificationType: notification.notificationType };
+    }
+
+    await this.audits.create({
+      actorId: revoked.userId,
+      action: "purchase_revoked",
+      entity: "entitlement",
+      entityId: revoked.userId,
+      ipAddress,
+      metadata: { notificationType: notification.notificationType, productId: notification.productId }
+    });
+    await this.audits.create({
+      actorId: revoked.userId,
+      action: "entitlement_changed",
+      entity: "user",
+      entityId: revoked.userId,
+      ipAddress,
+      metadata: { plan: revoked.entitlement.plan, reason: "apple_revocation" }
+    });
+
+    return { handled: true, notificationType: notification.notificationType };
+  }
+}

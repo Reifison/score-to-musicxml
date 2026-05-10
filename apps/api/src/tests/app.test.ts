@@ -10,7 +10,7 @@ import { MusicXmlExportService } from "../services/MusicXmlExportService.js";
 import type { OmrAdapter } from "../services/OmrAdapter.js";
 
 const pdf = Buffer.from("%PDF-1.4\n1 0 obj\n<<>>\nendobj\n%%EOF");
-const png = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 0]);
+const png = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=", "base64");
 
 class TestOmrAdapter implements OmrAdapter {
   private exportService = new MusicXmlExportService();
@@ -32,7 +32,7 @@ async function makeTestApp() {
   services.conversion = new (await import("../services/ScoreConversionService.js")).ScoreConversionService(repos.scores, repos.audits, services.storage, new TestOmrAdapter());
   services.scores = new (await import("../services/ScoreService.js")).ScoreService(repos.scores, repos.audits, services.storage);
   const queue = new (await import("../queues/ScoreConversionQueue.js")).InlineConversionQueue(services.conversion, true);
-  services.uploads = new (await import("../services/ScoreUploadService.js")).ScoreUploadService(repos.scores, repos.audits, services.storage, queue);
+  services.uploads = new (await import("../services/ScoreUploadService.js")).ScoreUploadService(repos.audits, services.storage, queue, services.entitlements, services.fileSecurity);
   const app = createApp(services);
   const admin = await repos.users.create({
     name: "Admin",
@@ -66,6 +66,18 @@ describe("API", () => {
   it("permite login válido e rejeita login inválido", async () => {
     await request(ctx.app).post("/api/auth/login").send({ email: "user@example.com", password: "Password123!" }).expect(200);
     await request(ctx.app).post("/api/auth/login").send({ email: "user@example.com", password: "wrong" }).expect(401);
+  });
+
+  it("emite token mobile sob demanda e aceita Authorization Bearer", async () => {
+    const response = await request(ctx.app)
+      .post("/api/auth/login")
+      .set("x-mobile-client", "score-to-musicxml-ios")
+      .send({ email: "user@example.com", password: "Password123!" })
+      .expect(200);
+    expect(response.body.token).toEqual(expect.any(String));
+    await request(ctx.app).get("/api/auth/me").set("Authorization", `Bearer ${response.body.token}`).expect(200);
+    await request(ctx.app).post("/api/auth/logout").set("Authorization", `Bearer ${response.body.token}`).expect(204);
+    await request(ctx.app).get("/api/auth/me").set("Authorization", `Bearer ${response.body.token}`).expect(401);
   });
 
   it("bloqueia usuário comum em rota admin e permite admin", async () => {
@@ -108,6 +120,14 @@ describe("API", () => {
     expect(response.body.score.conversionStatus).toBe("queued");
   });
 
+  it("bloqueia PDF com conteúdo ativo antes de persistir upload", async () => {
+    const cookie = await login(ctx.app, "user@example.com");
+    const activePdf = Buffer.from("%PDF-1.4\n1 0 obj\n<< /OpenAction 2 0 R >>\nendobj\n%%EOF");
+    await request(ctx.app).post("/api/scores").set("Cookie", cookie).attach("file", activePdf, "ativo.pdf").expect(400);
+    const scores = await ctx.repos.scores.list({ userId: ctx.user.id });
+    expect(scores).toHaveLength(0);
+  });
+
   it("aceita imagem PNG válida", async () => {
     const cookie = await login(ctx.app, "user@example.com");
     const response = await request(ctx.app).post("/api/scores").set("Cookie", cookie).attach("file", png, "foto.png").expect(201);
@@ -128,7 +148,32 @@ describe("API", () => {
     const otherCookie = await login(ctx.app, "other@example.com");
     await request(ctx.app).get(`/api/scores/${created.body.score.id}`).set("Cookie", otherCookie).expect(403);
     await request(ctx.app).get(`/api/scores/${created.body.score.id}/download`).set("Cookie", otherCookie).expect(403);
+    await request(ctx.app).get(`/api/scores/${created.body.score.id}/preview`).set("Cookie", otherCookie).expect(403);
     await request(ctx.app).get(`/api/scores/${created.body.score.id}/download`).set("Cookie", adminCookie).expect(200);
+  });
+
+  it("aplica limite gratuito de 3 scans e libera após compra registrada", async () => {
+    const cookie = await login(ctx.app, "user@example.com");
+
+    const initialEntitlement = await request(ctx.app).get("/api/me/entitlement").set("Cookie", cookie).expect(200);
+    expect(initialEntitlement.body.entitlement).toMatchObject({ plan: "free", freeScanLimit: 3, freeScansUsed: 0, freeScansRemaining: 3 });
+
+    for (const name of ["um.pdf", "dois.pdf", "tres.pdf"]) {
+      await request(ctx.app).post("/api/scores").set("Cookie", cookie).attach("file", pdf, name).expect(201);
+    }
+
+    const exhausted = await request(ctx.app).get("/api/me/entitlement").set("Cookie", cookie).expect(200);
+    expect(exhausted.body.entitlement).toMatchObject({ plan: "free", freeScansUsed: 3, freeScansRemaining: 0 });
+    await request(ctx.app).post("/api/scores").set("Cookie", cookie).attach("file", pdf, "quatro.pdf").expect(402);
+
+    const purchase = await request(ctx.app)
+      .post("/api/me/entitlement/apple")
+      .set("Cookie", cookie)
+      .send({ productId: "premium_unlock", originalTransactionId: "test-original-transaction", purchasedAt: "2026-05-09T12:00:00.000Z" })
+      .expect(200);
+    expect(purchase.body.entitlement).toMatchObject({ plan: "paid", freeScansUsed: 3, freeScansRemaining: null });
+
+    await request(ctx.app).post("/api/scores").set("Cookie", cookie).attach("file", pdf, "quatro.pdf").expect(201);
   });
 
   it("conversão muda status, registra falha e usa nome base original no download", async () => {

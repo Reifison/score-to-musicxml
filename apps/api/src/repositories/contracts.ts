@@ -1,4 +1,4 @@
-import type { AuditAction, AuditLog, Role, Score, ScoreStatus, Session, User } from "../domain.js";
+import type { AuditAction, AuditLog, EntitlementSummary, Role, Score, ScoreStatus, Session, User } from "../domain.js";
 
 export type CreateUserInput = {
   name: string;
@@ -50,8 +50,22 @@ export interface ScoreRepository {
   create(input: CreateScoreInput): Promise<Score>;
   findById(id: string): Promise<Score | null>;
   list(filters?: ScoreFilters): Promise<Score[]>;
+  listOlderThan(date: Date): Promise<Score[]>;
   update(id: string, input: UpdateScoreInput): Promise<Score>;
   delete(id: string): Promise<void>;
+}
+
+export interface EntitlementRepository {
+  getSummary(userId: string, freeScanLimit: number): Promise<EntitlementSummary>;
+  createScoreForUpload(input: CreateScoreInput, freeScanLimit: number): Promise<{ score: Score; debitedFreeScan: boolean }>;
+  recordApplePurchase(input: {
+    userId: string;
+    productId: string;
+    originalTransactionId: string;
+    purchasedAt: Date;
+    restored?: boolean;
+  }, freeScanLimit: number): Promise<EntitlementSummary>;
+  revokeApplePurchase(originalTransactionId: string, freeScanLimit: number): Promise<{ entitlement: EntitlementSummary; userId: string } | null>;
 }
 
 export interface AuditRepository {
@@ -64,11 +78,13 @@ export interface AuditRepository {
     metadata?: Record<string, unknown> | null;
   }): Promise<AuditLog>;
   list(): Promise<AuditLog[]>;
+  deleteOlderThan(date: Date): Promise<number>;
 }
 
 export type Repositories = {
   users: UserRepository;
   sessions: SessionRepository;
   scores: ScoreRepository;
+  entitlements: EntitlementRepository;
   audits: AuditRepository;
 };
