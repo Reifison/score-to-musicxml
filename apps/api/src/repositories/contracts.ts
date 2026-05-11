@@ -65,6 +65,8 @@ export interface EntitlementRepository {
     purchasedAt: Date;
     restored?: boolean;
   }, freeScanLimit: number): Promise<EntitlementSummary>;
+  grantAdminAccess(input: { userId: string; grantedById: string; reason?: string | null }, freeScanLimit: number): Promise<EntitlementSummary>;
+  revokeAdminAccess(userId: string, freeScanLimit: number): Promise<EntitlementSummary>;
   revokeApplePurchase(originalTransactionId: string, freeScanLimit: number): Promise<{ entitlement: EntitlementSummary; userId: string } | null>;
 }
 

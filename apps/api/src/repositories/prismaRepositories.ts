@@ -32,17 +32,25 @@ function mapAudit(log: Awaited<ReturnType<typeof prisma.auditLog.findFirst>>): A
 
 function entitlementSummary(input: {
   plan: "free" | "paid";
+  source: "free" | "apple" | "legacy_grant" | "admin_grant";
   freeScansUsed: number;
   purchasedAt: Date | null;
   appleProductId: string | null;
+  grantedAt: Date | null;
+  grantedById: string | null;
+  grantReason: string | null;
 }, freeScanLimit: number): EntitlementSummary {
   return {
     plan: input.plan,
+    source: input.source,
     freeScanLimit,
     freeScansUsed: input.freeScansUsed,
     freeScansRemaining: input.plan === "paid" ? null : Math.max(0, freeScanLimit - input.freeScansUsed),
     purchasedAt: input.purchasedAt,
-    appleProductId: input.appleProductId
+    appleProductId: input.appleProductId,
+    grantedAt: input.grantedAt,
+    grantedById: input.grantedById,
+    grantReason: input.grantReason
   };
 }
 
@@ -200,15 +208,64 @@ class PrismaEntitlementRepository implements EntitlementRepository {
       create: {
         userId: input.userId,
         plan: "paid",
+        source: "apple",
         appleOriginalTransactionId: input.originalTransactionId,
         appleProductId: input.productId,
         purchasedAt: input.purchasedAt
       },
       update: {
         plan: "paid",
+        source: "apple",
         appleOriginalTransactionId: input.originalTransactionId,
         appleProductId: input.productId,
-        purchasedAt: input.purchasedAt
+        purchasedAt: input.purchasedAt,
+        grantedAt: null,
+        grantedById: null,
+        grantReason: null
+      }
+    });
+    return entitlementSummary(entitlement, freeScanLimit);
+  }
+
+  async grantAdminAccess(input: { userId: string; grantedById: string; reason?: string | null }, freeScanLimit: number): Promise<EntitlementSummary> {
+    const entitlement = await prisma.entitlement.upsert({
+      where: { userId: input.userId },
+      create: {
+        userId: input.userId,
+        plan: "paid",
+        source: "admin_grant",
+        grantedAt: new Date(),
+        grantedById: input.grantedById,
+        grantReason: input.reason ?? null
+      },
+      update: {
+        plan: "paid",
+        source: "admin_grant",
+        appleOriginalTransactionId: null,
+        appleProductId: null,
+        purchasedAt: null,
+        grantedAt: new Date(),
+        grantedById: input.grantedById,
+        grantReason: input.reason ?? null
+      }
+    });
+    return entitlementSummary(entitlement, freeScanLimit);
+  }
+
+  async revokeAdminAccess(userId: string, freeScanLimit: number): Promise<EntitlementSummary> {
+    const existing = await prisma.entitlement.findUnique({ where: { userId } });
+    if (!existing) throw new AppError(404, "Registro não encontrado.", "NOT_FOUND");
+    if (existing.source !== "admin_grant") {
+      throw new AppError(409, "Apenas concessões administrativas podem ser removidas por esta ação.", "ENTITLEMENT_NOT_ADMIN_GRANT");
+    }
+    const entitlement = await prisma.entitlement.update({
+      where: { userId },
+      data: {
+        plan: "free",
+        source: "free",
+        grantedAt: null,
+        grantedById: null,
+        grantReason: null
       }
     });
     return entitlementSummary(entitlement, freeScanLimit);
@@ -218,7 +275,8 @@ class PrismaEntitlementRepository implements EntitlementRepository {
     const existing = await prisma.entitlement.findFirst({
       where: {
         appleOriginalTransactionId: originalTransactionId,
-        appleProductId: { not: null }
+        appleProductId: { not: null },
+        source: "apple"
       }
     });
     if (!existing) return null;
@@ -227,6 +285,7 @@ class PrismaEntitlementRepository implements EntitlementRepository {
       where: { userId: existing.userId },
       data: {
         plan: "free",
+        source: "free",
         appleOriginalTransactionId: null,
         appleProductId: null,
         purchasedAt: null

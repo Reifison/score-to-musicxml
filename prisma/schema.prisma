@@ -25,6 +25,13 @@ enum EntitlementPlan {
   paid
 }
 
+enum EntitlementSource {
+  free
+  apple
+  legacy_grant
+  admin_grant
+}
+
 enum AuditAction {
   login_success
   login_failed
@@ -63,6 +70,7 @@ model User {
   sessions     Session[]
   scores       Score[]
   entitlement  Entitlement?
+  grantsMade   Entitlement[] @relation("EntitlementGrantedBy")
   scanUsages   ScanUsage[]
   audits       AuditLog[] @relation("AuditActor")
 
@@ -112,14 +120,21 @@ model Entitlement {
   userId                     String          @unique
   user                       User            @relation(fields: [userId], references: [id], onDelete: Cascade)
   plan                       EntitlementPlan @default(free)
+  source                     EntitlementSource @default(free)
   freeScansUsed              Int             @default(0)
   appleOriginalTransactionId String?         @unique
   appleProductId             String?
   purchasedAt                DateTime?
+  grantedAt                  DateTime?
+  grantedById                String?
+  grantedBy                  User?           @relation("EntitlementGrantedBy", fields: [grantedById], references: [id], onDelete: SetNull)
+  grantReason                String?
   createdAt                  DateTime        @default(now())
   updatedAt                  DateTime        @updatedAt
 
   @@index([plan])
+  @@index([source])
+  @@index([grantedById])
 }
 
 model ScanUsage {

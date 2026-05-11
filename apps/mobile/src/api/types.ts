@@ -32,9 +32,13 @@ export type Score = {
 
 export type Entitlement = {
   plan: "free" | "paid";
+  source: "free" | "apple" | "legacy_grant" | "admin_grant";
   freeScanLimit: number;
   freeScansUsed: number;
   freeScansRemaining: number | null;
   purchasedAt: string | null;
   appleProductId: string | null;
+  grantedAt: string | null;
+  grantedById: string | null;
+  grantReason: string | null;
 };

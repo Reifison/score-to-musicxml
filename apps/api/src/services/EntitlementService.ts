@@ -14,6 +14,10 @@ const applePurchaseSchema = z.object({
   restored: z.boolean().optional()
 });
 
+const adminGrantSchema = z.object({
+  reason: z.string().trim().min(1).max(300).optional()
+});
+
 export class EntitlementService {
   constructor(
     private entitlements: EntitlementRepository,
@@ -45,6 +49,37 @@ export class EntitlementService {
       });
     }
     return result.score;
+  }
+
+  async grantAdminAccess(userId: string, admin: User, body: unknown, ipAddress?: string): Promise<EntitlementSummary> {
+    const input = adminGrantSchema.parse(body);
+    const summary = await this.entitlements.grantAdminAccess({
+      userId,
+      grantedById: admin.id,
+      reason: input.reason ?? "Acesso liberado manualmente pelo admin."
+    }, env.FREE_SCAN_LIMIT);
+    await this.audits.create({
+      actorId: admin.id,
+      action: "entitlement_changed",
+      entity: "user",
+      entityId: userId,
+      ipAddress,
+      metadata: { source: summary.source, reason: input.reason ?? "admin_grant" }
+    });
+    return summary;
+  }
+
+  async revokeAdminAccess(userId: string, admin: User, ipAddress?: string): Promise<EntitlementSummary> {
+    const summary = await this.entitlements.revokeAdminAccess(userId, env.FREE_SCAN_LIMIT);
+    await this.audits.create({
+      actorId: admin.id,
+      action: "entitlement_changed",
+      entity: "user",
+      entityId: userId,
+      ipAddress,
+      metadata: { source: summary.source, reason: "admin_grant_revoked" }
+    });
+    return summary;
   }
 
   async registerApplePurchase(user: User, body: unknown, ipAddress?: string): Promise<EntitlementSummary> {

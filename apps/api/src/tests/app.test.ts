@@ -176,6 +176,52 @@ describe("API", () => {
     await request(ctx.app).post("/api/scores").set("Cookie", cookie).attach("file", pdf, "quatro.pdf").expect(201);
   });
 
+  it("admin concede e remove acesso completo para usuário de teste", async () => {
+    const userCookie = await login(ctx.app, "user@example.com");
+    const adminCookie = await login(ctx.app, "admin@example.com");
+
+    for (const name of ["um.pdf", "dois.pdf", "tres.pdf"]) {
+      await request(ctx.app).post("/api/scores").set("Cookie", userCookie).attach("file", pdf, name).expect(201);
+    }
+    await request(ctx.app).post("/api/scores").set("Cookie", userCookie).attach("file", pdf, "bloqueado.pdf").expect(402);
+
+    const grant = await request(ctx.app)
+      .post(`/api/admin/users/${ctx.user.id}/entitlement/grant`)
+      .set("Cookie", adminCookie)
+      .send({ reason: "Teste beta iOS" })
+      .expect(200);
+    expect(grant.body.entitlement).toMatchObject({
+      plan: "paid",
+      source: "admin_grant",
+      freeScansUsed: 3,
+      freeScansRemaining: null,
+      grantedById: ctx.admin.id,
+      grantReason: "Teste beta iOS"
+    });
+
+    await request(ctx.app).post("/api/scores").set("Cookie", userCookie).attach("file", pdf, "liberado.pdf").expect(201);
+
+    const revoked = await request(ctx.app)
+      .delete(`/api/admin/users/${ctx.user.id}/entitlement/grant`)
+      .set("Cookie", adminCookie)
+      .expect(200);
+    expect(revoked.body.entitlement).toMatchObject({
+      plan: "free",
+      source: "free",
+      freeScansUsed: 3,
+      freeScansRemaining: 0
+    });
+    await request(ctx.app).post("/api/scores").set("Cookie", userCookie).attach("file", pdf, "bloqueado-de-novo.pdf").expect(402);
+  });
+
+  it("não remove acesso concedido por admin ao processar revogação Apple", async () => {
+    await ctx.repos.entitlements.grantAdminAccess({ userId: ctx.user.id, grantedById: ctx.admin.id, reason: "Teste" }, 3);
+    const revoked = await ctx.repos.entitlements.revokeApplePurchase("test-original-transaction", 3);
+    expect(revoked).toBeNull();
+    const summary = await ctx.repos.entitlements.getSummary(ctx.user.id, 3);
+    expect(summary).toMatchObject({ plan: "paid", source: "admin_grant" });
+  });
+
   it("conversão muda status, registra falha e usa nome base original no download", async () => {
     const cookie = await login(ctx.app, "user@example.com");
     const created = await request(ctx.app).post("/api/scores").set("Cookie", cookie).attach("file", pdf, "minha_partitura.pdf").expect(201);

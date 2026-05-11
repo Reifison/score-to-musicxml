@@ -1,6 +1,7 @@
 export type Role = "admin" | "user";
 export type ScoreStatus = "uploaded" | "queued" | "processing" | "converted" | "failed";
 export type EntitlementPlan = "free" | "paid";
+export type EntitlementSource = "free" | "apple" | "legacy_grant" | "admin_grant";
 
 export type User = {
   id: string;
@@ -69,11 +70,15 @@ export type AuditAction =
 
 export type EntitlementSummary = {
   plan: EntitlementPlan;
+  source: EntitlementSource;
   freeScanLimit: number;
   freeScansUsed: number;
   freeScansRemaining: number | null;
   purchasedAt: Date | null;
   appleProductId: string | null;
+  grantedAt: Date | null;
+  grantedById: string | null;
+  grantReason: string | null;
 };
 
 export type AuditLog = {

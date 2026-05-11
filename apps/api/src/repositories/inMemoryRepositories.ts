@@ -1,5 +1,5 @@
 import { nanoid } from "nanoid";
-import type { AuditLog, EntitlementPlan, EntitlementSummary, Score, Session, User } from "../domain.js";
+import type { AuditLog, EntitlementPlan, EntitlementSource, EntitlementSummary, Score, Session, User } from "../domain.js";
 import { AppError } from "../errors/AppError.js";
 import type {
   AuditRepository,
@@ -172,10 +172,14 @@ export class InMemoryAuditRepository implements AuditRepository {
 export class InMemoryEntitlementRepository implements EntitlementRepository {
   private entitlements = new Map<string, {
     plan: EntitlementPlan;
+    source: EntitlementSource;
     freeScansUsed: number;
     purchasedAt: Date | null;
     appleProductId: string | null;
     appleOriginalTransactionId: string | null;
+    grantedAt: Date | null;
+    grantedById: string | null;
+    grantReason: string | null;
   }>();
 
   constructor(private scores: ScoreRepository) {}
@@ -207,16 +211,47 @@ export class InMemoryEntitlementRepository implements EntitlementRepository {
   }, freeScanLimit: number): Promise<EntitlementSummary> {
     const entitlement = this.ensure(input.userId);
     entitlement.plan = "paid";
+    entitlement.source = "apple";
     entitlement.appleProductId = input.productId;
     entitlement.appleOriginalTransactionId = input.originalTransactionId;
     entitlement.purchasedAt = input.purchasedAt;
+    entitlement.grantedAt = null;
+    entitlement.grantedById = null;
+    entitlement.grantReason = null;
     return this.summary(input.userId, freeScanLimit);
+  }
+
+  async grantAdminAccess(input: { userId: string; grantedById: string; reason?: string | null }, freeScanLimit: number): Promise<EntitlementSummary> {
+    const entitlement = this.ensure(input.userId);
+    entitlement.plan = "paid";
+    entitlement.source = "admin_grant";
+    entitlement.appleProductId = null;
+    entitlement.appleOriginalTransactionId = null;
+    entitlement.purchasedAt = null;
+    entitlement.grantedAt = now();
+    entitlement.grantedById = input.grantedById;
+    entitlement.grantReason = input.reason ?? null;
+    return this.summary(input.userId, freeScanLimit);
+  }
+
+  async revokeAdminAccess(userId: string, freeScanLimit: number): Promise<EntitlementSummary> {
+    const entitlement = this.ensure(userId);
+    if (entitlement.source !== "admin_grant") {
+      throw new AppError(409, "Apenas concessões administrativas podem ser removidas por esta ação.", "ENTITLEMENT_NOT_ADMIN_GRANT");
+    }
+    entitlement.plan = "free";
+    entitlement.source = "free";
+    entitlement.grantedAt = null;
+    entitlement.grantedById = null;
+    entitlement.grantReason = null;
+    return this.summary(userId, freeScanLimit);
   }
 
   async revokeApplePurchase(originalTransactionId: string, freeScanLimit: number): Promise<{ entitlement: EntitlementSummary; userId: string } | null> {
     for (const [userId, entitlement] of this.entitlements) {
-      if (entitlement.appleOriginalTransactionId !== originalTransactionId) continue;
+      if (entitlement.appleOriginalTransactionId !== originalTransactionId || entitlement.source !== "apple") continue;
       entitlement.plan = "free";
+      entitlement.source = "free";
       entitlement.appleProductId = null;
       entitlement.appleOriginalTransactionId = null;
       entitlement.purchasedAt = null;
@@ -230,10 +265,14 @@ export class InMemoryEntitlementRepository implements EntitlementRepository {
     if (existing) return existing;
     const entitlement = {
       plan: "free" as EntitlementPlan,
+      source: "free" as EntitlementSource,
       freeScansUsed: 0,
       purchasedAt: null,
       appleProductId: null,
-      appleOriginalTransactionId: null
+      appleOriginalTransactionId: null,
+      grantedAt: null,
+      grantedById: null,
+      grantReason: null
     };
     this.entitlements.set(userId, entitlement);
     return entitlement;
@@ -243,11 +282,15 @@ export class InMemoryEntitlementRepository implements EntitlementRepository {
     const entitlement = this.ensure(userId);
     return {
       plan: entitlement.plan,
+      source: entitlement.source,
       freeScanLimit,
       freeScansUsed: entitlement.freeScansUsed,
       freeScansRemaining: entitlement.plan === "paid" ? null : Math.max(0, freeScanLimit - entitlement.freeScansUsed),
       purchasedAt: entitlement.purchasedAt,
-      appleProductId: entitlement.appleProductId
+      appleProductId: entitlement.appleProductId,
+      grantedAt: entitlement.grantedAt,
+      grantedById: entitlement.grantedById,
+      grantReason: entitlement.grantReason
     };
   }
 }
