@@ -39,7 +39,7 @@ export default function LoginScreen() {
     <KeyboardAvoidingView behavior={Platform.OS === "ios" ? "padding" : undefined} style={sharedStyles.screen}>
       <View style={[sharedStyles.content, { justifyContent: "center" }]}>
         <View style={{ gap: 8 }}>
-          <Text style={sharedStyles.title}>Score to MusicXML</Text>
+          <Text style={sharedStyles.title}>converter Partitura</Text>
           <Text style={sharedStyles.subtitle}>Entre para escanear partituras e exportar MusicXML.</Text>
         </View>
 

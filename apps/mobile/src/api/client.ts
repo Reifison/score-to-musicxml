@@ -89,6 +89,13 @@ export const api = {
     return apiRequest<{ score: Score }>("/api/scores", { method: "POST", body }, token);
   },
 
+  async updatePassword(token: string, password: string) {
+    return apiRequest<{ user: PublicUser }>("/api/users/me/password", {
+      method: "PATCH",
+      body: JSON.stringify({ password })
+    }, token);
+  },
+
   async registerApplePurchase(
     token: string,
     purchase: { originalTransactionId: string; productId: string; purchaseToken?: string; purchasedAt?: string; restored?: boolean; transactionId?: string }

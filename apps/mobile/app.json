@@ -1,6 +1,6 @@
 {
   "expo": {
-    "name": "Score to MusicXML",
+    "name": "converter Partitura",
     "slug": "score-to-musicxml",
     "scheme": "scoretomusicxml",
     "version": "0.1.0",

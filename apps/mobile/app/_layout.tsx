@@ -12,6 +12,7 @@ export default function RootLayout() {
         <Stack screenOptions={{ headerBackTitle: "Voltar" }}>
           <Stack.Screen name="index" options={{ headerShown: false }} />
           <Stack.Screen name="login" options={{ title: "Entrar" }} />
+          <Stack.Screen name="profile" options={{ title: "Perfil" }} />
           <Stack.Screen name="scores" options={{ title: "Partituras" }} />
           <Stack.Screen name="score/[id]" options={{ title: "Detalhes" }} />
         </Stack>
