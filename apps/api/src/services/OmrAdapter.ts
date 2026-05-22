@@ -3,6 +3,7 @@ import { constants as fsConstants } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
+import sharp from "sharp";
 import { env } from "../config/env.js";
 import { AppError } from "../errors/AppError.js";
 import { MusicXmlExportService } from "./MusicXmlExportService.js";
@@ -28,7 +29,18 @@ type MusicXmlPart = {
 };
 
 type PreparedPage = {
+  attempts: PreparedAttempt[];
+};
+
+type PreparedAttempt = {
   paths: string[];
+  description: string;
+  combineSegments?: boolean;
+};
+
+type CropBand = {
+  top: number;
+  height: number;
 };
 
 export type OmrResult = {
@@ -101,35 +113,71 @@ export class AudiverisOmrAdapter implements OmrAdapter {
 
   private async convertPreparedPage(page: PreparedPage, originalFilename: string, pageOutputDir: string): Promise<OmrResult> {
     const failures: string[] = [];
+    const successes: OmrResult[] = [];
 
-    for (const [index, pagePath] of page.paths.entries()) {
+    for (const [index, attempt] of page.attempts.entries()) {
       const attemptOutputDir = path.join(pageOutputDir, `attempt-${String(index + 1).padStart(2, "0")}`);
       await fs.mkdir(attemptOutputDir, { recursive: true, mode: 0o700 });
       try {
-        const result = await this.convertPage(pagePath, originalFilename, attemptOutputDir);
-        return index === 0
+        const result = attempt.combineSegments
+          ? await this.convertSegmentedPage(attempt, originalFilename, attemptOutputDir)
+          : await this.convertPage(attempt.paths[0], originalFilename, attemptOutputDir);
+        successes.push(index === 0
           ? result
           : {
               ...result,
-              confidence: Math.min(result.confidence, 0.65),
+              confidence: Math.min(result.confidence, attempt.combineSegments ? 0.68 : 0.65),
               warnings: [
-                `A leitura só funcionou após preparar uma versão alternativa da imagem (${path.basename(pagePath)}).`,
+                `A leitura usou uma preparação alternativa da página: ${attempt.description}.`,
                 ...result.warnings
               ]
-            };
+            });
       } catch (error) {
         failures.push(this.summarizePageFailure(error));
       }
     }
 
+    if (successes.length) {
+      return successes.sort((a, b) => this.measureCount(b.musicXml) - this.measureCount(a.musicXml))[0];
+    }
+
     throw new AppError(
       422,
       [
-        `Tentamos ${page.paths.length} preparacao(oes) da imagem antes do OMR, mas nenhuma foi reconhecida.`,
+        `Tentamos ${page.attempts.length} preparacao(oes) da imagem antes do OMR, mas nenhuma foi reconhecida.`,
         failures.at(-1)
       ].filter(Boolean).join("\n"),
       "AUDIVERIS_FAILED"
     );
+  }
+
+  private async convertSegmentedPage(attempt: PreparedAttempt, originalFilename: string, attemptOutputDir: string): Promise<OmrResult> {
+    const segmentResults: OmrResult[] = [];
+    const segmentFailures: string[] = [];
+
+    for (const [index, segmentPath] of attempt.paths.entries()) {
+      const segmentOutputDir = path.join(attemptOutputDir, `segment-${String(index + 1).padStart(2, "0")}`);
+      await fs.mkdir(segmentOutputDir, { recursive: true, mode: 0o700 });
+      try {
+        segmentResults.push(await this.convertPage(segmentPath, originalFilename, segmentOutputDir));
+      } catch (error) {
+        segmentFailures.push(`Sistema ${index + 1}: ${this.summarizePageFailure(error)}`);
+      }
+    }
+
+    if (!segmentResults.length) {
+      throw new AppError(422, segmentFailures.at(-1) ?? "Nenhum recorte de sistema foi reconhecido.", "AUDIVERIS_SEGMENTS_FAILED");
+    }
+
+    return {
+      musicXml: this.mergePageMusicXml(segmentResults.map((result) => result.musicXml)),
+      confidence: Math.min(0.68, ...segmentResults.map((result) => result.confidence)),
+      warnings: [
+        `Página dividida em ${attempt.paths.length} recortes horizontais para recuperar sistemas que o OMR ignorou na página inteira.`,
+        ...segmentResults.flatMap((result) => result.warnings),
+        ...segmentFailures.map((failure) => `${failure}. O recorte foi ignorado no MusicXML parcial.`)
+      ]
+    };
   }
 
   private async convertPage(pagePath: string, originalFilename: string, pageOutputDir: string): Promise<OmrResult> {
@@ -204,7 +252,7 @@ export class AudiverisOmrAdapter implements OmrAdapter {
         await this.renderPdfPages(pdftoppm, inputPath, outputPrefix);
         const paths = await this.findRenderedPages(outputDir);
         warnings.push(`PDF dividido em ${paths.length} pagina(s) e renderizado em resolucao controlada antes do OMR.`);
-        return { pages: paths.map((pagePath) => ({ paths: [pagePath] })), warnings };
+        return { pages: await Promise.all(paths.map((pagePath, index) => this.prepareRenderedPdfPage(pagePath, outputDir, index + 1))), warnings };
       }
     }
 
@@ -227,10 +275,150 @@ export class AudiverisOmrAdapter implements OmrAdapter {
         throw new AppError(422, failures.join("\n") || "Não foi possível preparar a imagem para leitura OMR.", "IMAGE_PREPROCESS_FAILED");
       }
       warnings.push(`Imagem preparada em ${paths.length} versao(oes) antes do OMR: orientacao, contraste, nitidez e tamanho ajustados para leitura pelo Audiveris.`);
-      return { pages: [{ paths }], warnings };
+      return { pages: [{ attempts: paths.map((pagePath) => ({ paths: [pagePath], description: path.basename(pagePath) })) }], warnings };
     }
 
-    return { pages: [{ paths: [inputPath] }], warnings };
+    return { pages: [{ attempts: [{ paths: [inputPath], description: path.basename(inputPath) }] }], warnings };
+  }
+
+  private async prepareRenderedPdfPage(pagePath: string, outputDir: string, pageNumber: number): Promise<PreparedPage> {
+    const attempts: PreparedAttempt[] = [{ paths: [pagePath], description: "página inteira renderizada" }];
+    const preparedDir = path.join(outputDir, `prepared-page-${String(pageNumber).padStart(3, "0")}`);
+    await fs.mkdir(preparedDir, { recursive: true, mode: 0o700 });
+
+    try {
+      const cleanedPath = path.join(preparedDir, "cleaned.png");
+      await sharp(pagePath)
+        .grayscale()
+        .normalize()
+        .sharpen()
+        .trim({ background: "#ffffff", threshold: 16 })
+        .extend({ top: 80, bottom: 80, left: 80, right: 80, background: "#ffffff" })
+        .png()
+        .toFile(cleanedPath);
+      attempts.push({ paths: [cleanedPath], description: "página limpa em tons de cinza" });
+
+      const systemPaths = await this.createSystemCrops(cleanedPath, preparedDir);
+      if (systemPaths.length > 1) {
+        attempts.push({
+          paths: systemPaths,
+          description: `${systemPaths.length} recortes por sistema`,
+          combineSegments: true
+        });
+      }
+    } catch {
+      // The original rendered page is still a valid Audiveris input.
+    }
+
+    return { attempts };
+  }
+
+  private async createSystemCrops(inputPath: string, outputDir: string): Promise<string[]> {
+    const metadata = await sharp(inputPath).metadata();
+    if (!metadata.width || !metadata.height) return [];
+
+    const bands = await this.detectSystemBands(inputPath, metadata.width, metadata.height);
+    const cropWidth = Math.max(1, Math.round(metadata.width * 0.94));
+    const left = Math.max(0, Math.round((metadata.width - cropWidth) / 2));
+    const paths: string[] = [];
+
+    for (const [index, band] of bands.entries()) {
+      const outputPath = path.join(outputDir, `system-${String(index + 1).padStart(2, "0")}.png`);
+      await sharp(inputPath)
+        .extract({ left, top: band.top, width: cropWidth, height: band.height })
+        .extend({ top: 60, bottom: 60, left: 60, right: 60, background: "#ffffff" })
+        .png()
+        .toFile(outputPath);
+      paths.push(outputPath);
+    }
+
+    return paths;
+  }
+
+  private async detectSystemBands(inputPath: string, width: number, height: number): Promise<CropBand[]> {
+    const raw = await sharp(inputPath).grayscale().raw().toBuffer();
+    const activeRows: number[] = [];
+    const rowThreshold = Math.max(20, Math.round(width * 0.06));
+
+    for (let y = 0; y < height; y += 1) {
+      let darkPixels = 0;
+      const offset = y * width;
+      for (let x = 0; x < width; x += 1) {
+        if (raw[offset + x] < 185) darkPixels += 1;
+      }
+      if (darkPixels >= rowThreshold) activeRows.push(y);
+    }
+
+    const clusters = this.groupRows(activeRows, Math.max(2, Math.round(height * 0.012)));
+    const systemClusters = this.groupBands(
+      clusters.filter((band) => band.height >= Math.max(2, Math.round(height * 0.004))),
+      Math.max(12, Math.round(height * 0.07))
+    );
+    const padding = Math.round(height * 0.035);
+    const detected = systemClusters
+      .map((band) => this.padBand(band, padding, height))
+      .filter((band) => band.height >= Math.max(20, Math.round(height * 0.04)));
+
+    return detected.length > 1 ? detected : this.fallbackSystemBands(height);
+  }
+
+  private groupRows(rows: number[], maxGap: number): CropBand[] {
+    if (!rows.length) return [];
+    const bands: CropBand[] = [];
+    let start = rows[0];
+    let previous = rows[0];
+
+    for (const row of rows.slice(1)) {
+      if (row - previous > maxGap) {
+        bands.push({ top: start, height: previous - start + 1 });
+        start = row;
+      }
+      previous = row;
+    }
+
+    bands.push({ top: start, height: previous - start + 1 });
+    return bands;
+  }
+
+  private groupBands(bands: CropBand[], maxGap: number): CropBand[] {
+    if (!bands.length) return [];
+    const grouped: CropBand[] = [];
+    let current = bands[0];
+
+    for (const band of bands.slice(1)) {
+      const currentBottom = current.top + current.height;
+      if (band.top - currentBottom <= maxGap) {
+        const bottom = Math.max(currentBottom, band.top + band.height);
+        current = { top: current.top, height: bottom - current.top };
+      } else {
+        grouped.push(current);
+        current = band;
+      }
+    }
+
+    grouped.push(current);
+    return grouped;
+  }
+
+  private padBand(band: CropBand, padding: number, imageHeight: number): CropBand {
+    const top = Math.max(0, band.top - padding);
+    const bottom = Math.min(imageHeight, band.top + band.height + padding);
+    return { top, height: Math.max(1, bottom - top) };
+  }
+
+  private fallbackSystemBands(height: number): CropBand[] {
+    const systemCount = 6;
+    const topMargin = Math.round(height * 0.14);
+    const bottomMargin = Math.round(height * 0.04);
+    const musicHeight = Math.max(1, height - topMargin - bottomMargin);
+    const bandHeight = Math.ceil(musicHeight / systemCount);
+    const overlap = Math.round(bandHeight * 0.22);
+
+    return Array.from({ length: systemCount }, (_value, index) => {
+      const top = Math.max(0, topMargin + index * bandHeight - overlap);
+      const bottom = Math.min(height, topMargin + (index + 1) * bandHeight + overlap);
+      return { top, height: Math.max(1, bottom - top) };
+    });
   }
 
   private async renderPdfPages(pdftoppm: string, inputPath: string, outputPrefix: string): Promise<void> {
@@ -399,6 +587,10 @@ export class AudiverisOmrAdapter implements OmrAdapter {
       const attributesWithoutNumber = attributes.replace(/\snumber=(["'])[^"']*\1/, "");
       return `<measure number="${number}"${attributesWithoutNumber}>`;
     });
+  }
+
+  private measureCount(musicXml: string): number {
+    return (musicXml.match(/<measure\b/g) ?? []).length;
   }
 
   private cleanAudiverisText(musicXml: string, originalFilename: string): string {

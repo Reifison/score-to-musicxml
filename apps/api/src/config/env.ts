@@ -7,6 +7,13 @@ const rootDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../.
 
 dotenv.config({ path: path.resolve(rootDir, ".env") });
 
+const booleanFromEnv = z.preprocess((value) => {
+  if (typeof value !== "string") return value;
+  if (/^(true|1|yes)$/i.test(value)) return true;
+  if (/^(false|0|no)$/i.test(value)) return false;
+  return value;
+}, z.boolean());
+
 const schema = z.object({
   NODE_ENV: z.enum(["development", "test", "production"]).default("development"),
   PORT: z.coerce.number().default(4000),
@@ -30,7 +37,7 @@ const schema = z.object({
   APPLE_IAP_PRIVATE_KEY_PATH: z.string().optional(),
   APPLE_ROOT_CERT_PATHS: z.string().optional(),
   CLAMAV_BIN: z.string().optional(),
-  REQUIRE_MALWARE_SCAN: z.coerce.boolean().default(false),
+  REQUIRE_MALWARE_SCAN: booleanFromEnv.default(false),
   OMR_ENGINE: z.enum(["stub", "audiveris"]).default("stub"),
   AUDIVERIS_BIN: z.string().optional(),
   OMR_CONVERSION_TIMEOUT_MS: z.coerce.number().int().positive().default(900_000),

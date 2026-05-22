@@ -96,7 +96,7 @@ describe("AudiverisOmrAdapter", () => {
         warnings: string[];
       }>;
       resolveAudiverisBin(): Promise<string>;
-      preprocessInput(inputPath: string, outputDir: string): Promise<{ pages: Array<{ paths: string[] }>; warnings: string[] }>;
+      preprocessInput(inputPath: string, outputDir: string): Promise<{ pages: Array<{ attempts: Array<{ paths: string[]; description: string }> }>; warnings: string[] }>;
       convertPage(pagePath: string, originalFilename: string, pageOutputDir: string): Promise<{ musicXml: string; confidence: number; warnings: string[] }>;
     };
 
@@ -107,7 +107,10 @@ describe("AudiverisOmrAdapter", () => {
 
     adapter.resolveAudiverisBin = async () => "/tmp/Audiveris";
     adapter.preprocessInput = async () => ({
-      pages: [{ paths: ["/tmp/page-1.png"] }, { paths: ["/tmp/page-2.png"] }],
+      pages: [
+        { attempts: [{ paths: ["/tmp/page-1.png"], description: "pagina 1" }] },
+        { attempts: [{ paths: ["/tmp/page-2.png"], description: "pagina 2" }] }
+      ],
       warnings: ["PDF dividido em 2 pagina(s)."]
     });
     adapter.convertPage = async (pagePath) => {
@@ -126,6 +129,66 @@ describe("AudiverisOmrAdapter", () => {
     expect(result.warnings.join("\n")).toContain("Pagina 2: Tentamos 1 preparacao");
     expect(result.warnings.join("\n")).toContain("Error in reaching step PAGE");
     expect(result.warnings.join("\n")).toContain("MusicXML parcial");
+  });
+
+  it("prefere a preparacao com mais compassos quando a pagina inteira sai parcial", async () => {
+    const adapter = new AudiverisOmrAdapter() as unknown as {
+      convert(inputPath: string, originalFilename: string, outputDir: string): Promise<{
+        musicXml: string;
+        confidence: number;
+        warnings: string[];
+      }>;
+      resolveAudiverisBin(): Promise<string>;
+      preprocessInput(inputPath: string, outputDir: string): Promise<{ pages: Array<{ attempts: Array<{ paths: string[]; description: string; combineSegments?: boolean }> }>; warnings: string[] }>;
+      convertPage(pagePath: string, originalFilename: string, pageOutputDir: string): Promise<{ musicXml: string; confidence: number; warnings: string[] }>;
+    };
+
+    const partial = score(
+      [
+        '<measure number="1"><note><pitch><step>C</step><octave>5</octave></pitch></note></measure>',
+        '<measure number="2"><note><pitch><step>D</step><octave>5</octave></pitch></note></measure>'
+      ],
+      []
+    );
+    const segment1 = score(
+      [
+        '<measure number="1"><note><pitch><step>E</step><octave>5</octave></pitch></note></measure>',
+        '<measure number="2"><note><pitch><step>F</step><octave>5</octave></pitch></note></measure>'
+      ],
+      []
+    );
+    const segment2 = score(
+      [
+        '<measure number="1"><note><pitch><step>G</step><octave>5</octave></pitch></note></measure>',
+        '<measure number="2"><note><pitch><step>A</step><octave>5</octave></pitch></note></measure>',
+        '<measure number="3"><note><pitch><step>B</step><octave>5</octave></pitch></note></measure>'
+      ],
+      []
+    );
+
+    adapter.resolveAudiverisBin = async () => "/tmp/Audiveris";
+    adapter.preprocessInput = async () => ({
+      pages: [{
+        attempts: [
+          { paths: ["/tmp/full-page.png"], description: "pagina inteira" },
+          { paths: ["/tmp/system-1.png", "/tmp/system-2.png"], description: "2 recortes por sistema", combineSegments: true }
+        ]
+      }],
+      warnings: []
+    });
+    adapter.convertPage = async (pagePath) => {
+      if (pagePath.endsWith("full-page.png")) return { musicXml: partial, confidence: 0.75, warnings: [] };
+      if (pagePath.endsWith("system-1.png")) return { musicXml: segment1, confidence: 0.75, warnings: [] };
+      return { musicXml: segment2, confidence: 0.75, warnings: [] };
+    };
+
+    const outputDir = await fs.mkdtemp(path.join(os.tmpdir(), "omr-best-attempt-"));
+    const result = await adapter.convert("/tmp/input.pdf", "input.pdf", outputDir);
+
+    expect([...result.musicXml.matchAll(/<measure\b/g)]).toHaveLength(5);
+    expect(result.musicXml).toContain("<step>B</step>");
+    expect(result.warnings.join("\n")).toContain("preparação alternativa");
+    expect(result.warnings.join("\n")).toContain("dividida em 2 recortes");
   });
 
   it("resume falta de idioma OCR sem expor o comando bruto do Audiveris", () => {
