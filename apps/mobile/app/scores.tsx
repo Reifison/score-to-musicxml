@@ -4,9 +4,10 @@ import * as DocumentPicker from "expo-document-picker";
 import * as ImagePicker from "expo-image-picker";
 import { useIAP } from "expo-iap";
 import type { Purchase } from "expo-iap";
-import { Link, router } from "expo-router";
+import { Link, router, useLocalSearchParams } from "expo-router";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { ActivityIndicator, Alert, FlatList, Image, Modal, Platform, Pressable, RefreshControl, Text, View } from "react-native";
+import DocumentScanner, { ResponseType, ScanDocumentResponseStatus } from "react-native-document-scanner-plugin";
 import { ApiError, api } from "../src/api/client";
 import type { Score } from "../src/api/types";
 import { useAuth } from "../src/auth/AuthProvider";
@@ -17,13 +18,15 @@ const premiumProductId = "premium_unlock";
 const premiumProductIds = [premiumProductId];
 
 export default function ScoresScreen() {
+  const { scan } = useLocalSearchParams<{ scan?: string }>();
   const { token, user, logout } = useAuth();
   const queryClient = useQueryClient();
   const [paywallVisible, setPaywallVisible] = useState(false);
-  const [pendingImage, setPendingImage] = useState<{ uri: string; name: string; type: string; width?: number; height?: number } | null>(null);
+  const [pendingImage, setPendingImage] = useState<{ uri: string; name: string; type: string; preprocessingProfile?: "document_scanner" } | null>(null);
   const [uploadError, setUploadError] = useState<string | null>(null);
   const [purchaseStatus, setPurchaseStatus] = useState<string | null>(null);
   const processedPurchases = useRef(new Set<string>());
+  const autoScanStarted = useRef(false);
 
   const {
     availablePurchases,
@@ -103,6 +106,12 @@ export default function ScoresScreen() {
     const restored = availablePurchases.find((purchase) => purchase.productId === premiumProductId);
     if (restored) void completeApplePurchase(restored, true);
   }, [availablePurchases]);
+
+  useEffect(() => {
+    if (scan !== "1" || autoScanStarted.current || !entitlementQuery.isFetched || uploadMutation.isPending) return;
+    autoScanStarted.current = true;
+    void scanWithCamera();
+  }, [scan, entitlementQuery.isFetched, uploadMutation.isPending]);
 
   const subtitle = useMemo(() => {
     if (!entitlement) return "Carregando limite de uso...";
@@ -188,45 +197,34 @@ export default function ScoresScreen() {
     const result = await ImagePicker.launchImageLibraryAsync({ allowsEditing: true, mediaTypes: ImagePicker.MediaTypeOptions.Images, quality: 0.9 });
     if (result.canceled) return;
     const asset = result.assets[0];
-    setPendingImage({ uri: asset.uri, name: asset.fileName || "partitura.jpg", type: asset.mimeType || "image/jpeg", width: asset.width, height: asset.height });
+    setPendingImage({ uri: asset.uri, name: asset.fileName || "partitura.jpg", type: asset.mimeType || "image/jpeg" });
   }
 
   async function scanWithCamera() {
     if (!(await ensureUploadAllowed())) return;
     const proceed = await new Promise<boolean>((resolve) => {
-      Alert.alert("Escanear partitura", "Use modo documento/scan quando o iPhone oferecer essa opcao. Mantenha a folha reta, bem iluminada, sem sombras e ocupando quase toda a tela.", [
+      Alert.alert("Escanear partitura", "O scanner vai detectar as bordas da folha e corrigir a perspectiva. Mantenha a folha bem iluminada, sem sombras e ocupando quase toda a tela.", [
         { text: "Cancelar", style: "cancel", onPress: () => resolve(false) },
-        { text: "Abrir camera", onPress: () => resolve(true) }
+        { text: "Abrir scanner", onPress: () => resolve(true) }
       ]);
     });
     if (!proceed) return;
-    const permission = await ImagePicker.requestCameraPermissionsAsync();
-    if (!permission.granted) {
-      Alert.alert("Camera indisponivel", "Autorize o uso da camera para escanear partituras.");
-      return;
+    try {
+      const result = await DocumentScanner.scanDocument({
+        croppedImageQuality: 90,
+        maxNumDocuments: 1,
+        responseType: ResponseType.ImageFilePath
+      });
+      const uri = result.scannedImages?.[0];
+      if (result.status === ScanDocumentResponseStatus.Cancel || !uri) return;
+      setPendingImage({ uri, name: "scan.jpg", type: "image/jpeg", preprocessingProfile: "document_scanner" });
+    } catch (error) {
+      Alert.alert("Scanner indisponivel", error instanceof Error ? error.message : "Nao foi possivel abrir o scanner de documentos.");
     }
-    const result = await ImagePicker.launchCameraAsync({ allowsEditing: true, cameraType: ImagePicker.CameraType.back, quality: 0.9 });
-    if (result.canceled) return;
-    const asset = result.assets[0];
-    setPendingImage({ uri: asset.uri, name: asset.fileName || "scan.jpg", type: asset.mimeType || "image/jpeg", width: asset.width, height: asset.height });
   }
 
   function confirmImageUpload() {
     if (!pendingImage) return;
-    const warnings = imageQualityWarnings(pendingImage);
-    if (warnings.length) {
-      Alert.alert("Revisar foto", `${warnings.join(" ")} Envie mesmo assim ou refaca a foto/recorte?`, [
-        { text: "Refazer", style: "cancel" },
-        {
-          text: "Enviar",
-          onPress: () => {
-            uploadMutation.mutate(pendingImage);
-            setPendingImage(null);
-          }
-        }
-      ]);
-      return;
-    }
     uploadMutation.mutate(pendingImage);
     setPendingImage(null);
   }
@@ -337,18 +335,6 @@ function formatBytes(bytes: number) {
   if (bytes < 1024) return `${bytes} B`;
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
   return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
-}
-
-function imageQualityWarnings(image: { width?: number; height?: number }) {
-  const warnings: string[] = [];
-  if ((image.width && image.width < 1200) || (image.height && image.height < 1200)) {
-    warnings.push("A imagem pode ter pouca resolucao para OMR.");
-  }
-  if (image.width && image.height) {
-    const ratio = Math.max(image.width, image.height) / Math.min(image.width, image.height);
-    if (ratio > 2.4) warnings.push("O recorte parece muito estreito para uma pagina de partitura.");
-  }
-  return warnings;
 }
 
 function getOriginalTransactionId(purchase: Purchase) {

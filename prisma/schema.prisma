@@ -99,6 +99,7 @@ model Score {
   fileType         String
   mimeType         String
   fileSize         Int
+  preprocessingProfile String?
   uploadStatus     ScoreStatus @default(uploaded)
   conversionStatus ScoreStatus @default(uploaded)
   errorMessage     String?

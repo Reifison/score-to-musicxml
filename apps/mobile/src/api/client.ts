@@ -83,9 +83,10 @@ export const api = {
     return apiRequest<{ score: Score }>(`/api/scores/${id}`, {}, token);
   },
 
-  async upload(token: string, file: { uri: string; name: string; type: string }) {
+  async upload(token: string, file: { uri: string; name?: string; preprocessingProfile?: "document_scanner"; type?: string }) {
     const body = new FormData();
-    body.append("file", file as unknown as Blob);
+    body.append("file", normalizeUploadFile(file) as unknown as Blob);
+    if (file.preprocessingProfile) body.append("preprocessingProfile", file.preprocessingProfile);
     return apiRequest<{ score: Score }>("/api/scores", { method: "POST", body }, token);
   },
 
@@ -118,4 +119,34 @@ export const api = {
 function musicXmlName(name: string): string {
   const base = name.replace(/\.[^.]+$/, "").replace(/[^a-zA-Z0-9._ -]/g, "_").trim() || "score";
   return `${base}.musicxml`;
+}
+
+function normalizeUploadFile(file: { uri: string; name?: string; type?: string }) {
+  const type = file.type || mimeTypeForUri(file.uri);
+  return {
+    uri: file.uri,
+    name: validUploadName(file.name, type),
+    type
+  };
+}
+
+function validUploadName(name: string | undefined, mimeType: string) {
+  const fallback = mimeType === "application/pdf" ? "partitura.pdf" : "scan.jpg";
+  const cleaned = name?.replace(/[/\\]/g, "_").trim() || fallback;
+  if (/\.(pdf|png|jpe?g|webp)$/i.test(cleaned)) return cleaned;
+  return `${cleaned}.${extensionForMimeType(mimeType)}`;
+}
+
+function mimeTypeForUri(uri: string) {
+  if (/\.pdf(?:$|[?#])/i.test(uri)) return "application/pdf";
+  if (/\.png(?:$|[?#])/i.test(uri)) return "image/png";
+  if (/\.webp(?:$|[?#])/i.test(uri)) return "image/webp";
+  return "image/jpeg";
+}
+
+function extensionForMimeType(mimeType: string) {
+  if (mimeType === "application/pdf") return "pdf";
+  if (mimeType === "image/png") return "png";
+  if (mimeType === "image/webp") return "webp";
+  return "jpg";
 }

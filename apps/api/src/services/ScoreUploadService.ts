@@ -17,8 +17,9 @@ export class ScoreUploadService {
     private fileSecurity: FileSecurityService
   ) {}
 
-  async upload(input: { user: User; filename: string; buffer: Buffer; ipAddress?: string }) {
+  async upload(input: { user: User; filename: string; buffer: Buffer; ipAddress?: string; preprocessingProfile?: string | null }) {
     const validated = validateUploadedFile(input.filename, input.buffer, env.MAX_UPLOAD_BYTES);
+    const preprocessingProfile = validated.fileType === "image" ? parsePreprocessingProfile(input.preprocessingProfile) : null;
     await this.entitlements.assertCanUpload(input.user);
     await this.fileSecurity.scan(input.buffer, validated.originalFilename);
     const safeBuffer = await this.fileSecurity.stripImageMetadata(input.buffer, validated.mimeType);
@@ -36,6 +37,7 @@ export class ScoreUploadService {
         fileType: validated.fileType,
         mimeType: validated.mimeType,
         fileSize: safeBuffer.length,
+        preprocessingProfile,
         uploadStatus: "uploaded",
         conversionStatus: "queued"
       }, input.ipAddress);
@@ -48,4 +50,8 @@ export class ScoreUploadService {
     await this.queue.enqueue(score.id);
     return score;
   }
+}
+
+function parsePreprocessingProfile(value: string | null | undefined): string | null {
+  return value === "document_scanner" ? value : null;
 }

@@ -283,6 +283,24 @@ describe("AudiverisOmrAdapter", () => {
     expect(softArgs.at(-1)).toBe("/tmp/audiveris-input-soft.png");
   });
 
+  it("usa preparacao leve para imagens vindas do scanner nativo", async () => {
+    const adapter = new AudiverisOmrAdapter() as unknown as {
+      preprocessInput(inputPath: string, outputDir: string, options: { preprocessingProfile?: string | null }): Promise<{ pages: Array<{ attempts: Array<{ paths: string[]; description: string }> }>; warnings: string[] }>;
+    };
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "omr-document-scanner-"));
+    const inputPath = path.join(dir, "scan.jpg");
+    const png1x1 = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=", "base64");
+    await fs.writeFile(inputPath, png1x1);
+
+    const result = await adapter.preprocessInput(inputPath, dir, { preprocessingProfile: "document_scanner" });
+
+    expect(result.pages).toHaveLength(1);
+    expect(result.pages[0].attempts).toHaveLength(1);
+    expect(result.pages[0].attempts[0].description).toBe("scanner nativo padronizado");
+    expect(path.basename(result.pages[0].attempts[0].paths[0])).toBe("audiveris-input-document-scanner.png");
+    expect(result.warnings.join("\n")).toContain("scanner nativo de documentos");
+  });
+
   it("rejeita MusicXML pequeno demais gerado a partir de foto", () => {
     const adapter = new AudiverisOmrAdapter() as unknown as {
       assertUsefulMusicXml(musicXml: string, originalFilename: string): void;

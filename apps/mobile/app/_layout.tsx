@@ -14,7 +14,8 @@ export default function RootLayout() {
           <Stack.Screen name="login" options={{ title: "Entrar" }} />
           <Stack.Screen name="profile" options={{ title: "Perfil" }} />
           <Stack.Screen name="scores" options={{ title: "Partituras" }} />
-          <Stack.Screen name="score/[id]" options={{ title: "Detalhes" }} />
+          <Stack.Screen name="score/[id]" options={{ title: "Processando" }} />
+          <Stack.Screen name="score-view/[id]" options={{ title: "Partitura" }} />
         </Stack>
       </AuthProvider>
     </QueryClientProvider>

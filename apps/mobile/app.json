@@ -38,6 +38,12 @@
           "photosPermission": "Selecione fotos de partituras para converter em MusicXML.",
           "cameraPermission": "Tire fotos de partituras para converter em MusicXML."
         }
+      ],
+      [
+        "react-native-document-scanner-plugin",
+        {
+          "cameraPermission": "Use a camera para escanear partituras com deteccao de bordas e correcao de perspectiva."
+        }
       ]
     ],
     "extra": {

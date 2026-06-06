@@ -17,6 +17,7 @@ export type CreateScoreInput = {
   fileType: string;
   mimeType: string;
   fileSize: number;
+  preprocessingProfile?: string | null;
   uploadStatus: ScoreStatus;
   conversionStatus: ScoreStatus;
 };

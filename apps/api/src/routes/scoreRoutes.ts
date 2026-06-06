@@ -32,6 +32,7 @@ scoreRoutes.post("/", uploadRateLimit, upload.single("file"), async (req, res) =
     user: req.user!,
     filename: req.file.originalname,
     buffer: req.file.buffer,
+    preprocessingProfile: typeof req.body.preprocessingProfile === "string" ? req.body.preprocessingProfile : null,
     ipAddress: req.ip
   });
   res.status(201).json({ score });

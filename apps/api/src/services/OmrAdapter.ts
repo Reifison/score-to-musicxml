@@ -49,8 +49,12 @@ export type OmrResult = {
   warnings: string[];
 };
 
+export type OmrConversionOptions = {
+  preprocessingProfile?: string | null;
+};
+
 export interface OmrAdapter {
-  convert(inputPath: string, originalFilename: string, outputDir: string): Promise<OmrResult>;
+  convert(inputPath: string, originalFilename: string, outputDir: string, options?: OmrConversionOptions): Promise<OmrResult>;
 }
 
 export class StubOmrAdapter implements OmrAdapter {
@@ -66,10 +70,10 @@ export class StubOmrAdapter implements OmrAdapter {
 }
 
 export class AudiverisOmrAdapter implements OmrAdapter {
-  async convert(inputPath: string, originalFilename: string, outputDir: string): Promise<OmrResult> {
+  async convert(inputPath: string, originalFilename: string, outputDir: string, options: OmrConversionOptions = {}): Promise<OmrResult> {
     await this.resolveAudiverisBin();
     await fs.mkdir(outputDir, { recursive: true, mode: 0o700 });
-    const preprocessing = await this.prepareInputForOmr(inputPath, outputDir);
+    const preprocessing = await this.prepareInputForOmr(inputPath, outputDir, options);
     const pageResults: OmrResult[] = [];
     const pageFailures: string[] = [];
 
@@ -103,9 +107,9 @@ export class AudiverisOmrAdapter implements OmrAdapter {
     };
   }
 
-  private async prepareInputForOmr(inputPath: string, outputDir: string): Promise<{ pages: PreparedPage[]; warnings: string[] }> {
+  private async prepareInputForOmr(inputPath: string, outputDir: string, options: OmrConversionOptions): Promise<{ pages: PreparedPage[]; warnings: string[] }> {
     try {
-      return await this.preprocessInput(inputPath, outputDir);
+      return await this.preprocessInput(inputPath, outputDir, options);
     } catch (error) {
       throw new AppError(422, this.summarizePreprocessFailure(error), "OMR_PREPROCESS_FAILED");
     }
@@ -241,7 +245,7 @@ export class AudiverisOmrAdapter implements OmrAdapter {
     }
   }
 
-  private async preprocessInput(inputPath: string, outputDir: string): Promise<{ pages: PreparedPage[]; warnings: string[] }> {
+  private async preprocessInput(inputPath: string, outputDir: string, options: OmrConversionOptions = {}): Promise<{ pages: PreparedPage[]; warnings: string[] }> {
     const extension = path.extname(inputPath).toLowerCase();
     const warnings: string[] = [];
 
@@ -254,6 +258,12 @@ export class AudiverisOmrAdapter implements OmrAdapter {
         warnings.push(`PDF dividido em ${paths.length} pagina(s) e renderizado em resolucao controlada antes do OMR.`);
         return { pages: await Promise.all(paths.map((pagePath, index) => this.prepareRenderedPdfPage(pagePath, outputDir, index + 1))), warnings };
       }
+    }
+
+    if (options.preprocessingProfile === "document_scanner") {
+      const pagePath = await this.prepareDocumentScannerImage(inputPath, outputDir);
+      warnings.push("Imagem recebida do scanner nativo de documentos; aplicado apenas grayscale e redimensionamento de segurança antes do OMR.");
+      return { pages: [{ attempts: [{ paths: [pagePath], description: "scanner nativo padronizado" }] }], warnings };
     }
 
     const magick = await this.findCommand(["/usr/local/bin/magick", "/opt/homebrew/bin/magick", "magick", "/usr/local/bin/convert", "/opt/homebrew/bin/convert", "convert"]);
@@ -279,6 +289,17 @@ export class AudiverisOmrAdapter implements OmrAdapter {
     }
 
     return { pages: [{ attempts: [{ paths: [inputPath], description: path.basename(inputPath) }] }], warnings };
+  }
+
+  private async prepareDocumentScannerImage(inputPath: string, outputDir: string): Promise<string> {
+    const outputPath = path.join(outputDir, "audiveris-input-document-scanner.png");
+    await sharp(inputPath, { failOn: "truncated", limitInputPixels: 50_000_000 })
+      .rotate()
+      .resize(maxAudiverisDimension, maxAudiverisDimension, { fit: "inside", withoutEnlargement: true })
+      .grayscale()
+      .png()
+      .toFile(outputPath);
+    return outputPath;
   }
 
   private async prepareRenderedPdfPage(pagePath: string, outputDir: string, pageNumber: number): Promise<PreparedPage> {

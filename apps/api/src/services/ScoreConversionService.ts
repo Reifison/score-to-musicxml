@@ -28,7 +28,7 @@ export class ScoreConversionService {
     try {
       const inputPath = this.storage.resolveUploadPath(score.storedFilename);
       const result = await withTimeout(
-        this.omr.convert(inputPath, score.originalFilename, tempDir),
+        this.omr.convert(inputPath, score.originalFilename, tempDir, { preprocessingProfile: score.preprocessingProfile }),
         env.OMR_CONVERSION_TIMEOUT_MS
       );
       const exportStoredFilename = this.storage.generateExportStoredFilename(score.id);

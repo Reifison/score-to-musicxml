@@ -102,7 +102,8 @@ export class InMemoryScoreRepository implements ScoreRepository {
       convertedAt: null,
       createdAt,
       updatedAt: createdAt,
-      ...input
+      ...input,
+      preprocessingProfile: input.preprocessingProfile ?? null
     };
     this.scores.set(score.id, score);
     return score;

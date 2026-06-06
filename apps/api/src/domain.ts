@@ -32,6 +32,7 @@ export type Score = {
   fileType: string;
   mimeType: string;
   fileSize: number;
+  preprocessingProfile: string | null;
   uploadStatus: ScoreStatus;
   conversionStatus: ScoreStatus;
   errorMessage: string | null;
