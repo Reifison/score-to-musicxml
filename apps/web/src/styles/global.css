@@ -369,6 +369,82 @@ button:disabled,
   grid-column: 2 / -1;
 }
 
+.home-menu-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+}
+
+.home-menu-item {
+  display: grid;
+  justify-items: center;
+  gap: 14px;
+  padding: 22px 16px 18px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-card);
+  color: var(--text);
+  font: inherit;
+  cursor: pointer;
+}
+
+.home-menu-item:hover {
+  transform: translateY(-2px);
+  border-color: #d7e0ea;
+  box-shadow: 0 18px 40px rgb(15 23 42 / 8%);
+}
+
+.home-menu-item:active {
+  transform: translateY(0);
+}
+
+.home-menu-icon {
+  width: 92px;
+  height: 92px;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  color: #ffffff;
+  box-shadow: 0 14px 28px rgb(15 23 42 / 14%);
+}
+
+.home-menu-label {
+  font-size: 15px;
+  font-weight: 800;
+  line-height: 1.25;
+  text-align: center;
+}
+
+.settings-panel {
+  max-width: 520px;
+}
+
+.settings-list {
+  display: grid;
+  gap: 12px;
+}
+
+.settings-row {
+  display: grid;
+  gap: 4px;
+  padding: 12px 14px;
+  background: var(--surface-soft);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+}
+
+.settings-row strong {
+  color: var(--text);
+  font-size: 14px;
+}
+
+.settings-row span {
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.45;
+}
+
 .score-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
@@ -388,6 +464,43 @@ button:disabled,
   display: flex;
   flex-direction: column;
   gap: 14px;
+}
+
+.score-card-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.score-card-header > div {
+  min-width: 0;
+  flex: 1;
+}
+
+.favorite-button {
+  width: 40px;
+  min-width: 40px;
+  min-height: 40px;
+  padding: 0;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--surface-soft);
+  color: #98a2b3;
+  flex-shrink: 0;
+}
+
+.favorite-button:hover {
+  background: #fff1ef;
+  border-color: #f2c9c2;
+  color: #d3988d;
+  transform: none;
+}
+
+.favorite-button.active {
+  background: #fff1ef;
+  border-color: #f2c9c2;
+  color: #d3988d;
 }
 
 .score-card h3 {
@@ -993,6 +1106,24 @@ td select {
 
   .upload-panel .error-text {
     grid-column: auto;
+  }
+
+  .home-menu-grid {
+    gap: 12px;
+  }
+
+  .home-menu-item {
+    padding: 18px 12px 16px;
+    gap: 12px;
+  }
+
+  .home-menu-icon {
+    width: 78px;
+    height: 78px;
+  }
+
+  .home-menu-label {
+    font-size: 14px;
   }
 
   .score-grid {

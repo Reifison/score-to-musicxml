@@ -112,6 +112,7 @@ class PrismaScoreRepository implements ScoreRepository {
   async list(filters: ScoreFilters = {}): Promise<Score[]> {
     const where: Prisma.ScoreWhereInput = {};
     if (filters.userId) where.userId = filters.userId;
+    if (filters.favorite !== undefined) where.isFavorite = filters.favorite;
     if (filters.status) where.conversionStatus = filters.status as PrismaScoreStatus;
     if (filters.from || filters.to) {
       where.createdAt = {

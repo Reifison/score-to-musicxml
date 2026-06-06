@@ -99,6 +99,7 @@ export class InMemoryScoreRepository implements ScoreRepository {
       warnings: null,
       confidence: null,
       musicxmlFilename: null,
+      isFavorite: false,
       convertedAt: null,
       createdAt,
       updatedAt: createdAt,
@@ -116,6 +117,7 @@ export class InMemoryScoreRepository implements ScoreRepository {
   async list(filters: ScoreFilters = {}): Promise<Score[]> {
     return [...this.scores.values()]
       .filter((score) => !filters.userId || score.userId === filters.userId)
+      .filter((score) => filters.favorite === undefined || score.isFavorite === filters.favorite)
       .filter((score) => !filters.status || score.conversionStatus === filters.status)
       .filter((score) => !filters.from || score.createdAt >= filters.from)
       .filter((score) => !filters.to || score.createdAt <= filters.to)

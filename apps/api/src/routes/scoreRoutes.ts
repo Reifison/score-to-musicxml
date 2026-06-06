@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import { Router } from "express";
 import multer from "multer";
+import { z } from "zod";
 import { env } from "../config/env.js";
 import { AppError } from "../errors/AppError.js";
 import { requireAuth } from "../middleware/auth.js";
@@ -19,11 +20,19 @@ export const scoreRoutes = Router();
 scoreRoutes.use(requireAuth);
 
 scoreRoutes.get("/", async (req, res) => {
+  const favorite = req.query.favorite === "true" ? true : req.query.favorite === "false" ? false : undefined;
   const scores = await req.services.scores.listFor(req.user!, {
     status: String(req.query.status || ""),
-    userId: typeof req.query.userId === "string" ? req.query.userId : undefined
+    userId: typeof req.query.userId === "string" ? req.query.userId : undefined,
+    favorite
   });
   res.json({ scores });
+});
+
+scoreRoutes.patch("/:id/favorite", async (req, res) => {
+  const input = z.object({ isFavorite: z.boolean() }).parse(req.body);
+  const score = await req.services.scores.setFavoriteFor(req.user!, req.params.id, input.isFavorite);
+  res.json({ score });
 });
 
 scoreRoutes.post("/", uploadRateLimit, upload.single("file"), async (req, res) => {

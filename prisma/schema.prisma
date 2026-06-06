@@ -106,6 +106,7 @@ model Score {
   warnings         Json?
   confidence       Float?
   musicxmlFilename String?
+  isFavorite       Boolean     @default(false)
   createdAt        DateTime    @default(now())
   updatedAt        DateTime    @updatedAt
   convertedAt      DateTime?

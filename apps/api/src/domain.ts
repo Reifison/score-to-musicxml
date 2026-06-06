@@ -39,6 +39,7 @@ export type Score = {
   warnings: string[] | null;
   confidence: number | null;
   musicxmlFilename: string | null;
+  isFavorite: boolean;
   createdAt: Date;
   updatedAt: Date;
   convertedAt: Date | null;

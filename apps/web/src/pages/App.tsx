@@ -1,12 +1,13 @@
-import { FileMusic, KeyRound, LogOut, Shield, UserRound, Users } from "lucide-react";
+import { FileMusic, Home, KeyRound, LogOut, Shield, UserRound, Users } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { api, downloadMusicXml } from "../api/client.js";
+import { HomeMenuGrid } from "../components/HomeMenuGrid.js";
 import { ScoreCard } from "../components/ScoreCard.js";
 import { ScoreDetails } from "../components/ScoreDetails.js";
 import { UploadPanel } from "../components/UploadPanel.js";
 import type { AuditLog, Score, ScoreStatus, User } from "../types/domain.js";
 
-type View = "scores" | "profile" | "admin-users" | "admin-scores" | "audits";
+type View = "home" | "scores" | "favorites" | "settings" | "profile" | "admin-users" | "admin-scores" | "audits";
 
 export function App() {
   const [user, setUser] = useState<User | null>(null);
@@ -14,7 +15,7 @@ export function App() {
   const [users, setUsers] = useState<User[]>([]);
   const [audits, setAudits] = useState<AuditLog[]>([]);
   const [selected, setSelected] = useState<Score | null>(null);
-  const [view, setView] = useState<View>("scores");
+  const [view, setView] = useState<View>("home");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
@@ -76,6 +77,20 @@ export function App() {
     await refreshScores();
   }
 
+  async function toggleFavorite(score: Score) {
+    setError("");
+    try {
+      const response = await api<{ score: Score }>(`/api/scores/${score.id}/favorite`, {
+        method: "PATCH",
+        body: JSON.stringify({ isFavorite: !score.isFavorite })
+      });
+      setScores((current) => current.map((item) => (item.id === score.id ? response.score : item)));
+      if (selected?.id === score.id) setSelected(response.score);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Não foi possível atualizar os favoritos.");
+    }
+  }
+
   async function downloadScore(score: Score) {
     setError("");
     setNotice("");
@@ -91,6 +106,7 @@ export function App() {
     <main className="app-shell">
       <aside className="sidebar">
         <div className="brand"><FileMusic size={24} /><strong>MusicXML</strong></div>
+        <button className={view === "home" ? "active" : ""} onClick={() => setView("home")}><Home size={18} /> Início</button>
         <button className={view === "scores" ? "active" : ""} onClick={() => setView("scores")}><FileMusic size={18} /> Partituras</button>
         <button className={view === "profile" ? "active" : ""} onClick={() => setView("profile")}><UserRound size={18} /> Perfil</button>
         {isAdmin && <button className={view === "admin-users" ? "active" : ""} onClick={() => setView("admin-users")}><Users size={18} /> Usuários</button>}
@@ -107,16 +123,19 @@ export function App() {
           </div>
         </header>
 
-        {view === "scores" && (
+        {view === "home" && (
           <>
             <UploadPanel onUpload={upload} />
-            <ScoreList scores={scores} onOpen={setSelected} onDelete={deleteScore} onDownload={downloadScore} />
+            <HomeMenuGrid onNavigate={setView} />
           </>
         )}
 
+        {view === "scores" && <ScoreList scores={scores} onOpen={setSelected} onDelete={deleteScore} onDownload={downloadScore} onToggleFavorite={toggleFavorite} />}
+        {view === "favorites" && <Favorites scores={scores} onOpen={setSelected} onDelete={deleteScore} onDownload={downloadScore} onToggleFavorite={toggleFavorite} />}
+        {view === "settings" && <SettingsPanel />}
         {view === "profile" && <Profile user={user} onUpdated={setUser} />}
         {view === "admin-users" && <AdminUsers currentUser={user} users={users} onRefresh={refreshAdmin} />}
-        {view === "admin-scores" && <ScoreList scores={scores} onOpen={setSelected} onDelete={deleteScore} onDownload={downloadScore} />}
+        {view === "admin-scores" && <ScoreList scores={scores} onOpen={setSelected} onDelete={deleteScore} onDownload={downloadScore} onToggleFavorite={toggleFavorite} />}
         {view === "audits" && <AuditPanel audits={audits} scores={scores} users={users} />}
         {notice && <p className="success-text">{notice}</p>}
         {error && <p className="error-text">{error}</p>}
@@ -160,9 +179,44 @@ function Login({ onLogged }: { onLogged: (user: User) => void }) {
   );
 }
 
-function ScoreList({ scores, onOpen, onDelete, onDownload }: { scores: Score[]; onOpen: (score: Score) => void; onDelete: (score: Score) => void; onDownload: (score: Score) => void }) {
+function ScoreList({ scores, onOpen, onDelete, onDownload, onToggleFavorite }: { scores: Score[]; onOpen: (score: Score) => void; onDelete: (score: Score) => void; onDownload: (score: Score) => void; onToggleFavorite: (score: Score) => void }) {
   if (!scores.length) return <section className="empty-state">Nenhuma partitura enviada ainda.</section>;
-  return <section className="score-grid">{scores.map((score) => <ScoreCard key={score.id} score={score} onOpen={onOpen} onDelete={onDelete} onDownload={onDownload} />)}</section>;
+  return <section className="score-grid">{scores.map((score) => <ScoreCard key={score.id} score={score} onOpen={onOpen} onDelete={onDelete} onDownload={onDownload} onToggleFavorite={onToggleFavorite} />)}</section>;
+}
+
+function Favorites({ scores, onOpen, onDelete, onDownload, onToggleFavorite }: { scores: Score[]; onOpen: (score: Score) => void; onDelete: (score: Score) => void; onDownload: (score: Score) => void; onToggleFavorite: (score: Score) => void }) {
+  const favorites = scores.filter((score) => score.isFavorite);
+  if (!favorites.length) {
+    return (
+      <section className="empty-state">
+        Nenhuma partitura favorita ainda. Toque no coração de uma partitura para adicioná-la aqui.
+      </section>
+    );
+  }
+  return <section className="score-grid">{favorites.map((score) => <ScoreCard key={score.id} score={score} onOpen={onOpen} onDelete={onDelete} onDownload={onDownload} onToggleFavorite={onToggleFavorite} />)}</section>;
+}
+
+function SettingsPanel() {
+  return (
+    <section className="form-panel settings-panel">
+      <h2>Configurações</h2>
+      <p className="field-hint">Preferências do app e notificações estarão disponíveis em breve.</p>
+      <div className="settings-list">
+        <div className="settings-row">
+          <strong>Conversão automática</strong>
+          <span>Ativa após cada envio</span>
+        </div>
+        <div className="settings-row">
+          <strong>Formatos aceitos</strong>
+          <span>PNG, JPG, JPEG, WEBP e PDF até 10 MB</span>
+        </div>
+        <div className="settings-row">
+          <strong>Suporte</strong>
+          <span>Use boa iluminação e bordas completas ao escanear partituras.</span>
+        </div>
+      </div>
+    </section>
+  );
 }
 
 function Profile({ user, onUpdated }: { user: User; onUpdated: (user: User) => void }) {
@@ -504,7 +558,10 @@ function ScoreQuantityTable({ scores, users }: { scores: Score[]; users: User[] 
 
 function viewTitle(view: View) {
   return {
+    home: "Início",
     scores: "Minhas partituras",
+    favorites: "Favoritas",
+    settings: "Configurações",
     profile: "Perfil",
     "admin-users": "Usuários",
     "admin-scores": "Partituras",

@@ -11,14 +11,15 @@ export class ScoreService {
     private storage: FileStorageService
   ) {}
 
-  async listFor(user: User, filters: { status?: string; userId?: string } = {}) {
+  async listFor(user: User, filters: { status?: string; userId?: string; favorite?: boolean } = {}) {
     if (user.role === "admin") {
       return this.scores.list({
         status: this.parseStatus(filters.status),
-        userId: filters.userId
+        userId: filters.userId,
+        favorite: filters.favorite
       });
     }
-    return this.scores.list({ userId: user.id, status: this.parseStatus(filters.status) });
+    return this.scores.list({ userId: user.id, status: this.parseStatus(filters.status), favorite: filters.favorite });
   }
 
   async getFor(user: User, scoreId: string) {
@@ -34,6 +35,11 @@ export class ScoreService {
     await this.storage.deleteExport(score.musicxmlFilename);
     await this.scores.delete(score.id);
     await this.audits.create({ actorId: user.id, action: "score_deleted", entity: "score", entityId: score.id, ipAddress });
+  }
+
+  async setFavoriteFor(user: User, scoreId: string, isFavorite: boolean) {
+    const score = await this.getFor(user, scoreId);
+    return this.scores.update(score.id, { isFavorite });
   }
 
   async downloadFor(user: User, scoreId: string, ipAddress?: string) {

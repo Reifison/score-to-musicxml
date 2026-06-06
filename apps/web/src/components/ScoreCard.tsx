@@ -1,15 +1,39 @@
-import { Download, Eye, Trash2 } from "lucide-react";
+import { Download, Eye, Heart, Trash2 } from "lucide-react";
 import type { Score } from "../types/domain.js";
 import { StatusBadge } from "./StatusBadge.js";
 
-export function ScoreCard({ score, onOpen, onDelete, onDownload }: { score: Score; onOpen: (score: Score) => void; onDelete: (score: Score) => void; onDownload: (score: Score) => void }) {
+export function ScoreCard({
+  score,
+  onOpen,
+  onDelete,
+  onDownload,
+  onToggleFavorite
+}: {
+  score: Score;
+  onOpen: (score: Score) => void;
+  onDelete: (score: Score) => void;
+  onDownload: (score: Score) => void;
+  onToggleFavorite: (score: Score) => void;
+}) {
   const hasLongError = score.errorMessage && score.errorMessage.length > 120;
 
   return (
     <article className="card score-card">
-      <div>
-        <h3>{score.originalFilename}</h3>
-        <p>{score.fileType.toUpperCase()} · {formatBytes(score.fileSize)} · {new Date(score.createdAt).toLocaleDateString()}</p>
+      <div className="score-card-header">
+        <div>
+          <h3>{score.originalFilename}</h3>
+          <p>{score.fileType.toUpperCase()} · {formatBytes(score.fileSize)} · {new Date(score.createdAt).toLocaleDateString()}</p>
+        </div>
+        <button
+          aria-label={score.isFavorite ? "Remover dos favoritos" : "Adicionar aos favoritos"}
+          aria-pressed={score.isFavorite}
+          className={`favorite-button ${score.isFavorite ? "active" : ""}`}
+          onClick={() => onToggleFavorite(score)}
+          title={score.isFavorite ? "Remover dos favoritos" : "Adicionar aos favoritos"}
+          type="button"
+        >
+          <Heart fill={score.isFavorite ? "currentColor" : "none"} size={20} />
+        </button>
       </div>
       <StatusBadge status={score.conversionStatus} />
       {score.errorMessage && (
