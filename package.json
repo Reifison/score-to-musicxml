@@ -21,7 +21,8 @@
     "db:migrate:deploy": "prisma migrate deploy --schema prisma/schema.prisma",
     "db:generate": "prisma generate --schema prisma/schema.prisma",
     "db:seed": "npm run seed -w apps/api",
-    "deploy:prod": "bash scripts/deploy-prod.sh"
+    "deploy:prod": "bash scripts/deploy-prod.sh",
+    "deploy:vps": "bash scripts/deploy-vps.sh"
   },
   "devDependencies": {
     "concurrently": "^9.1.2",
