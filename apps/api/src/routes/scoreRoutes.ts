@@ -35,6 +35,12 @@ scoreRoutes.patch("/:id/favorite", async (req, res) => {
   res.json({ score });
 });
 
+scoreRoutes.patch("/:id", async (req, res) => {
+  const input = z.object({ originalFilename: z.string().trim().min(1).max(180) }).parse(req.body);
+  const score = await req.services.scores.renameFor(req.user!, req.params.id, input.originalFilename, req.ip);
+  res.json({ score });
+});
+
 scoreRoutes.post("/", uploadRateLimit, upload.single("file"), async (req, res) => {
   if (!req.file) throw new AppError(400, "Arquivo obrigatório.", "FILE_REQUIRED");
   const score = await req.services.uploads.upload({

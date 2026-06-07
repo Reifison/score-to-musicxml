@@ -14,7 +14,8 @@ const fieldLabels: Record<string, string> = {
   email: "E-mail",
   password: "Senha",
   role: "Perfil",
-  isActive: "Status"
+  isActive: "Status",
+  originalFilename: "Nome da partitura"
 };
 
 function apiErrorMessage(body: ApiErrorBody) {

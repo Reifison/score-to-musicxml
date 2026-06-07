@@ -22,7 +22,7 @@ export type CreateScoreInput = {
   conversionStatus: ScoreStatus;
 };
 
-export type UpdateScoreInput = Partial<Pick<Score, "uploadStatus" | "conversionStatus" | "errorMessage" | "warnings" | "confidence" | "musicxmlFilename" | "convertedAt" | "isFavorite">>;
+export type UpdateScoreInput = Partial<Pick<Score, "originalFilename" | "uploadStatus" | "conversionStatus" | "errorMessage" | "warnings" | "confidence" | "musicxmlFilename" | "convertedAt" | "isFavorite">>;
 
 export type ScoreFilters = {
   userId?: string;

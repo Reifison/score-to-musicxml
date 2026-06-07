@@ -134,6 +134,17 @@ describe("API", () => {
     expect(response.body.score.mimeType).toBe("image/png");
   });
 
+  it("permite renomear partitura preservando a extensão", async () => {
+    const cookie = await login(ctx.app, "user@example.com");
+    const created = await request(ctx.app).post("/api/scores").set("Cookie", cookie).attach("file", pdf, "partitura_antiga.pdf").expect(201);
+    const renamed = await request(ctx.app)
+      .patch(`/api/scores/${created.body.score.id}`)
+      .set("Cookie", cookie)
+      .send({ originalFilename: "Minha Partitura" })
+      .expect(200);
+    expect(renamed.body.score.originalFilename).toBe("Minha Partitura.pdf");
+  });
+
   it("impede acesso e download de partitura de outro usuário", async () => {
     const userCookie = await login(ctx.app, "user@example.com");
     const adminCookie = await login(ctx.app, "admin@example.com");

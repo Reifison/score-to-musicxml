@@ -698,6 +698,25 @@ button:disabled,
   overflow-wrap: anywhere;
 }
 
+.rename-field {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: center;
+}
+
+.rename-extension {
+  color: var(--muted);
+  font-size: 14px;
+  font-weight: 700;
+}
+
+.rename-actions {
+  display: flex;
+  justify-content: flex-start;
+  margin-top: -4px;
+}
+
 .details-grid {
   display: grid;
   grid-template-columns: 120px 1fr;

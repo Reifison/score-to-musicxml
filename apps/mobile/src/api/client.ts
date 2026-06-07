@@ -83,6 +83,13 @@ export const api = {
     return apiRequest<{ score: Score }>(`/api/scores/${id}`, {}, token);
   },
 
+  async renameScore(token: string, id: string, originalFilename: string) {
+    return apiRequest<{ score: Score }>(`/api/scores/${id}`, {
+      method: "PATCH",
+      body: JSON.stringify({ originalFilename })
+    }, token);
+  },
+
   async upload(token: string, file: { uri: string; name?: string; preprocessingProfile?: "document_scanner"; type?: string }) {
     const body = new FormData();
     body.append("file", normalizeUploadFile(file) as unknown as Blob);

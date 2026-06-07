@@ -91,6 +91,18 @@ export function App() {
     }
   }
 
+  async function renameScore(score: Score, originalFilename: string) {
+    setError("");
+    setNotice("");
+    const response = await api<{ score: Score }>(`/api/scores/${score.id}`, {
+      method: "PATCH",
+      body: JSON.stringify({ originalFilename })
+    });
+    setScores((current) => current.map((item) => (item.id === score.id ? response.score : item)));
+    if (selected?.id === score.id) setSelected(response.score);
+    setNotice("Nome da partitura atualizado.");
+  }
+
   async function downloadScore(score: Score) {
     setError("");
     setNotice("");
@@ -141,7 +153,7 @@ export function App() {
         {notice && <p className="success-text">{notice}</p>}
         {error && <p className="error-text">{error}</p>}
       </section>
-      {selected && <ScoreDetails score={selected} onClose={() => setSelected(null)} onDownload={downloadScore} />}
+      {selected && <ScoreDetails score={selected} onClose={() => setSelected(null)} onDownload={downloadScore} onRename={renameScore} />}
     </main>
   );
 }

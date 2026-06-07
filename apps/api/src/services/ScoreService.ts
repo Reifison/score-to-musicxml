@@ -1,7 +1,7 @@
 import type { User } from "../domain.js";
 import { AppError, forbidden, notFound } from "../errors/AppError.js";
 import type { AuditRepository, ScoreRepository } from "../repositories/contracts.js";
-import { safeMusicXmlFilename } from "../utils/filenames.js";
+import { renameOriginalFilename, safeMusicXmlFilename } from "../utils/filenames.js";
 import { FileStorageService } from "./FileStorageService.js";
 
 export class ScoreService {
@@ -40,6 +40,24 @@ export class ScoreService {
   async setFavoriteFor(user: User, scoreId: string, isFavorite: boolean) {
     const score = await this.getFor(user, scoreId);
     return this.scores.update(score.id, { isFavorite });
+  }
+
+  async renameFor(user: User, scoreId: string, originalFilename: string, ipAddress?: string) {
+    const score = await this.getFor(user, scoreId);
+    const nextFilename = renameOriginalFilename(score.originalFilename, originalFilename);
+    if (!nextFilename) throw new AppError(400, "Nome inválido.", "INVALID_FILENAME");
+    if (nextFilename === score.originalFilename) return score;
+
+    const updated = await this.scores.update(score.id, { originalFilename: nextFilename });
+    await this.audits.create({
+      actorId: user.id,
+      action: "score_renamed",
+      entity: "score",
+      entityId: score.id,
+      ipAddress,
+      metadata: { from: score.originalFilename, to: nextFilename }
+    });
+    return updated;
   }
 
   async downloadFor(user: User, scoreId: string, ipAddress?: string) {

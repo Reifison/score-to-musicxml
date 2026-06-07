@@ -62,6 +62,7 @@ export type AuditAction =
   | "conversion_failed"
   | "score_downloaded"
   | "score_deleted"
+  | "score_renamed"
   | "purchase_started"
   | "purchase_completed"
   | "purchase_failed"

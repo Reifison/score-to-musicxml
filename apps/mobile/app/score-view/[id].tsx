@@ -1,10 +1,10 @@
 import { Ionicons } from "@expo/vector-icons";
-import { useMutation } from "@tanstack/react-query";
+import { useMutation, useQueryClient } from "@tanstack/react-query";
 import * as Sharing from "expo-sharing";
 import { useLocalSearchParams, router } from "expo-router";
 import type { ComponentProps } from "react";
-import { useEffect } from "react";
-import { ActivityIndicator, Image, Pressable, ScrollView, Text, View } from "react-native";
+import { useEffect, useMemo, useState } from "react";
+import { ActivityIndicator, Image, Pressable, ScrollView, Text, TextInput, View } from "react-native";
 import { API_URL, api } from "../../src/api/client";
 import type { Score } from "../../src/api/types";
 import { useAuth } from "../../src/auth/AuthProvider";
@@ -15,8 +15,17 @@ import { colors, radius, sharedStyles } from "../../src/theme/styles";
 export default function ScoreViewScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const { token } = useAuth();
+  const queryClient = useQueryClient();
   const scoreQuery = useScoreStatus(token, id);
   const score = scoreQuery.data?.score;
+  const [name, setName] = useState("");
+  const extension = useMemo(() => (score ? fileExtension(score.originalFilename) : ""), [score?.originalFilename]);
+  const trimmedName = name.trim();
+  const canSave = Boolean(score && trimmedName.length > 0 && trimmedName !== displayNameWithoutExtension(score.originalFilename));
+
+  useEffect(() => {
+    if (score) setName(displayNameWithoutExtension(score.originalFilename));
+  }, [score?.id, score?.originalFilename]);
 
   useEffect(() => {
     if (score && score.conversionStatus !== "converted") {
@@ -31,6 +40,16 @@ export default function ScoreViewScreen() {
       if (await Sharing.isAvailableAsync()) {
         await Sharing.shareAsync(result.uri, { mimeType: "application/vnd.recordare.musicxml+xml", UTI: "public.xml" });
       }
+    }
+  });
+
+  const renameMutation = useMutation({
+    mutationFn: () => api.renameScore(token!, score!.id, trimmedName),
+    onSuccess: async () => {
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ["score", id] }),
+        queryClient.invalidateQueries({ queryKey: ["scores"] })
+      ]);
     }
   });
 
@@ -51,8 +70,28 @@ export default function ScoreViewScreen() {
   return (
     <ScrollView style={sharedStyles.screen} contentContainerStyle={sharedStyles.content}>
       <View style={{ gap: 10 }}>
-        <Text style={sharedStyles.title}>{score.originalFilename}</Text>
         <StatusBadge status={score.conversionStatus} />
+      </View>
+
+      <View style={sharedStyles.panel}>
+        <Text style={{ color: colors.text, fontSize: 14, fontWeight: "700" }}>Nome da partitura</Text>
+        <View style={{ alignItems: "center", flexDirection: "row", gap: 10 }}>
+          <TextInput
+            onChangeText={setName}
+            placeholder="Nome da partitura"
+            style={[sharedStyles.input, { flex: 1 }]}
+            value={name}
+          />
+          {extension ? <Text style={{ color: colors.muted, fontSize: 14, fontWeight: "700" }}>{extension}</Text> : null}
+        </View>
+        <Pressable
+          disabled={!canSave || renameMutation.isPending}
+          onPress={() => renameMutation.mutate()}
+          style={[sharedStyles.button, sharedStyles.buttonSecondary, (!canSave || renameMutation.isPending) && { opacity: 0.55 }]}
+        >
+          {renameMutation.isPending ? <ActivityIndicator color="#fff" /> : <Text style={sharedStyles.buttonText}>Salvar nome</Text>}
+        </Pressable>
+        {renameMutation.error ? <Text style={sharedStyles.error}>{renameMutation.error instanceof Error ? renameMutation.error.message : "Falha ao renomear."}</Text> : null}
       </View>
 
       {score.fileType === "image" ? (
@@ -136,4 +175,16 @@ function formatBytes(bytes: number) {
   if (bytes < 1024) return `${bytes} B`;
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
   return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+}
+
+function displayNameWithoutExtension(filename: string) {
+  const clean = filename.split(/[\\/]/).pop() || filename;
+  const dot = clean.lastIndexOf(".");
+  return dot > 0 ? clean.slice(0, dot) : clean;
+}
+
+function fileExtension(filename: string) {
+  const clean = filename.split(/[\\/]/).pop() || filename;
+  const dot = clean.lastIndexOf(".");
+  return dot > 0 ? clean.slice(dot) : "";
 }
