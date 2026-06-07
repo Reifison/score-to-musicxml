@@ -3,7 +3,7 @@ import { useEffect, useState } from "react";
 import { ActivityIndicator, KeyboardAvoidingView, Platform, Pressable, Text, TextInput, View } from "react-native";
 import { ApiError, API_URL, api } from "../src/api/client";
 import { useAuth } from "../src/auth/AuthProvider";
-import { colors, sharedStyles } from "../src/theme/styles";
+import { colors, radius, sharedStyles } from "../src/theme/styles";
 
 const loginBuild = "login-fix-2026-05-10-2";
 
@@ -72,14 +72,14 @@ export default function LoginScreen() {
               onPress={() => setShowPassword((visible) => !visible)}
               style={{
                 alignItems: "center",
-                borderColor: colors.primary,
-                borderRadius: 8,
+                borderColor: colors.line,
+                borderRadius: radius.pill,
                 borderWidth: 1,
-                minHeight: 40,
+                minHeight: 44,
                 justifyContent: "center"
               }}
             >
-              <Text style={{ color: colors.primary, fontSize: 15, fontWeight: "700" }}>{showPassword ? "Ocultar senha" : "Mostrar senha"}</Text>
+              <Text style={{ color: colors.secondary, fontSize: 15, fontWeight: "700" }}>{showPassword ? "Ocultar senha" : "Mostrar senha"}</Text>
             </Pressable>
           </View>
           {error ? <Text style={sharedStyles.error}>{error}</Text> : null}

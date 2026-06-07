@@ -10,7 +10,7 @@ import type { Score } from "../../src/api/types";
 import { useAuth } from "../../src/auth/AuthProvider";
 import { StatusBadge } from "../../src/components/StatusBadge";
 import { useScoreStatus } from "../../src/hooks/useScoreStatus";
-import { colors, sharedStyles } from "../../src/theme/styles";
+import { colors, radius, sharedStyles } from "../../src/theme/styles";
 
 export default function ScoreViewScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
@@ -59,7 +59,7 @@ export default function ScoreViewScreen() {
         <Image
           resizeMode="contain"
           source={{ uri: `${API_URL}/api/scores/${score.id}/preview`, headers: { Authorization: `Bearer ${token}` } }}
-          style={{ backgroundColor: "#fff", borderRadius: 8, height: 320, width: "100%" }}
+          style={{ backgroundColor: colors.panel, borderRadius: radius.lg, height: 320, width: "100%" }}
         />
       ) : (
         <View style={[sharedStyles.panel, { alignItems: "center", minHeight: 160, justifyContent: "center" }]}>
@@ -75,13 +75,13 @@ export default function ScoreViewScreen() {
         <Info label="Confianca" value={score.confidence == null ? "Ainda nao calculada" : `${Math.round(score.confidence * 100)}%`} />
       </View>
 
-      <View style={[sharedStyles.panel, { borderColor: reviewState.color }]}>
+      <View style={[sharedStyles.panel, { borderColor: reviewState.color, borderWidth: 1 }]}>
         <View style={{ alignItems: "center", flexDirection: "row", gap: 8 }}>
           <Ionicons color={reviewState.color} name={reviewState.icon} size={20} />
           <Text style={{ color: reviewState.color, fontSize: 16, fontWeight: "700" }}>{reviewState.title}</Text>
         </View>
         <Text style={sharedStyles.subtitle}>{reviewState.message}</Text>
-        {reviewState.action ? <Text style={{ color: colors.ink, fontSize: 14, lineHeight: 20 }}>{reviewState.action}</Text> : null}
+        {reviewState.action ? <Text style={{ color: colors.text, fontSize: 14, lineHeight: 20 }}>{reviewState.action}</Text> : null}
       </View>
 
       {score.warnings?.length ? (
@@ -104,7 +104,7 @@ function Info({ label, value }: { label: string; value: string }) {
   return (
     <View style={{ gap: 3 }}>
       <Text style={{ color: colors.muted, fontSize: 12, fontWeight: "700", textTransform: "uppercase" }}>{label}</Text>
-      <Text style={{ color: colors.ink, fontSize: 15 }}>{value}</Text>
+      <Text style={{ color: colors.text, fontSize: 15 }}>{value}</Text>
     </View>
   );
 }

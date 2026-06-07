@@ -12,7 +12,7 @@ import { ApiError, api } from "../src/api/client";
 import type { Score } from "../src/api/types";
 import { useAuth } from "../src/auth/AuthProvider";
 import { StatusBadge } from "../src/components/StatusBadge";
-import { colors, sharedStyles } from "../src/theme/styles";
+import { colors, radius, sharedStyles } from "../src/theme/styles";
 
 const premiumProductId = "premium_unlock";
 const premiumProductIds = [premiumProductId];
@@ -236,7 +236,7 @@ export default function ScoresScreen() {
   return (
     <View style={sharedStyles.screen}>
       <FlatList
-        contentContainerStyle={{ gap: 14, padding: 20 }}
+        contentContainerStyle={{ gap: 16, padding: 24 }}
         data={scoresQuery.data?.scores ?? []}
         keyExtractor={(item) => item.id}
         ListHeaderComponent={
@@ -246,8 +246,8 @@ export default function ScoresScreen() {
                 <Text style={sharedStyles.title}>Partituras</Text>
                 <Text style={sharedStyles.subtitle}>{user?.name} · {subtitle}</Text>
               </View>
-              <Pressable onPress={logout} style={[sharedStyles.button, sharedStyles.buttonSecondary, { width: 48 }]}>
-                <Ionicons color={colors.ink} name="log-out-outline" size={20} />
+              <Pressable onPress={logout} style={[sharedStyles.button, sharedStyles.buttonOutline, { width: 52, minHeight: 52, paddingHorizontal: 0 }]}>
+                <Ionicons color={colors.text} name="log-out-outline" size={20} />
               </Pressable>
             </View>
 
@@ -257,13 +257,13 @@ export default function ScoresScreen() {
                 <Text style={sharedStyles.buttonText}>Escanear partitura</Text>
               </Pressable>
               <View style={{ flexDirection: "row", gap: 10 }}>
-                <Pressable disabled={uploadMutation.isPending} onPress={pickPdf} style={[sharedStyles.button, sharedStyles.buttonSecondary, { flex: 1 }]}>
-                  <Ionicons color={colors.ink} name="document-outline" size={18} />
-                  <Text style={[sharedStyles.buttonText, sharedStyles.buttonTextSecondary]}>PDF</Text>
+                <Pressable disabled={uploadMutation.isPending} onPress={pickPdf} style={[sharedStyles.button, sharedStyles.buttonOutline, { flex: 1 }]}>
+                  <Ionicons color={colors.text} name="document-outline" size={18} />
+                  <Text style={[sharedStyles.buttonText, sharedStyles.buttonTextOutline]}>PDF</Text>
                 </Pressable>
-                <Pressable disabled={uploadMutation.isPending} onPress={pickImage} style={[sharedStyles.button, sharedStyles.buttonSecondary, { flex: 1 }]}>
-                  <Ionicons color={colors.ink} name="image-outline" size={18} />
-                  <Text style={[sharedStyles.buttonText, sharedStyles.buttonTextSecondary]}>Foto</Text>
+                <Pressable disabled={uploadMutation.isPending} onPress={pickImage} style={[sharedStyles.button, sharedStyles.buttonOutline, { flex: 1 }]}>
+                  <Ionicons color={colors.text} name="image-outline" size={18} />
+                  <Text style={[sharedStyles.buttonText, sharedStyles.buttonTextOutline]}>Foto</Text>
                 </Pressable>
               </View>
               {uploadMutation.isPending ? <ActivityIndicator color={colors.primary} /> : null}
@@ -277,9 +277,9 @@ export default function ScoresScreen() {
       />
 
       <Modal animationType="slide" transparent visible={paywallVisible}>
-        <View style={{ backgroundColor: "rgba(0,0,0,0.35)", flex: 1, justifyContent: "flex-end" }}>
-          <View style={{ backgroundColor: colors.panel, borderTopLeftRadius: 16, borderTopRightRadius: 16, gap: 14, padding: 20 }}>
-            <Text style={{ color: colors.ink, fontSize: 22, fontWeight: "700" }}>Desbloquear scans</Text>
+        <View style={{ backgroundColor: "rgba(47,42,51,0.35)", flex: 1, justifyContent: "flex-end" }}>
+          <View style={{ backgroundColor: colors.panel, borderTopLeftRadius: radius.lg, borderTopRightRadius: radius.lg, gap: 16, padding: 24 }}>
+            <Text style={{ color: colors.text, fontSize: 22, fontWeight: "700" }}>Desbloquear scans</Text>
             <Text style={sharedStyles.subtitle}>Voce usou os 3 scans gratis. A versao paga libera novos envios nesta conta.</Text>
             {Platform.OS === "ios" && !connected ? <Text style={{ color: colors.warning }}>Conectando com a App Store...</Text> : null}
             {purchaseStatus ? <Text style={sharedStyles.subtitle}>{purchaseStatus}</Text> : null}
@@ -289,21 +289,21 @@ export default function ScoresScreen() {
             <Pressable disabled={purchaseMutation.isPending} onPress={restorePremium} style={[sharedStyles.button, sharedStyles.buttonSecondary]}>
               <Text style={[sharedStyles.buttonText, sharedStyles.buttonTextSecondary]}>Restaurar compra</Text>
             </Pressable>
-            <Pressable onPress={() => setPaywallVisible(false)} style={[sharedStyles.button, sharedStyles.buttonSecondary]}>
-              <Text style={[sharedStyles.buttonText, sharedStyles.buttonTextSecondary]}>Agora nao</Text>
+            <Pressable onPress={() => setPaywallVisible(false)} style={[sharedStyles.button, sharedStyles.buttonOutline]}>
+              <Text style={[sharedStyles.buttonText, sharedStyles.buttonTextOutline]}>Agora nao</Text>
             </Pressable>
           </View>
         </View>
       </Modal>
 
       <Modal animationType="slide" visible={Boolean(pendingImage)}>
-        <View style={[sharedStyles.screen, { padding: 20, gap: 16 }]}>
+        <View style={[sharedStyles.screen, { padding: 24, gap: 16 }]}>
           <Text style={sharedStyles.title}>Conferir foto</Text>
           <Text style={sharedStyles.subtitle}>Envie apenas se a folha estiver reta, clara, recortada e ocupando quase toda a imagem.</Text>
-          {pendingImage ? <Image resizeMode="contain" source={{ uri: pendingImage.uri }} style={{ backgroundColor: "#fff", borderRadius: 8, flex: 1, width: "100%" }} /> : null}
+          {pendingImage ? <Image resizeMode="contain" source={{ uri: pendingImage.uri }} style={{ backgroundColor: colors.panel, borderRadius: radius.lg, flex: 1, width: "100%" }} /> : null}
           <View style={{ flexDirection: "row", gap: 10 }}>
-            <Pressable onPress={() => setPendingImage(null)} style={[sharedStyles.button, sharedStyles.buttonSecondary, { flex: 1 }]}>
-              <Text style={[sharedStyles.buttonText, sharedStyles.buttonTextSecondary]}>Refazer</Text>
+            <Pressable onPress={() => setPendingImage(null)} style={[sharedStyles.button, sharedStyles.buttonOutline, { flex: 1 }]}>
+              <Text style={[sharedStyles.buttonText, sharedStyles.buttonTextOutline]}>Refazer</Text>
             </Pressable>
             <Pressable onPress={confirmImageUpload} style={[sharedStyles.button, { flex: 1 }]}>
               <Text style={sharedStyles.buttonText}>Enviar</Text>
@@ -321,7 +321,7 @@ function ScoreRow({ score }: { score: Score }) {
       <Pressable style={sharedStyles.panel}>
         <View style={{ flexDirection: "row", gap: 10, justifyContent: "space-between" }}>
           <View style={{ flex: 1, gap: 6 }}>
-            <Text numberOfLines={1} style={{ color: colors.ink, fontSize: 16, fontWeight: "700" }}>{score.originalFilename}</Text>
+            <Text numberOfLines={1} style={{ color: colors.text, fontSize: 16, fontWeight: "700" }}>{score.originalFilename}</Text>
             <Text style={{ color: colors.muted, fontSize: 13 }}>{formatBytes(score.fileSize)} · {new Date(score.createdAt).toLocaleDateString()}</Text>
           </View>
           <StatusBadge status={score.conversionStatus} />

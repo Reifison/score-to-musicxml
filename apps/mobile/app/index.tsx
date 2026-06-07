@@ -3,7 +3,7 @@ import { Redirect, router } from "expo-router";
 import type { ComponentProps } from "react";
 import { ActivityIndicator, Alert, Pressable, ScrollView, Text, View } from "react-native";
 import { useAuth } from "../src/auth/AuthProvider";
-import { colors, sharedStyles } from "../src/theme/styles";
+import { colors, radius, sharedStyles } from "../src/theme/styles";
 
 type HomeAction = {
   icon: ComponentProps<typeof Ionicons>["name"];
@@ -37,7 +37,7 @@ export default function IndexScreen() {
   const actions = allActions.filter((action) => !action.adminOnly || isAdmin);
 
   return (
-    <ScrollView contentContainerStyle={{ gap: 22, padding: 20, paddingTop: 28 }} style={sharedStyles.screen}>
+    <ScrollView contentContainerStyle={{ gap: 24, padding: 24, paddingTop: 32 }} style={sharedStyles.screen}>
       <View style={{ gap: 6 }}>
         <Text style={sharedStyles.title}>converter Partitura</Text>
         <Text style={sharedStyles.subtitle}>{user.name} · {isAdmin ? "Admin" : "Usuario"}</Text>
@@ -47,7 +47,7 @@ export default function IndexScreen() {
         {actions.map((action) => (
           <Pressable key={action.label} onPress={action.onPress} style={homeStyles.actionButton}>
             <View style={homeStyles.iconCircle}>
-              <Ionicons color={colors.primaryDark} name={action.icon} size={28} />
+              <Ionicons color={colors.primary} name={action.icon} size={28} />
             </View>
             <Text numberOfLines={2} style={homeStyles.actionText}>{action.label}</Text>
           </Pressable>
@@ -66,26 +66,29 @@ const homeStyles = {
     alignItems: "center" as const,
     aspectRatio: 1,
     backgroundColor: colors.panel,
-    borderColor: colors.line,
-    borderRadius: 18,
-    borderWidth: 1,
+    borderRadius: radius.lg,
     flexBasis: "47%" as const,
     gap: 12,
     justifyContent: "center" as const,
-    padding: 14
+    padding: 16,
+    shadowColor: "#2F2A33",
+    shadowOffset: { width: 0, height: 12 },
+    shadowOpacity: 0.08,
+    shadowRadius: 30,
+    elevation: 4
   },
   actionText: {
-    color: colors.ink,
+    color: colors.text,
     fontSize: 16,
     fontWeight: "700" as const,
     textAlign: "center" as const
   },
   iconCircle: {
     alignItems: "center" as const,
-    backgroundColor: "#e8f3f0",
-    borderRadius: 20,
-    height: 54,
+    backgroundColor: "#E6F9F5",
+    borderRadius: radius.pill,
+    height: 56,
     justifyContent: "center" as const,
-    width: 54
+    width: 56
   }
 };

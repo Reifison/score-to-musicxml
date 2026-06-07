@@ -34,7 +34,7 @@ export default function ScoreProcessingScreen() {
         <View style={[sharedStyles.panel, { alignItems: "center", gap: 16 }]}>
           <Ionicons color={colors.danger} name="alert-circle-outline" size={44} />
           <View style={{ alignItems: "center", gap: 8 }}>
-            <Text style={{ color: colors.ink, fontSize: 22, fontWeight: "700", textAlign: "center" }}>Nao foi possivel ler a partitura</Text>
+            <Text style={{ color: colors.text, fontSize: 22, fontWeight: "700", textAlign: "center" }}>Nao foi possivel ler a partitura</Text>
             <Text style={[sharedStyles.subtitle, { textAlign: "center" }]}>
               A imagem pode estar ilegivel para o reconhecimento musical. Tente escanear novamente com a folha bem iluminada, sem sombras e com as bordas completas.
             </Text>
@@ -44,9 +44,9 @@ export default function ScoreProcessingScreen() {
             <Ionicons color="#fff" name="camera-outline" size={20} />
             <Text style={sharedStyles.buttonText}>Tentar Novamente</Text>
           </Pressable>
-          <Pressable onPress={() => router.replace("/scores")} style={[sharedStyles.button, sharedStyles.buttonSecondary]}>
-            <Ionicons color={colors.ink} name="arrow-back-outline" size={20} />
-            <Text style={[sharedStyles.buttonText, sharedStyles.buttonTextSecondary]}>Voltar</Text>
+          <Pressable onPress={() => router.replace("/scores")} style={[sharedStyles.button, sharedStyles.buttonOutline]}>
+            <Ionicons color={colors.text} name="arrow-back-outline" size={20} />
+            <Text style={[sharedStyles.buttonText, sharedStyles.buttonTextOutline]}>Voltar</Text>
           </Pressable>
         </View>
       </View>
@@ -58,14 +58,14 @@ export default function ScoreProcessingScreen() {
       <View style={[sharedStyles.panel, { alignItems: "center", gap: 16 }]}>
         <ActivityIndicator color={colors.primary} size="large" />
         <View style={{ alignItems: "center", gap: 8 }}>
-          <Text style={{ color: colors.ink, fontSize: 22, fontWeight: "700", textAlign: "center" }}>Lendo as notas musicais...</Text>
+          <Text style={{ color: colors.text, fontSize: 22, fontWeight: "700", textAlign: "center" }}>Lendo as notas musicais...</Text>
           <Text style={[sharedStyles.subtitle, { textAlign: "center" }]}>Isso pode levar alguns segundos. A tela atualiza automaticamente quando o MusicXML estiver pronto.</Text>
         </View>
         <StatusBadge status={status ?? "processing"} />
         <Text style={{ color: colors.muted, fontSize: 13, textAlign: "center" }}>{score.originalFilename}</Text>
-        <Pressable onPress={() => router.replace("/scores")} style={[sharedStyles.button, sharedStyles.buttonSecondary]}>
-          <Ionicons color={colors.ink} name="arrow-back-outline" size={20} />
-          <Text style={[sharedStyles.buttonText, sharedStyles.buttonTextSecondary]}>Voltar</Text>
+        <Pressable onPress={() => router.replace("/scores")} style={[sharedStyles.button, sharedStyles.buttonOutline]}>
+          <Ionicons color={colors.text} name="arrow-back-outline" size={20} />
+          <Text style={[sharedStyles.buttonText, sharedStyles.buttonTextOutline]}>Voltar</Text>
         </Pressable>
       </View>
     </View>

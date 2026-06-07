@@ -1,0 +1,226 @@
+{
+  "name": "Identidade visual - App e-commerce mobile",
+  "version": "1.0",
+  "source": "Inspirado na imagem enviada: interface mobile clean, cards arredondados, mint como cor principal, violeta como apoio, acentos quentes para ofertas e produtos.",
+  "colors": {
+    "primary": {
+      "name": "Fresh Mint",
+      "hex": "#44CFB7",
+      "rgb": [
+        68,
+        207,
+        183
+      ],
+      "use": "CTAs principais, links de ação, barra de progresso, estados positivos"
+    },
+    "primary_light": {
+      "name": "Soft Aqua",
+      "hex": "#82D5CF",
+      "rgb": [
+        130,
+        213,
+        207
+      ],
+      "use": "fundos leves, chips, highlights e elementos secundários"
+    },
+    "secondary": {
+      "name": "Soft Violet",
+      "hex": "#9282CE",
+      "rgb": [
+        146,
+        130,
+        206
+      ],
+      "use": "botões secundários, cards promocionais, marcações de etapas"
+    },
+    "accent_warm": {
+      "name": "Sunset Orange",
+      "hex": "#EB9937",
+      "rgb": [
+        235,
+        153,
+        55
+      ],
+      "use": "preço, promoções, badges de oferta e microinterações"
+    },
+    "accent_yellow": {
+      "name": "Warm Sand",
+      "hex": "#EFC893",
+      "rgb": [
+        239,
+        200,
+        147
+      ],
+      "use": "fundos de banners, placeholders e ilustrações"
+    },
+    "accent_coral": {
+      "name": "Soft Coral",
+      "hex": "#D3988D",
+      "rgb": [
+        211,
+        152,
+        141
+      ],
+      "use": "favoritos, alertas suaves, ilustrações de moda"
+    },
+    "info": {
+      "name": "Deep Sky",
+      "hex": "#1983AD",
+      "rgb": [
+        25,
+        131,
+        173
+      ],
+      "use": "informações, status de entrega, ícones utilitários"
+    },
+    "text": {
+      "name": "Charcoal",
+      "hex": "#2F2A33",
+      "rgb": [
+        47,
+        42,
+        51
+      ],
+      "use": "títulos e textos de alta hierarquia"
+    },
+    "muted": {
+      "name": "Cool Gray",
+      "hex": "#8D98A7",
+      "rgb": [
+        141,
+        152,
+        167
+      ],
+      "use": "descrições, labels e textos auxiliares"
+    },
+    "surface": {
+      "name": "App White",
+      "hex": "#FFFFFF",
+      "rgb": [
+        255,
+        255,
+        255
+      ],
+      "use": "cards e fundos principais"
+    },
+    "background": {
+      "name": "Soft Cloud",
+      "hex": "#F6F8FB",
+      "rgb": [
+        246,
+        248,
+        251
+      ],
+      "use": "background do app e áreas externas aos cards"
+    },
+    "line": {
+      "name": "Light Line",
+      "hex": "#E8EDF3",
+      "rgb": [
+        232,
+        237,
+        243
+      ],
+      "use": "bordas, divisores e inputs"
+    }
+  },
+  "typography": {
+    "recommended_font": "Inter, SF Pro Display, Roboto, system-ui, sans-serif",
+    "fallback": "Arial, sans-serif",
+    "scale": {
+      "display": {
+        "size": 32,
+        "line_height": 40,
+        "weight": 700
+      },
+      "h1": {
+        "size": 24,
+        "line_height": 32,
+        "weight": 700
+      },
+      "h2": {
+        "size": 20,
+        "line_height": 28,
+        "weight": 700
+      },
+      "body": {
+        "size": 16,
+        "line_height": 24,
+        "weight": 400
+      },
+      "body_small": {
+        "size": 14,
+        "line_height": 20,
+        "weight": 400
+      },
+      "caption": {
+        "size": 12,
+        "line_height": 16,
+        "weight": 500
+      },
+      "button": {
+        "size": 15,
+        "line_height": 20,
+        "weight": 700
+      }
+    }
+  },
+  "radius": {
+    "sm": 8,
+    "md": 14,
+    "lg": 22,
+    "xl": 32,
+    "pill": 999
+  },
+  "spacing": {
+    "xs": 4,
+    "sm": 8,
+    "md": 16,
+    "lg": 24,
+    "xl": 32,
+    "xxl": 48
+  },
+  "shadow": {
+    "card": "0 12px 30px rgba(47,42,51,0.08)",
+    "floating": "0 18px 40px rgba(47,42,51,0.12)"
+  },
+  "components": {
+    "button_primary": {
+      "background": "{colors.primary.hex}",
+      "text": "#FFFFFF",
+      "radius": "pill",
+      "height": 52
+    },
+    "button_secondary": {
+      "background": "{colors.secondary.hex}",
+      "text": "#FFFFFF",
+      "radius": "pill",
+      "height": 52
+    },
+    "card_product": {
+      "background": "#FFFFFF",
+      "radius": "lg",
+      "shadow": "card",
+      "image_ratio": "1:1",
+      "padding": 12
+    },
+    "input_search": {
+      "background": "#F6F8FB",
+      "border": "#E8EDF3",
+      "radius": "pill",
+      "height": 44
+    },
+    "badge_discount": {
+      "background": "#44CFB7",
+      "text": "#FFFFFF",
+      "radius": "sm"
+    },
+    "rating": {
+      "star": "#F6C343",
+      "muted": "#E8EDF3"
+    }
+  },
+  "voice": "Leve, moderno, confiável, visualmente alegre e orientado a compra rápida.",
+  "do": "Use muito espaço em branco, cards com cantos arredondados, fotos de produto recortadas em fundos coloridos e CTAs claros.",
+  "dont": "Evite telas pesadas, sombras fortes, cores saturadas em excesso e textos longos dentro de cards pequenos."
+}

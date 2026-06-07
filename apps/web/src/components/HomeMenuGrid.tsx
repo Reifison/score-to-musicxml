@@ -12,25 +12,25 @@ export function HomeMenuGrid({ onNavigate }: { onNavigate: (view: "scores" | "fa
   const items: HomeMenuItem[] = [
     {
       label: "Minhas partituras",
-      color: "#5347ce",
+      color: "#44CFB7",
       icon: <Music size={34} strokeWidth={1.75} />,
       onClick: () => onNavigate("scores")
     },
     {
       label: "Favoritas",
-      color: "#d3988d",
+      color: "#D3988D",
       icon: <Heart size={34} strokeWidth={1.75} />,
       onClick: () => onNavigate("favorites")
     },
     {
       label: "Configurações",
-      color: "#4896fe",
+      color: "#9282CE",
       icon: <Settings size={34} strokeWidth={1.75} />,
       onClick: () => onNavigate("settings")
     },
     {
       label: "Perfil",
-      color: "#9282ce",
+      color: "#1983AD",
       icon: <UserRound size={34} strokeWidth={1.75} />,
       onClick: () => onNavigate("profile")
     }

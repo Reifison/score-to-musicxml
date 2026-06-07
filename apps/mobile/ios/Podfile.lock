@@ -1,4 +1,26 @@
 PODS:
+  - DocumentScanner (2.0.4):
+    - hermes-engine
+    - RCTRequired
+    - RCTTypeSafety
+    - React-Core
+    - React-Core-prebuilt
+    - React-debug
+    - React-Fabric
+    - React-featureflags
+    - React-graphics
+    - React-ImageManager
+    - React-jsi
+    - React-NativeModulesApple
+    - React-RCTFabric
+    - React-renderercss
+    - React-rendererdebug
+    - React-utils
+    - ReactCodegen
+    - ReactCommon/turbomodule/bridging
+    - ReactCommon/turbomodule/core
+    - ReactNativeDependencies
+    - Yoga
   - EXConstants (18.0.13):
     - ExpoModulesCore
   - EXImageLoader (6.0.0):
@@ -2027,6 +2049,7 @@ PODS:
   - Yoga (0.0.0)
 
 DEPENDENCIES:
+  - DocumentScanner (from `../../../node_modules/react-native-document-scanner-plugin`)
   - EXConstants (from `../../../node_modules/expo-constants/ios`)
   - EXImageLoader (from `../../../node_modules/expo-image-loader/ios`)
   - EXJSONUtils (from `../node_modules/expo-json-utils/ios`)
@@ -2126,6 +2149,8 @@ SPEC REPOS:
     - openiap
 
 EXTERNAL SOURCES:
+  DocumentScanner:
+    :path: "../../../node_modules/react-native-document-scanner-plugin"
   EXConstants:
     :path: "../../../node_modules/expo-constants/ios"
   EXImageLoader:
@@ -2313,6 +2338,7 @@ EXTERNAL SOURCES:
     :path: "../../../node_modules/react-native/ReactCommon/yoga"
 
 SPEC CHECKSUMS:
+  DocumentScanner: 8409e7cb95cfea9c445c36886c4adc9a927973aa
   EXConstants: fce59a631a06c4151602843667f7cfe35f81e271
   EXImageLoader: 189e3476581efe3ad4d1d3fb4735b7179eb26f05
   EXJSONUtils: 1d3e4590438c3ee593684186007028a14b3686cd

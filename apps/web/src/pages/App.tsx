@@ -110,18 +110,19 @@ export function App() {
         <button className={view === "scores" ? "active" : ""} onClick={() => setView("scores")}><FileMusic size={18} /> Partituras</button>
         <button className={view === "profile" ? "active" : ""} onClick={() => setView("profile")}><UserRound size={18} /> Perfil</button>
         {isAdmin && <button className={view === "admin-users" ? "active" : ""} onClick={() => setView("admin-users")}><Users size={18} /> Usuários</button>}
-        {isAdmin && <button className={view === "admin-scores" ? "active" : ""} onClick={() => setView("admin-scores")}><Shield size={18} /> Todas</button>}
         {isAdmin && <button className={view === "audits" ? "active" : ""} onClick={() => setView("audits")}><Shield size={18} /> Logs</button>}
         <button onClick={logout}><LogOut size={18} /> Sair</button>
       </aside>
 
       <section className="content">
-        <header className="topbar">
-          <div>
-            <h1>{viewTitle(view)}</h1>
-            <p>{user.name} · {isAdmin ? "Admin" : "Usuário"}</p>
-          </div>
-        </header>
+        {view !== "home" && (
+          <header className="topbar">
+            <div>
+              <h1>{viewTitle(view)}</h1>
+              <p>{user.name} · {isAdmin ? "Admin" : "Usuário"}</p>
+            </div>
+          </header>
+        )}
 
         {view === "home" && (
           <>

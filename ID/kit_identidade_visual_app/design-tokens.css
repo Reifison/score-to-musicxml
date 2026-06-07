@@ -1,0 +1,32 @@
+:root {
+  --color-primary: #44CFB7;
+  --color-primary-light: #82D5CF;
+  --color-secondary: #9282CE;
+  --color-accent-warm: #EB9937;
+  --color-accent-yellow: #EFC893;
+  --color-accent-coral: #D3988D;
+  --color-info: #1983AD;
+  --color-text: #2F2A33;
+  --color-muted: #8D98A7;
+  --color-surface: #FFFFFF;
+  --color-background: #F6F8FB;
+  --color-line: #E8EDF3;
+  --space-xs: 4px;
+  --space-sm: 8px;
+  --space-md: 16px;
+  --space-lg: 24px;
+  --space-xl: 32px;
+  --space-xxl: 48px;
+  --radius-sm: 8px;
+  --radius-md: 14px;
+  --radius-lg: 22px;
+  --radius-xl: 32px;
+  --radius-pill: 999px;
+  --font-app: Inter, 'SF Pro Display', Roboto, system-ui, sans-serif;
+  --shadow-card: 0 12px 30px rgba(47,42,51,0.08);
+}
+
+.btn-primary { background: var(--color-primary); color: #fff; border-radius: var(--radius-pill); height: 52px; padding: 0 24px; font-weight: 700; border: 0; }
+.btn-secondary { background: var(--color-secondary); color: #fff; border-radius: var(--radius-pill); height: 52px; padding: 0 24px; font-weight: 700; border: 0; }
+.product-card { background: var(--color-surface); border-radius: var(--radius-lg); box-shadow: var(--shadow-card); padding: var(--space-md); }
+.search-input { background: var(--color-background); border: 1px solid var(--color-line); border-radius: var(--radius-pill); height: 44px; padding: 0 16px; }
