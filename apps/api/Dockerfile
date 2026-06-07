@@ -19,6 +19,8 @@ COPY --from=build /app/apps/api/dist ./apps/api/dist
 COPY --from=build /app/prisma ./prisma
 COPY --from=build /app/package.json ./package.json
 COPY --from=build /app/apps/api/package.json ./apps/api/package.json
-RUN mkdir -p storage/uploads storage/exports
+COPY apps/api/scripts/docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
+RUN chmod +x /usr/local/bin/docker-entrypoint.sh && mkdir -p storage/uploads storage/exports
 EXPOSE 4000
+ENTRYPOINT ["docker-entrypoint.sh"]
 CMD ["node", "apps/api/dist/server.js"]

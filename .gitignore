@@ -3,6 +3,8 @@ dist
 .env
 .env.*
 !.env.example
+!.env.production.example
+!apps/mobile/.env.production.example
 coverage
 storage/uploads/*
 storage/exports/*
