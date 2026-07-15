@@ -572,6 +572,45 @@ button:disabled,
   overflow-wrap: anywhere;
 }
 
+.score-name-form {
+  display: grid;
+  gap: 12px;
+}
+
+.score-name-form label {
+  display: grid;
+  gap: 8px;
+  color: var(--text);
+  font-size: 14px;
+  font-weight: 800;
+}
+
+.score-name-row {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 10px;
+  align-items: center;
+}
+
+.score-name-row input {
+  min-width: 0;
+}
+
+.score-name-row span {
+  color: var(--muted);
+  font-weight: 800;
+}
+
+.score-name-form button {
+  width: fit-content;
+  min-width: 150px;
+  min-height: 46px;
+  padding: 0 22px;
+  background: #c8bdec;
+  color: #fff;
+  border-color: transparent;
+}
+
 .details-grid {
   display: grid;
   grid-template-columns: 120px 1fr;

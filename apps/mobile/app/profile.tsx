@@ -68,7 +68,7 @@ const profileStyles = {
     opacity: 0.55
   },
   label: {
-    color: colors.text,
+    color: colors.ink,
     fontSize: 14,
     fontWeight: "700" as const
   }
