@@ -1,4 +1,9 @@
+import { execFile } from "node:child_process";
 import fs from "node:fs";
+import fsp from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+import { promisify } from "node:util";
 import { Router } from "express";
 import multer from "multer";
 import { z } from "zod";
@@ -6,6 +11,8 @@ import { env } from "../config/env.js";
 import { AppError } from "../errors/AppError.js";
 import { requireAuth } from "../middleware/auth.js";
 import { downloadRateLimit, uploadRateLimit } from "../middleware/rateLimits.js";
+
+const execFileAsync = promisify(execFile);
 
 const upload = multer({
   storage: multer.memoryStorage(),
@@ -76,3 +83,54 @@ scoreRoutes.get("/:id/preview", async (req, res) => {
   res.setHeader("Content-Type", score.mimeType);
   fs.createReadStream(filePath).pipe(res);
 });
+
+scoreRoutes.get("/:id/preview-image", async (req, res) => {
+  const score = await req.services.scores.getFor(req.user!, String(req.params.id));
+  const filePath = req.services.storage.resolveUploadPath(score.storedFilename);
+
+  if (score.fileType === "image") {
+    res.setHeader("Content-Type", score.mimeType);
+    fs.createReadStream(filePath).pipe(res);
+    return;
+  }
+
+  const pdftoppm = await findCommand(["/usr/local/bin/pdftoppm", "/opt/homebrew/bin/pdftoppm", "pdftoppm"]);
+  if (!pdftoppm) {
+    throw new AppError(501, "Preview de PDF indisponível neste servidor.", "PDF_PREVIEW_NOT_CONFIGURED");
+  }
+
+  const dir = await fsp.mkdtemp(path.join(os.tmpdir(), "score-preview-"));
+  const outputPrefix = path.join(dir, "page");
+  const outputPath = `${outputPrefix}-1.png`;
+  try {
+    await execFileAsync(pdftoppm, ["-png", "-f", "1", "-l", "1", "-scale-to", "1400", filePath, outputPrefix], {
+      timeout: 60_000,
+      maxBuffer: 2 * 1024 * 1024
+    });
+    res.setHeader("Content-Type", "image/png");
+    res.on("close", () => {
+      void fsp.rm(dir, { force: true, recursive: true });
+    });
+    fs.createReadStream(outputPath).pipe(res);
+  } catch (error) {
+    await fsp.rm(dir, { force: true, recursive: true });
+    if (error instanceof AppError) throw error;
+    throw new AppError(422, "Não foi possível gerar imagem de preview do PDF.", "PDF_PREVIEW_FAILED");
+  }
+});
+
+async function findCommand(candidates: string[]) {
+  for (const candidate of candidates) {
+    try {
+      if (candidate.includes(path.sep)) {
+        await fsp.access(candidate, fs.constants.X_OK);
+        return candidate;
+      }
+      await execFileAsync("which", [candidate], { timeout: 2000, maxBuffer: 1024 * 1024 });
+      return candidate;
+    } catch {
+      // Try the next candidate.
+    }
+  }
+  return null;
+}

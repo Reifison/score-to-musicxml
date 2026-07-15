@@ -1,121 +1,87 @@
-import { Platform, StyleSheet } from "react-native";
+import { StyleSheet } from "react-native";
 
 export const colors = {
-  text: "#2F2A33",
-  ink: "#2F2A33",
-  muted: "#8D98A7",
-  line: "#E8EDF3",
-  background: "#F6F8FB",
-  surface: "#F6F8FB",
-  panel: "#FFFFFF",
-  primary: "#44CFB7",
-  primaryLight: "#82D5CF",
-  primaryDark: "#2FA896",
-  secondary: "#9282CE",
-  accentWarm: "#EB9937",
-  accentCoral: "#D3988D",
-  info: "#1983AD",
-  danger: "#C23A3A",
-  warning: "#EB9937",
-  success: "#44CFB7"
+  ink: "#2f2a38",
+  muted: "#6f7782",
+  faint: "#98a2b3",
+  line: "#e4eaf2",
+  lineStrong: "#d7e0ea",
+  surface: "#f4f7fb",
+  surfaceSoft: "#f7f9fc",
+  panel: "#fffffe",
+  primary: "#48c9b9",
+  primaryDark: "#12856f",
+  primarySoft: "#e1faf6",
+  danger: "#c23a3a",
+  warning: "#a15c06",
+  success: "#12856f"
 };
-
-export const space = {
-  xs: 4,
-  sm: 8,
-  md: 16,
-  lg: 24,
-  xl: 32,
-  xxl: 48
-};
-
-export const radius = {
-  sm: 8,
-  md: 14,
-  lg: 22,
-  xl: 32,
-  pill: 999
-};
-
-export const cardShadow = Platform.select({
-  ios: {
-    shadowColor: "#2F2A33",
-    shadowOffset: { width: 0, height: 12 },
-    shadowOpacity: 0.08,
-    shadowRadius: 30
-  },
-  android: {
-    elevation: 4
-  },
-  default: {}
-});
 
 export const sharedStyles = StyleSheet.create({
   screen: {
     flex: 1,
-    backgroundColor: colors.background
+    backgroundColor: colors.surface
   },
   content: {
-    flex: 1,
-    padding: space.lg,
-    gap: space.md
+    flexGrow: 1,
+    padding: 24,
+    gap: 18
   },
   title: {
-    color: colors.text,
-    fontSize: 28,
-    fontWeight: "700"
+    color: colors.ink,
+    fontSize: 30,
+    fontWeight: "800",
+    lineHeight: 34
   },
   subtitle: {
     color: colors.muted,
-    fontSize: 15,
-    fontWeight: "400",
-    lineHeight: 21
+    fontSize: 13,
+    lineHeight: 19
   },
   panel: {
     backgroundColor: colors.panel,
-    borderRadius: radius.lg,
-    padding: space.md,
-    gap: space.sm + 4,
-    ...cardShadow
+    borderColor: colors.line,
+    borderRadius: 18,
+    borderWidth: 1,
+    shadowColor: "#0f172a",
+    shadowOffset: { width: 0, height: 14 },
+    shadowOpacity: 0.05,
+    shadowRadius: 18,
+    padding: 16,
+    gap: 12
   },
   input: {
-    backgroundColor: colors.background,
-    borderColor: colors.line,
-    borderRadius: radius.pill,
+    backgroundColor: colors.panel,
+    borderColor: colors.lineStrong,
+    borderRadius: 999,
     borderWidth: 1,
-    color: colors.text,
+    color: colors.ink,
     fontSize: 16,
-    minHeight: 44,
-    paddingHorizontal: space.md
+    minHeight: 50,
+    paddingHorizontal: 18
   },
   button: {
     alignItems: "center",
     backgroundColor: colors.primary,
-    borderRadius: radius.pill,
+    borderRadius: 999,
     flexDirection: "row",
-    gap: space.sm,
+    gap: 8,
     justifyContent: "center",
     minHeight: 52,
-    paddingHorizontal: space.lg
+    paddingHorizontal: 18
   },
   buttonSecondary: {
-    backgroundColor: colors.secondary
-  },
-  buttonOutline: {
     backgroundColor: colors.panel,
-    borderColor: colors.line,
+    borderColor: colors.lineStrong,
     borderWidth: 1
   },
   buttonText: {
-    color: "#FFFFFF",
+    color: "#ffffff",
     fontSize: 15,
-    fontWeight: "700"
+    fontWeight: "800"
   },
   buttonTextSecondary: {
-    color: "#FFFFFF"
-  },
-  buttonTextOutline: {
-    color: colors.text
+    color: colors.ink
   },
   error: {
     color: colors.danger,

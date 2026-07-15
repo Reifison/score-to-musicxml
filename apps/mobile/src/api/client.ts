@@ -83,17 +83,9 @@ export const api = {
     return apiRequest<{ score: Score }>(`/api/scores/${id}`, {}, token);
   },
 
-  async renameScore(token: string, id: string, originalFilename: string) {
-    return apiRequest<{ score: Score }>(`/api/scores/${id}`, {
-      method: "PATCH",
-      body: JSON.stringify({ originalFilename })
-    }, token);
-  },
-
-  async upload(token: string, file: { uri: string; name?: string; preprocessingProfile?: "document_scanner"; type?: string }) {
+  async upload(token: string, file: { uri: string; name: string; type: string }) {
     const body = new FormData();
-    body.append("file", normalizeUploadFile(file) as unknown as Blob);
-    if (file.preprocessingProfile) body.append("preprocessingProfile", file.preprocessingProfile);
+    body.append("file", file as unknown as Blob);
     return apiRequest<{ score: Score }>("/api/scores", { method: "POST", body }, token);
   },
 
@@ -120,6 +112,15 @@ export const api = {
       headers: { Authorization: `Bearer ${token}` },
       idempotent: true
     });
+  },
+
+  async downloadPreview(token: string, score: Score) {
+    const extension = score.fileType === "image" ? imageExtension(score.mimeType) : "pdf";
+    const target = new File(Paths.cache, `${score.id}-preview.${extension}`);
+    return File.downloadFileAsync(`${API_URL}/api/scores/${score.id}/preview`, target, {
+      headers: { Authorization: `Bearer ${token}` },
+      idempotent: true
+    });
   }
 };
 
@@ -128,32 +129,8 @@ function musicXmlName(name: string): string {
   return `${base}.musicxml`;
 }
 
-function normalizeUploadFile(file: { uri: string; name?: string; type?: string }) {
-  const type = file.type || mimeTypeForUri(file.uri);
-  return {
-    uri: file.uri,
-    name: validUploadName(file.name, type),
-    type
-  };
-}
-
-function validUploadName(name: string | undefined, mimeType: string) {
-  const fallback = mimeType === "application/pdf" ? "partitura.pdf" : "scan.jpg";
-  const cleaned = name?.replace(/[/\\]/g, "_").trim() || fallback;
-  if (/\.(pdf|png|jpe?g|webp)$/i.test(cleaned)) return cleaned;
-  return `${cleaned}.${extensionForMimeType(mimeType)}`;
-}
-
-function mimeTypeForUri(uri: string) {
-  if (/\.pdf(?:$|[?#])/i.test(uri)) return "application/pdf";
-  if (/\.png(?:$|[?#])/i.test(uri)) return "image/png";
-  if (/\.webp(?:$|[?#])/i.test(uri)) return "image/webp";
-  return "image/jpeg";
-}
-
-function extensionForMimeType(mimeType: string) {
-  if (mimeType === "application/pdf") return "pdf";
-  if (mimeType === "image/png") return "png";
-  if (mimeType === "image/webp") return "webp";
+function imageExtension(mimeType: string): string {
+  if (mimeType.includes("png")) return "png";
+  if (mimeType.includes("webp")) return "webp";
   return "jpg";
 }

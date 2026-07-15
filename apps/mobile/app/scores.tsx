@@ -4,29 +4,27 @@ import * as DocumentPicker from "expo-document-picker";
 import * as ImagePicker from "expo-image-picker";
 import { useIAP } from "expo-iap";
 import type { Purchase } from "expo-iap";
-import { Link, router, useLocalSearchParams } from "expo-router";
+import { Link, router } from "expo-router";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { ActivityIndicator, Alert, FlatList, Image, Modal, Platform, Pressable, RefreshControl, Text, View } from "react-native";
-import DocumentScanner, { ResponseType, ScanDocumentResponseStatus } from "react-native-document-scanner-plugin";
 import { ApiError, api } from "../src/api/client";
 import type { Score } from "../src/api/types";
 import { useAuth } from "../src/auth/AuthProvider";
+import { BottomNav, bottomNavHeight } from "../src/components/BottomNav";
 import { StatusBadge } from "../src/components/StatusBadge";
-import { colors, radius, sharedStyles } from "../src/theme/styles";
+import { colors, sharedStyles } from "../src/theme/styles";
 
 const premiumProductId = "premium_unlock";
 const premiumProductIds = [premiumProductId];
 
 export default function ScoresScreen() {
-  const { scan } = useLocalSearchParams<{ scan?: string }>();
-  const { token, user, logout } = useAuth();
+  const { token, user } = useAuth();
   const queryClient = useQueryClient();
   const [paywallVisible, setPaywallVisible] = useState(false);
-  const [pendingImage, setPendingImage] = useState<{ uri: string; name: string; type: string; preprocessingProfile?: "document_scanner" } | null>(null);
+  const [pendingImage, setPendingImage] = useState<{ uri: string; name: string; type: string; width?: number; height?: number } | null>(null);
   const [uploadError, setUploadError] = useState<string | null>(null);
   const [purchaseStatus, setPurchaseStatus] = useState<string | null>(null);
   const processedPurchases = useRef(new Set<string>());
-  const autoScanStarted = useRef(false);
 
   const {
     availablePurchases,
@@ -106,12 +104,6 @@ export default function ScoresScreen() {
     const restored = availablePurchases.find((purchase) => purchase.productId === premiumProductId);
     if (restored) void completeApplePurchase(restored, true);
   }, [availablePurchases]);
-
-  useEffect(() => {
-    if (scan !== "1" || autoScanStarted.current || !entitlementQuery.isFetched || uploadMutation.isPending) return;
-    autoScanStarted.current = true;
-    void scanWithCamera();
-  }, [scan, entitlementQuery.isFetched, uploadMutation.isPending]);
 
   const subtitle = useMemo(() => {
     if (!entitlement) return "Carregando limite de uso...";
@@ -197,34 +189,45 @@ export default function ScoresScreen() {
     const result = await ImagePicker.launchImageLibraryAsync({ allowsEditing: true, mediaTypes: ImagePicker.MediaTypeOptions.Images, quality: 0.9 });
     if (result.canceled) return;
     const asset = result.assets[0];
-    setPendingImage({ uri: asset.uri, name: asset.fileName || "partitura.jpg", type: asset.mimeType || "image/jpeg" });
+    setPendingImage({ uri: asset.uri, name: asset.fileName || "partitura.jpg", type: asset.mimeType || "image/jpeg", width: asset.width, height: asset.height });
   }
 
   async function scanWithCamera() {
     if (!(await ensureUploadAllowed())) return;
     const proceed = await new Promise<boolean>((resolve) => {
-      Alert.alert("Escanear partitura", "O scanner vai detectar as bordas da folha e corrigir a perspectiva. Mantenha a folha bem iluminada, sem sombras e ocupando quase toda a tela.", [
+      Alert.alert("Escanear partitura", "Use modo documento/scan quando o iPhone oferecer essa opcao. Mantenha a folha reta, bem iluminada, sem sombras e ocupando quase toda a tela.", [
         { text: "Cancelar", style: "cancel", onPress: () => resolve(false) },
-        { text: "Abrir scanner", onPress: () => resolve(true) }
+        { text: "Abrir camera", onPress: () => resolve(true) }
       ]);
     });
     if (!proceed) return;
-    try {
-      const result = await DocumentScanner.scanDocument({
-        croppedImageQuality: 90,
-        maxNumDocuments: 1,
-        responseType: ResponseType.ImageFilePath
-      });
-      const uri = result.scannedImages?.[0];
-      if (result.status === ScanDocumentResponseStatus.Cancel || !uri) return;
-      setPendingImage({ uri, name: "scan.jpg", type: "image/jpeg", preprocessingProfile: "document_scanner" });
-    } catch (error) {
-      Alert.alert("Scanner indisponivel", error instanceof Error ? error.message : "Nao foi possivel abrir o scanner de documentos.");
+    const permission = await ImagePicker.requestCameraPermissionsAsync();
+    if (!permission.granted) {
+      Alert.alert("Camera indisponivel", "Autorize o uso da camera para escanear partituras.");
+      return;
     }
+    const result = await ImagePicker.launchCameraAsync({ allowsEditing: true, cameraType: ImagePicker.CameraType.back, quality: 0.9 });
+    if (result.canceled) return;
+    const asset = result.assets[0];
+    setPendingImage({ uri: asset.uri, name: asset.fileName || "scan.jpg", type: asset.mimeType || "image/jpeg", width: asset.width, height: asset.height });
   }
 
   function confirmImageUpload() {
     if (!pendingImage) return;
+    const warnings = imageQualityWarnings(pendingImage);
+    if (warnings.length) {
+      Alert.alert("Revisar foto", `${warnings.join(" ")} Envie mesmo assim ou refaca a foto/recorte?`, [
+        { text: "Refazer", style: "cancel" },
+        {
+          text: "Enviar",
+          onPress: () => {
+            uploadMutation.mutate(pendingImage);
+            setPendingImage(null);
+          }
+        }
+      ]);
+      return;
+    }
     uploadMutation.mutate(pendingImage);
     setPendingImage(null);
   }
@@ -236,7 +239,7 @@ export default function ScoresScreen() {
   return (
     <View style={sharedStyles.screen}>
       <FlatList
-        contentContainerStyle={{ gap: 16, padding: 24 }}
+        contentContainerStyle={{ gap: 14, padding: 20, paddingBottom: bottomNavHeight + 24 }}
         data={scoresQuery.data?.scores ?? []}
         keyExtractor={(item) => item.id}
         ListHeaderComponent={
@@ -246,9 +249,6 @@ export default function ScoresScreen() {
                 <Text style={sharedStyles.title}>Partituras</Text>
                 <Text style={sharedStyles.subtitle}>{user?.name} · {subtitle}</Text>
               </View>
-              <Pressable onPress={logout} style={[sharedStyles.button, sharedStyles.buttonOutline, { width: 52, minHeight: 52, paddingHorizontal: 0 }]}>
-                <Ionicons color={colors.text} name="log-out-outline" size={20} />
-              </Pressable>
             </View>
 
             <View style={sharedStyles.panel}>
@@ -257,13 +257,13 @@ export default function ScoresScreen() {
                 <Text style={sharedStyles.buttonText}>Escanear partitura</Text>
               </Pressable>
               <View style={{ flexDirection: "row", gap: 10 }}>
-                <Pressable disabled={uploadMutation.isPending} onPress={pickPdf} style={[sharedStyles.button, sharedStyles.buttonOutline, { flex: 1 }]}>
-                  <Ionicons color={colors.text} name="document-outline" size={18} />
-                  <Text style={[sharedStyles.buttonText, sharedStyles.buttonTextOutline]}>PDF</Text>
+                <Pressable disabled={uploadMutation.isPending} onPress={pickPdf} style={[sharedStyles.button, sharedStyles.buttonSecondary, { flex: 1 }]}>
+                  <Ionicons color={colors.ink} name="document-outline" size={18} />
+                  <Text style={[sharedStyles.buttonText, sharedStyles.buttonTextSecondary]}>PDF</Text>
                 </Pressable>
-                <Pressable disabled={uploadMutation.isPending} onPress={pickImage} style={[sharedStyles.button, sharedStyles.buttonOutline, { flex: 1 }]}>
-                  <Ionicons color={colors.text} name="image-outline" size={18} />
-                  <Text style={[sharedStyles.buttonText, sharedStyles.buttonTextOutline]}>Foto</Text>
+                <Pressable disabled={uploadMutation.isPending} onPress={pickImage} style={[sharedStyles.button, sharedStyles.buttonSecondary, { flex: 1 }]}>
+                  <Ionicons color={colors.ink} name="image-outline" size={18} />
+                  <Text style={[sharedStyles.buttonText, sharedStyles.buttonTextSecondary]}>Foto</Text>
                 </Pressable>
               </View>
               {uploadMutation.isPending ? <ActivityIndicator color={colors.primary} /> : null}
@@ -277,9 +277,9 @@ export default function ScoresScreen() {
       />
 
       <Modal animationType="slide" transparent visible={paywallVisible}>
-        <View style={{ backgroundColor: "rgba(47,42,51,0.35)", flex: 1, justifyContent: "flex-end" }}>
-          <View style={{ backgroundColor: colors.panel, borderTopLeftRadius: radius.lg, borderTopRightRadius: radius.lg, gap: 16, padding: 24 }}>
-            <Text style={{ color: colors.text, fontSize: 22, fontWeight: "700" }}>Desbloquear scans</Text>
+        <View style={{ backgroundColor: "rgba(0,0,0,0.35)", flex: 1, justifyContent: "flex-end" }}>
+          <View style={{ backgroundColor: colors.panel, borderTopLeftRadius: 16, borderTopRightRadius: 16, gap: 14, padding: 20 }}>
+            <Text style={{ color: colors.ink, fontSize: 22, fontWeight: "700" }}>Desbloquear scans</Text>
             <Text style={sharedStyles.subtitle}>Voce usou os 3 scans gratis. A versao paga libera novos envios nesta conta.</Text>
             {Platform.OS === "ios" && !connected ? <Text style={{ color: colors.warning }}>Conectando com a App Store...</Text> : null}
             {purchaseStatus ? <Text style={sharedStyles.subtitle}>{purchaseStatus}</Text> : null}
@@ -289,21 +289,21 @@ export default function ScoresScreen() {
             <Pressable disabled={purchaseMutation.isPending} onPress={restorePremium} style={[sharedStyles.button, sharedStyles.buttonSecondary]}>
               <Text style={[sharedStyles.buttonText, sharedStyles.buttonTextSecondary]}>Restaurar compra</Text>
             </Pressable>
-            <Pressable onPress={() => setPaywallVisible(false)} style={[sharedStyles.button, sharedStyles.buttonOutline]}>
-              <Text style={[sharedStyles.buttonText, sharedStyles.buttonTextOutline]}>Agora nao</Text>
+            <Pressable onPress={() => setPaywallVisible(false)} style={[sharedStyles.button, sharedStyles.buttonSecondary]}>
+              <Text style={[sharedStyles.buttonText, sharedStyles.buttonTextSecondary]}>Agora nao</Text>
             </Pressable>
           </View>
         </View>
       </Modal>
 
       <Modal animationType="slide" visible={Boolean(pendingImage)}>
-        <View style={[sharedStyles.screen, { padding: 24, gap: 16 }]}>
+        <View style={[sharedStyles.screen, { padding: 20, gap: 16 }]}>
           <Text style={sharedStyles.title}>Conferir foto</Text>
           <Text style={sharedStyles.subtitle}>Envie apenas se a folha estiver reta, clara, recortada e ocupando quase toda a imagem.</Text>
-          {pendingImage ? <Image resizeMode="contain" source={{ uri: pendingImage.uri }} style={{ backgroundColor: colors.panel, borderRadius: radius.lg, flex: 1, width: "100%" }} /> : null}
+          {pendingImage ? <Image resizeMode="contain" source={{ uri: pendingImage.uri }} style={{ backgroundColor: "#fff", borderRadius: 8, flex: 1, width: "100%" }} /> : null}
           <View style={{ flexDirection: "row", gap: 10 }}>
-            <Pressable onPress={() => setPendingImage(null)} style={[sharedStyles.button, sharedStyles.buttonOutline, { flex: 1 }]}>
-              <Text style={[sharedStyles.buttonText, sharedStyles.buttonTextOutline]}>Refazer</Text>
+            <Pressable onPress={() => setPendingImage(null)} style={[sharedStyles.button, sharedStyles.buttonSecondary, { flex: 1 }]}>
+              <Text style={[sharedStyles.buttonText, sharedStyles.buttonTextSecondary]}>Refazer</Text>
             </Pressable>
             <Pressable onPress={confirmImageUpload} style={[sharedStyles.button, { flex: 1 }]}>
               <Text style={sharedStyles.buttonText}>Enviar</Text>
@@ -311,6 +311,7 @@ export default function ScoresScreen() {
           </View>
         </View>
       </Modal>
+      <BottomNav />
     </View>
   );
 }
@@ -321,7 +322,7 @@ function ScoreRow({ score }: { score: Score }) {
       <Pressable style={sharedStyles.panel}>
         <View style={{ flexDirection: "row", gap: 10, justifyContent: "space-between" }}>
           <View style={{ flex: 1, gap: 6 }}>
-            <Text numberOfLines={1} style={{ color: colors.text, fontSize: 16, fontWeight: "700" }}>{score.originalFilename}</Text>
+            <Text numberOfLines={1} style={{ color: colors.ink, fontSize: 16, fontWeight: "700" }}>{score.originalFilename}</Text>
             <Text style={{ color: colors.muted, fontSize: 13 }}>{formatBytes(score.fileSize)} · {new Date(score.createdAt).toLocaleDateString()}</Text>
           </View>
           <StatusBadge status={score.conversionStatus} />
@@ -335,6 +336,18 @@ function formatBytes(bytes: number) {
   if (bytes < 1024) return `${bytes} B`;
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
   return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+}
+
+function imageQualityWarnings(image: { width?: number; height?: number }) {
+  const warnings: string[] = [];
+  if ((image.width && image.width < 1200) || (image.height && image.height < 1200)) {
+    warnings.push("A imagem pode ter pouca resolucao para OMR.");
+  }
+  if (image.width && image.height) {
+    const ratio = Math.max(image.width, image.height) / Math.min(image.width, image.height);
+    if (ratio > 2.4) warnings.push("O recorte parece muito estreito para uma pagina de partitura.");
+  }
+  return warnings;
 }
 
 function getOriginalTransactionId(purchase: Purchase) {

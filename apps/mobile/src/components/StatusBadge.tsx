@@ -1,6 +1,6 @@
 import { Text, View } from "react-native";
 import type { ScoreStatus } from "../api/types";
-import { colors, radius } from "../theme/styles";
+import { colors } from "../theme/styles";
 
 const labels: Record<ScoreStatus, string> = {
   uploaded: "Enviado",
@@ -10,28 +10,19 @@ const labels: Record<ScoreStatus, string> = {
   failed: "Falhou"
 };
 
-const palette: Record<ScoreStatus, { background: string; text: string }> = {
-  uploaded: { background: colors.line, text: colors.muted },
-  queued: { background: "#FDF0DC", text: colors.accentWarm },
-  processing: { background: "#E6F9F5", text: colors.primaryDark },
-  converted: { background: "#E6F9F5", text: colors.primaryDark },
-  failed: { background: "#FCEEEE", text: colors.danger }
+const palette: Record<ScoreStatus, { background: string; color: string }> = {
+  uploaded: { background: "#eef3f8", color: colors.muted },
+  queued: { background: "#fff3d9", color: "#8a5206" },
+  processing: { background: "#e8f1ff", color: "#1c5faf" },
+  converted: { background: "#ddfbf6", color: "#0b7466" },
+  failed: { background: "#ffe7e7", color: "#a82929" }
 };
 
 export function StatusBadge({ status }: { status: ScoreStatus }) {
-  const tone = palette[status];
-
+  const state = palette[status];
   return (
-    <View
-      style={{
-        alignSelf: "flex-start",
-        backgroundColor: tone.background,
-        borderRadius: radius.pill,
-        paddingHorizontal: 12,
-        paddingVertical: 5
-      }}
-    >
-      <Text style={{ color: tone.text, fontSize: 12, fontWeight: "700" }}>{labels[status]}</Text>
+    <View style={{ alignSelf: "flex-start", backgroundColor: state.background, borderRadius: 999, paddingHorizontal: 10, paddingVertical: 5 }}>
+      <Text style={{ color: state.color, fontSize: 12, fontWeight: "800" }}>{labels[status]}</Text>
     </View>
   );
 }
