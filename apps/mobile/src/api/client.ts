@@ -1,5 +1,5 @@
 import { File, Paths } from "expo-file-system";
-import type { Entitlement, PublicUser, Score } from "./types";
+import type { AuditLog, Entitlement, PublicUser, Score } from "./types";
 
 export const API_URL = process.env.EXPO_PUBLIC_API_URL || "http://localhost:4000";
 const mobileHeader = "score-to-musicxml-ios";
@@ -77,6 +77,14 @@ export const api = {
 
   async scores(token: string) {
     return apiRequest<{ scores: Score[] }>("/api/scores", {}, token);
+  },
+
+  async users(token: string) {
+    return apiRequest<{ users: PublicUser[] }>("/api/users", {}, token);
+  },
+
+  async audits(token: string) {
+    return apiRequest<{ audits: AuditLog[] }>("/api/admin/audits", {}, token);
   },
 
   async score(token: string, id: string) {

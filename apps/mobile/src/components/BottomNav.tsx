@@ -1,7 +1,7 @@
 import { Ionicons } from "@expo/vector-icons";
 import { router, usePathname } from "expo-router";
 import type { ComponentProps } from "react";
-import { Alert, Platform, Pressable, StyleSheet, Text, View } from "react-native";
+import { Platform, Pressable, StyleSheet, Text, View } from "react-native";
 import { useAuth } from "../auth/AuthProvider";
 import { colors } from "../theme/styles";
 
@@ -25,8 +25,8 @@ export function BottomNav() {
     { key: "profile", icon: "person-outline", label: "Perfil", onPress: () => router.push("/profile") },
     ...(isAdmin
       ? [
-          { key: "users", icon: "people-outline" as const, label: "Usuarios", onPress: () => Alert.alert("Usuarios", "A area de usuarios ainda esta disponivel apenas na web.") },
-          { key: "logs", icon: "shield-outline" as const, label: "Logs", onPress: () => Alert.alert("Logs", "A area de logs ainda esta disponivel apenas na web.") }
+          { key: "users", icon: "people-outline" as const, label: "Usuarios", onPress: () => router.push("/users") },
+          { key: "logs", icon: "shield-outline" as const, label: "Logs", onPress: () => router.push("/logs") }
         ]
       : []),
     {
@@ -39,7 +39,7 @@ export function BottomNav() {
     }
   ];
 
-  const activeKey = pathname === "/" ? "home" : pathname.startsWith("/score") || pathname.startsWith("/scores") ? "scores" : pathname.startsWith("/profile") ? "profile" : "";
+  const activeKey = pathname === "/" ? "home" : pathname.startsWith("/score") || pathname.startsWith("/scores") ? "scores" : pathname.startsWith("/profile") ? "profile" : pathname.startsWith("/users") ? "users" : pathname.startsWith("/logs") ? "logs" : "";
 
   return (
     <View style={styles.wrap}>

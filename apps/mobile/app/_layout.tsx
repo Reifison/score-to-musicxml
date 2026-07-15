@@ -22,6 +22,8 @@ export default function RootLayout() {
           <Stack.Screen name="login" options={{ headerShown: false }} />
           <Stack.Screen name="profile" options={{ title: "Perfil" }} />
           <Stack.Screen name="scores" options={{ title: "Partituras" }} />
+          <Stack.Screen name="users" options={{ title: "Usuarios" }} />
+          <Stack.Screen name="logs" options={{ title: "Logs" }} />
           <Stack.Screen name="score/[id]" options={{ title: "Detalhes" }} />
         </Stack>
       </AuthProvider>

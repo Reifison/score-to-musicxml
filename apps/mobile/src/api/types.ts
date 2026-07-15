@@ -11,6 +11,16 @@ export type PublicUser = {
   updatedAt: string;
 };
 
+export type AuditLog = {
+  id: string;
+  actorId: string | null;
+  action: string;
+  entity: string | null;
+  entityId: string | null;
+  ipAddress: string | null;
+  createdAt: string;
+};
+
 export type Score = {
   id: string;
   userId: string;
