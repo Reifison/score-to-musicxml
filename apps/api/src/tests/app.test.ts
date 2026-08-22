@@ -6,6 +6,8 @@ import { createApp } from "../app.js";
 import { createServices } from "../container.js";
 import { createInMemoryRepositories } from "../repositories/inMemoryRepositories.js";
 import { FileStorageService } from "../services/FileStorageService.js";
+import { MidiExportService } from "../services/MidiExportService.js";
+import { MidiObservabilityService, type MidiMetric } from "../services/MidiObservabilityService.js";
 import { MusicXmlExportService } from "../services/MusicXmlExportService.js";
 import type { OmrAdapter } from "../services/OmrAdapter.js";
 
@@ -27,10 +29,13 @@ class TestOmrAdapter implements OmrAdapter {
 async function makeTestApp() {
   const repos = createInMemoryRepositories();
   const services = createServices(repos, { inlineQueue: true, waitForInlineQueue: true });
+  const midiMetrics: MidiMetric[] = [];
+  services.midiObservability = new MidiObservabilityService((metric) => midiMetrics.push(metric));
+  services.midiExport = new MidiExportService(undefined, services.midiObservability);
   const dir = await import("node:fs/promises").then((fs) => fs.mkdtemp(path.join(os.tmpdir(), "score-api-test-")));
   services.storage = new FileStorageService(path.join(dir, "uploads"), path.join(dir, "exports"));
   services.conversion = new (await import("../services/ScoreConversionService.js")).ScoreConversionService(repos.scores, repos.audits, services.storage, new TestOmrAdapter());
-  services.scores = new (await import("../services/ScoreService.js")).ScoreService(repos.scores, repos.audits, services.storage);
+  services.scores = new (await import("../services/ScoreService.js")).ScoreService(repos.scores, repos.audits, services.storage, services.midiExport);
   const queue = new (await import("../queues/ScoreConversionQueue.js")).InlineConversionQueue(services.conversion, true);
   services.uploads = new (await import("../services/ScoreUploadService.js")).ScoreUploadService(repos.audits, services.storage, queue, services.entitlements, services.fileSecurity);
   const app = createApp(services);
@@ -48,7 +53,7 @@ async function makeTestApp() {
     role: "user",
     isActive: true
   });
-  return { app, repos, services, admin, user };
+  return { app, repos, services, admin, user, midiMetrics };
 }
 
 async function login(app: ReturnType<typeof createApp>, email: string, password = "Password123!") {
@@ -159,8 +164,10 @@ describe("API", () => {
     const otherCookie = await login(ctx.app, "other@example.com");
     await request(ctx.app).get(`/api/scores/${created.body.score.id}`).set("Cookie", otherCookie).expect(403);
     await request(ctx.app).get(`/api/scores/${created.body.score.id}/download`).set("Cookie", otherCookie).expect(403);
+    await request(ctx.app).get(`/api/scores/${created.body.score.id}/midi`).set("Cookie", otherCookie).expect(403);
     await request(ctx.app).get(`/api/scores/${created.body.score.id}/preview`).set("Cookie", otherCookie).expect(403);
     await request(ctx.app).get(`/api/scores/${created.body.score.id}/download`).set("Cookie", adminCookie).expect(200);
+    await request(ctx.app).get(`/api/scores/${created.body.score.id}/midi`).set("Cookie", adminCookie).expect(200);
   });
 
   it("aplica limite gratuito de 3 scans e libera após compra registrada", async () => {
@@ -241,9 +248,31 @@ describe("API", () => {
     expect(detail.body.score.musicxmlFilename).toMatch(/\.musicxml$/);
     const download = await request(ctx.app).get(`/api/scores/${created.body.score.id}/download`).set("Cookie", cookie).expect(200);
     expect(download.headers["content-disposition"]).toContain("minha_partitura.musicxml");
+    expect(download.headers["cache-control"]).toBe("private, no-store, max-age=0");
+    expect(download.headers.pragma).toBe("no-cache");
+    expect(download.headers.expires).toBe("0");
+    const midi = await request(ctx.app).get(`/api/scores/${created.body.score.id}/midi`).set("Cookie", cookie).expect(200);
+    expect(midi.headers["content-type"]).toMatch(/^audio\/midi/);
+    expect(midi.headers["content-disposition"]).toContain("minha_partitura.mid");
+    expect(Buffer.isBuffer(midi.body)).toBe(true);
+    expect(midi.body.subarray(0, 4).toString("ascii")).toBe("MThd");
+    expect(midi.headers["cache-control"]).toBe("private, no-store, max-age=0");
+    expect(midi.headers.pragma).toBe("no-cache");
+    expect(midi.headers.expires).toBe("0");
+    expect(ctx.midiMetrics).toEqual(expect.arrayContaining([
+      expect.objectContaining({ metric: "midi_export", phase: "generation", status: "success", sizeBytes: midi.body.byteLength }),
+      expect.objectContaining({ metric: "midi_export", phase: "download", status: "success", sizeBytes: midi.body.byteLength })
+    ]));
 
     await ctx.repos.scores.update(created.body.score.id, { conversionStatus: "failed", errorMessage: "Falha OMR" });
     const failed = await request(ctx.app).get(`/api/scores/${created.body.score.id}`).set("Cookie", cookie).expect(200);
     expect(failed.body.score.errorMessage).toBe("Falha OMR");
+    await request(ctx.app).get(`/api/scores/${created.body.score.id}/midi`).set("Cookie", cookie).expect(409);
+    expect(ctx.midiMetrics).toContainEqual(expect.objectContaining({
+      metric: "midi_export",
+      phase: "download",
+      status: "failure",
+      errorCode: "MIDI_NOT_READY"
+    }));
   });
 });

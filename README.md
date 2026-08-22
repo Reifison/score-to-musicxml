@@ -1,6 +1,6 @@
-# Score to MusicXML
+# Conversor de Partituras
 
-App web responsivo para usuários autenticados enviarem partituras em PDF/imagem e exportarem MusicXML. A primeira versão entrega um fluxo seguro e extensível com adaptador OMR substituível.
+Aplicação web e iOS para usuários autenticados enviarem partituras em PDF/imagem, exportarem MusicXML ou MIDI e acompanharem a reprodução visual das notas. O fluxo usa um adaptador OMR substituível e mantém autenticação e autorização no backend.
 
 ## Stack
 
@@ -18,7 +18,7 @@ App web responsivo para usuários autenticados enviarem partituras em PDF/imagem
 - `apps/api`: API, autenticação, autorização, upload, auditoria, fila e worker.
 - `prisma`: modelo relacional e migrations.
 - `storage/uploads`: arquivos originais salvos com nomes internos seguros.
-- `storage/exports`: MusicXML gerado, também com nomes internos.
+- `storage/exports`: MusicXML gerado, também com nomes internos. O MIDI é derivado sob demanda e não é persistido no servidor.
 - `docs`: documentação do fluxo de conversão.
 
 Serviços principais:
@@ -28,6 +28,7 @@ Serviços principais:
 - `ScoreUploadService`: validação e persistência de uploads.
 - `ScoreConversionService`: orquestra status, OMR e exportação.
 - `MusicXmlExportService`: nomes e MusicXML.
+- `MidiExportService`: geração MIDI em memória a partir do MusicXML.
 - `FileStorageService`: escrita/leitura segura fora do público.
 
 ## Modelo de dados
@@ -52,7 +53,9 @@ O login cria um token aleatório, salva apenas o hash no banco e envia o token e
 7. Job entra na fila.
 8. Worker muda para `processing`, chama o adaptador OMR e salva MusicXML.
 9. Status vira `converted` ou `failed`.
-10. Download valida autorização e entrega `Content-Disposition` com base no nome original.
+10. Downloads de MusicXML e MIDI validam autorização e entregam `Content-Disposition` com base no nome original.
+
+O player usa o MusicXML já convertido como fonte da visualização e deriva a execução com Verovio, sem executar um segundo OMR. Se o documento não informar andamento, o player e a exportação MIDI assumem 70 BPM. MusicXML continua sendo a opção preferencial para preservar a notação; MIDI representa principalmente notas, durações, andamento e instrumentos.
 
 Com `OMR_ENGINE=stub`, o sistema valida o fluxo, mas não gera notas reais e marca a conversão como falha para não entregar um MusicXML enganoso. Para OMR real, configure `OMR_ENGINE=audiveris` e `AUDIVERIS_BIN` para o binário do Audiveris. O adaptador usa `execFile` com argumentos separados, timeout e sem shell.
 
@@ -72,6 +75,12 @@ Antes de chamar o Audiveris, PDFs são divididos página por página e renderiza
 - Proteção contra path traversal no storage.
 - Nenhum segredo hardcoded; use `.env`.
 - Auditoria de login, upload, conversão, download e ações admin.
+
+## Documentação operacional
+
+- [Suporte e limitações de MusicXML/MIDI](docs/SUPPORT.md)
+- [Política de privacidade](docs/PRIVACY_POLICY.md)
+- [Plano de liberação controlada e rollback](docs/MIDI_RELEASE_RUNBOOK.md)
 
 ## Rodando localmente
 

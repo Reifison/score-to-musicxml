@@ -1,6 +1,6 @@
 import { FileMusic, Home, KeyRound, LogOut, Shield, UserRound, Users } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
-import { api, downloadMusicXml } from "../api/client.js";
+import { api, downloadMidi, downloadMusicXml } from "../api/client.js";
 import { HomeMenuGrid } from "../components/HomeMenuGrid.js";
 import { ScoreCard } from "../components/ScoreCard.js";
 import { ScoreDetails } from "../components/ScoreDetails.js";
@@ -55,7 +55,15 @@ export function App() {
     return () => window.clearInterval(timer);
   }, [user?.id]);
 
-  if (loading) return <main className="centered">Carregando...</main>;
+  if (loading) {
+    return (
+      <main className="launch-screen" aria-live="polite">
+        <img src="/brand-icon.png" alt="" />
+        <strong>Conversor de Partituras</strong>
+        <span>Preparando seu espaço de trabalho...</span>
+      </main>
+    );
+  }
   if (!user) return <Login onLogged={(loggedUser) => setUser(loggedUser)} />;
 
   async function logout() {
@@ -114,10 +122,24 @@ export function App() {
     }
   }
 
+  async function downloadScoreMidi(score: Score) {
+    setError("");
+    setNotice("");
+    try {
+      await downloadMidi(score.id, midiName(score.originalFilename));
+      setNotice(`Download iniciado: ${midiName(score.originalFilename)}`);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Não foi possível baixar o MIDI.");
+    }
+  }
+
   return (
     <main className="app-shell">
       <aside className="sidebar">
-        <div className="brand"><FileMusic size={24} /><strong>MusicXML</strong></div>
+        <div className="brand">
+          <img src="/brand-icon.png" alt="" />
+          <strong>Conversor de<br />Partituras</strong>
+        </div>
         <button className={view === "home" ? "active" : ""} onClick={() => setView("home")}><Home size={18} /> Início</button>
         <button className={view === "scores" ? "active" : ""} onClick={() => setView("scores")}><FileMusic size={18} /> Partituras</button>
         <button className={view === "profile" ? "active" : ""} onClick={() => setView("profile")}><UserRound size={18} /> Perfil</button>
@@ -153,7 +175,7 @@ export function App() {
         {notice && <p className="success-text">{notice}</p>}
         {error && <p className="error-text">{error}</p>}
       </section>
-      {selected && <ScoreDetails score={selected} onClose={() => setSelected(null)} onDownload={downloadScore} onRename={renameScore} />}
+      {selected && <ScoreDetails score={selected} onClose={() => setSelected(null)} onDownload={downloadScore} onDownloadMidi={downloadScoreMidi} onRename={renameScore} />}
     </main>
   );
 }
@@ -181,8 +203,13 @@ function Login({ onLogged }: { onLogged: (user: User) => void }) {
   return (
     <main className="login-screen">
       <form className="login-card" onSubmit={submit}>
-        <FileMusic size={34} />
-        <h1>MusicXML</h1>
+        <div className="login-brand">
+          <img src="/brand-icon.png" alt="" />
+          <div>
+            <h1>Conversor de Partituras</h1>
+            <p>Entre para converter e acompanhar suas partituras.</p>
+          </div>
+        </div>
         <label>E-mail<input value={email} onChange={(event) => setEmail(event.target.value)} type="email" required /></label>
         <label>Senha<input value={password} onChange={(event) => setPassword(event.target.value)} type="password" required /></label>
         {error && <p className="error-text">{error}</p>}
@@ -275,6 +302,10 @@ function musicXmlName(originalFilename: string) {
   const dot = clean.lastIndexOf(".");
   const base = dot > 0 ? clean.slice(0, dot) : clean;
   return `${base || "score"}.musicxml`;
+}
+
+function midiName(originalFilename: string) {
+  return musicXmlName(originalFilename).replace(/\.musicxml$/i, ".mid");
 }
 
 function AdminUsers({ currentUser, users, onRefresh }: { currentUser: User; users: User[]; onRefresh: () => Promise<void> }) {

@@ -2,11 +2,13 @@
 
 ## Descricao Curta
 
-Converta fotos ou PDFs de partituras em arquivos MusicXML para revisar e editar em apps como MuseScore.
+Converta partituras em MusicXML, exporte MIDI e acompanhe a reproducao das notas.
 
 ## Descricao
 
-Score to MusicXML ajuda musicistas, professores e estudantes a transformar partituras em MusicXML. Envie uma foto, imagem ou PDF, acompanhe o processamento e compartilhe o arquivo MusicXML gerado com seu editor musical preferido.
+Conversor de Partituras ajuda musicistas, professores e estudantes a transformar fotos, imagens ou PDFs de partituras em MusicXML. Acompanhe o processamento, visualize e ouca a partitura com destaque das notas e exporte MusicXML ou MIDI para apps compativeis, como MuseScore e Arquivos.
+
+MusicXML e recomendado para revisar e editar a notacao. MIDI representa principalmente a execucao e pode perder detalhes de diagramacao ao ser importado. Quando a partitura nao informa andamento, a reproducao e a exportacao MIDI usam 70 BPM como valor padrao.
 
 A versao gratuita permite 3 scans totais por conta. Depois disso, o desbloqueio pago libera novos envios na mesma conta.
 
@@ -14,7 +16,7 @@ O resultado de OMR pode exigir revisao. O app mostra status, confianca e alertas
 
 ## Palavras-Chave
 
-partitura, musicxml, OMR, musica, MuseScore, PDF, scanner, notas musicais
+partitura, musicxml, MIDI, OMR, musica, MuseScore, PDF, scanner, player
 
 ## Preco E Compra
 
@@ -31,19 +33,20 @@ Para revisar:
 
 1. Entrar com a conta demo informada no App Store Connect.
 2. Enviar uma foto, imagem ou PDF de partitura.
-3. Abrir a tela de detalhes para ver status, confianca, warnings e compartilhamento MusicXML.
-4. Repetir ate atingir o limite de 3 scans gratuitos.
-5. Validar o paywall, compra sandbox e restauracao de compra.
+3. Abrir a tela de detalhes para ver status, confianca e alertas, reproduzir a partitura e acompanhar o destaque das notas.
+4. Exportar MusicXML e MIDI e conferir a folha nativa de compartilhamento.
+5. Repetir ate atingir o limite de 3 scans gratuitos.
+6. Validar o paywall, compra sandbox e restauracao de compra.
 
-O app usa camera para escanear partituras, biblioteca de fotos para selecionar imagens e seletor de arquivos para PDFs. Os arquivos enviados sao usados somente para conversao e podem ser excluidos pelo usuario.
+O app usa camera para escanear partituras, biblioteca de fotos para selecionar imagens e seletor de arquivos para PDFs. Os arquivos enviados sao usados para conversao, exportacao e reproducao e podem ser excluidos pelo usuario. O MIDI e gerado sob demanda e o MusicXML usado pelo player passa por cache temporario no aparelho.
 
 ## Checklist App Privacy
 
 - Dados de contato: e-mail.
-- Conteudo do usuario: fotos/PDFs de partituras e MusicXML gerado.
+- Conteudo do usuario: fotos/PDFs de partituras, MusicXML gerado e MIDI solicitado pelo usuario.
 - Identificadores: identificadores internos de usuario e transacoes Apple.
 - Dados de uso: contagem de scans, status de conversao e auditoria.
-- Diagnosticos/seguranca: IP e logs de erro/auditoria.
+- Diagnosticos/seguranca: IP, fase, resultado e duracao da operacao MIDI, tamanho do MIDI em caso de sucesso, codigo seguro do erro e logs de auditoria; o conteudo musical nao e incluido nos logs.
 
 ## Suporte
 

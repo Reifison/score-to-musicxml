@@ -1,14 +1,16 @@
 import type { User } from "../domain.js";
 import { AppError, forbidden, notFound } from "../errors/AppError.js";
 import type { AuditRepository, ScoreRepository } from "../repositories/contracts.js";
-import { renameOriginalFilename, safeMusicXmlFilename } from "../utils/filenames.js";
+import { renameOriginalFilename, safeMidiFilename, safeMusicXmlFilename } from "../utils/filenames.js";
 import { FileStorageService } from "./FileStorageService.js";
+import { MidiExportService } from "./MidiExportService.js";
 
 export class ScoreService {
   constructor(
     private scores: ScoreRepository,
     private audits: AuditRepository,
-    private storage: FileStorageService
+    private storage: FileStorageService,
+    private midiExport = new MidiExportService()
   ) {}
 
   async listFor(user: User, filters: { status?: string; userId?: string; favorite?: boolean } = {}) {
@@ -69,6 +71,30 @@ export class ScoreService {
     return {
       path: this.storage.resolveExportPath(score.musicxmlFilename),
       filename: safeMusicXmlFilename(score.originalFilename)
+    };
+  }
+
+  async downloadMidiFor(user: User, scoreId: string, ipAddress?: string) {
+    const score = await this.getFor(user, scoreId);
+    if (score.conversionStatus !== "converted" || !score.musicxmlFilename) {
+      throw new AppError(409, "MusicXML ainda não disponível para gerar MIDI.", "MIDI_NOT_READY");
+    }
+
+    const musicXml = await this.storage.readExport(score.musicxmlFilename);
+    const buffer = await this.midiExport.generate(musicXml);
+
+    await this.audits.create({
+      actorId: user.id,
+      action: "score_downloaded",
+      entity: "score",
+      entityId: score.id,
+      ipAddress,
+      metadata: { format: "midi" }
+    });
+
+    return {
+      buffer,
+      filename: safeMidiFilename(score.originalFilename)
     };
   }
 

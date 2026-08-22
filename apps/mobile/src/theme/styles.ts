@@ -1,20 +1,24 @@
 import { StyleSheet } from "react-native";
 
 export const colors = {
-  ink: "#2f2a38",
-  muted: "#6f7782",
-  faint: "#98a2b3",
-  line: "#e4eaf2",
-  lineStrong: "#d7e0ea",
-  surface: "#f4f7fb",
-  surfaceSoft: "#f7f9fc",
-  panel: "#fffffe",
-  primary: "#48c9b9",
-  primaryDark: "#12856f",
-  primarySoft: "#e1faf6",
-  danger: "#c23a3a",
-  warning: "#a15c06",
-  success: "#12856f"
+  ink: "#3c332f",
+  muted: "#766963",
+  faint: "#7a6d66",
+  line: "#e5ddd5",
+  lineStrong: "#d6cbc1",
+  surface: "#faf8f4",
+  surfaceSoft: "#f3efe9",
+  panel: "#fffdf9",
+  primary: "#c64225",
+  primaryDark: "#a83220",
+  primarySoft: "#fff0e7",
+  accentGold: "#d9992f",
+  accentCoral: "#d96a54",
+  accentBlue: "#4d7d91",
+  danger: "#b73d32",
+  warning: "#a96513",
+  success: "#277a57",
+  onPrimary: "#fffaf5"
 };
 
 export const sharedStyles = StyleSheet.create({
@@ -41,9 +45,9 @@ export const sharedStyles = StyleSheet.create({
   panel: {
     backgroundColor: colors.panel,
     borderColor: colors.line,
-    borderRadius: 18,
+    borderRadius: 20,
     borderWidth: 1,
-    shadowColor: "#0f172a",
+    shadowColor: "#4c2e22",
     shadowOffset: { width: 0, height: 14 },
     shadowOpacity: 0.05,
     shadowRadius: 18,
@@ -53,7 +57,7 @@ export const sharedStyles = StyleSheet.create({
   input: {
     backgroundColor: colors.panel,
     borderColor: colors.lineStrong,
-    borderRadius: 999,
+    borderRadius: 14,
     borderWidth: 1,
     color: colors.ink,
     fontSize: 16,
@@ -63,7 +67,7 @@ export const sharedStyles = StyleSheet.create({
   button: {
     alignItems: "center",
     backgroundColor: colors.primary,
-    borderRadius: 999,
+    borderRadius: 14,
     flexDirection: "row",
     gap: 8,
     justifyContent: "center",
@@ -76,7 +80,7 @@ export const sharedStyles = StyleSheet.create({
     borderWidth: 1
   },
   buttonText: {
-    color: "#ffffff",
+    color: colors.onPrimary,
     fontSize: 15,
     fontWeight: "800"
   },

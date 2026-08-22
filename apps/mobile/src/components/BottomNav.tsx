@@ -20,12 +20,12 @@ export function BottomNav() {
   const isAdmin = user?.role === "admin";
 
   const items: NavItem[] = [
-    { key: "home", icon: "home-outline", label: "Inicio", onPress: () => router.replace("/") },
+    { key: "home", icon: "home-outline", label: "Início", onPress: () => router.replace("/") },
     { key: "scores", icon: "musical-notes-outline", label: "Partituras", onPress: () => router.push("/scores") },
     { key: "profile", icon: "person-outline", label: "Perfil", onPress: () => router.push("/profile") },
     ...(isAdmin
       ? [
-          { key: "users", icon: "people-outline" as const, label: "Usuarios", onPress: () => router.push("/users") },
+          { key: "users", icon: "people-outline" as const, label: "Usuários", onPress: () => router.push("/users") },
           { key: "logs", icon: "shield-outline" as const, label: "Logs", onPress: () => router.push("/logs") }
         ]
       : []),
@@ -47,7 +47,14 @@ export function BottomNav() {
         {items.map((item) => {
           const active = item.key === activeKey;
           return (
-            <Pressable key={item.key} onPress={item.onPress} style={[styles.item, active && styles.itemActive]}>
+            <Pressable
+              accessibilityLabel={item.label}
+              accessibilityRole={item.key === "logout" ? "button" : "tab"}
+              accessibilityState={item.key === "logout" ? undefined : { selected: active }}
+              key={item.key}
+              onPress={item.onPress}
+              style={[styles.item, active && styles.itemActive]}
+            >
               <Ionicons color={active ? colors.primaryDark : colors.faint} name={item.icon} size={23} />
               <Text numberOfLines={1} style={[styles.label, active && styles.labelActive]}>{item.label}</Text>
             </Pressable>
@@ -61,7 +68,7 @@ export function BottomNav() {
 const styles = StyleSheet.create({
   bar: {
     alignItems: "center",
-    backgroundColor: "rgba(255, 255, 254, 0.98)",
+    backgroundColor: colors.panel,
     borderTopColor: colors.line,
     borderTopWidth: 1,
     flexDirection: "row",
@@ -70,7 +77,7 @@ const styles = StyleSheet.create({
     paddingBottom: Platform.OS === "ios" ? 18 : 10,
     paddingHorizontal: 8,
     paddingTop: 8,
-    shadowColor: "#0f172a",
+    shadowColor: "#4c2e22",
     shadowOffset: { width: 0, height: -12 },
     shadowOpacity: 0.12,
     shadowRadius: 24
@@ -84,12 +91,12 @@ const styles = StyleSheet.create({
     gap: 4,
     justifyContent: "center",
     minHeight: 62,
-    minWidth: 0,
+    minWidth: 44,
     paddingHorizontal: 3
   },
   itemActive: {
     backgroundColor: colors.primarySoft,
-    borderColor: "#bdeee5"
+    borderColor: "#ffd3bd"
   },
   label: {
     color: colors.faint,

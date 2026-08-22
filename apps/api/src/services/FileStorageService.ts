@@ -33,6 +33,10 @@ export class FileStorageService {
     await fs.writeFile(this.resolveExportPath(storedFilename), content, { mode: 0o600, flag: "wx" });
   }
 
+  async readExport(storedFilename: string): Promise<string> {
+    return fs.readFile(this.resolveExportPath(storedFilename), "utf8");
+  }
+
   async deleteUpload(storedFilename: string): Promise<void> {
     await fs.rm(this.resolveUploadPath(storedFilename), { force: true });
   }

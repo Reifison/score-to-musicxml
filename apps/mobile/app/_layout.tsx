@@ -2,6 +2,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { Stack } from "expo-router";
 import { useState } from "react";
 import { AuthProvider } from "../src/auth/AuthProvider";
+import { colors } from "../src/theme/styles";
 
 export default function RootLayout() {
   const [queryClient] = useState(() => new QueryClient());
@@ -13,8 +14,8 @@ export default function RootLayout() {
           screenOptions={{
             headerBackTitle: "Voltar",
             headerShadowVisible: false,
-            headerStyle: { backgroundColor: "#f4f7fb" },
-            headerTintColor: "#2f2a38",
+            headerStyle: { backgroundColor: colors.surface },
+            headerTintColor: colors.ink,
             headerTitleStyle: { fontWeight: "800" }
           }}
         >

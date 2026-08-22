@@ -18,13 +18,18 @@ const fieldLabels: Record<string, string> = {
   originalFilename: "Nome da partitura"
 };
 
-function apiErrorMessage(body: ApiErrorBody) {
+function apiErrorMessage(body: ApiErrorBody, fallback = "Erro inesperado.") {
   const fieldError = Object.entries(body.details?.fieldErrors ?? {}).find(([, messages]) => messages?.length);
   if (fieldError) {
     const [field, messages] = fieldError;
     return `${fieldLabels[field] ?? "Campo"}: ${messages?.[0]}`;
   }
-  return body.error ?? "Erro inesperado.";
+  return body.error ?? fallback;
+}
+
+async function responseError(response: Response, fallback: string): Promise<Error> {
+  const body = await response.json().catch(() => ({ error: fallback })) as ApiErrorBody;
+  return new Error(apiErrorMessage(body, fallback));
 }
 
 export async function api<T>(path: string, options: RequestInit = {}): Promise<T> {
@@ -36,8 +41,7 @@ export async function api<T>(path: string, options: RequestInit = {}): Promise<T
     credentials: "include"
   });
   if (!response.ok) {
-    const body = await response.json().catch(() => ({ error: "Erro inesperado." }));
-    throw new Error(apiErrorMessage(body));
+    throw await responseError(response, "Erro inesperado.");
   }
   if (response.status === 204) return undefined as T;
   return response.json() as Promise<T>;
@@ -51,15 +55,45 @@ export function previewUrl(scoreId: string) {
   return `${API_URL}/api/scores/${scoreId}/preview`;
 }
 
+export function midiDownloadUrl(scoreId: string) {
+  return `${API_URL}/api/scores/${scoreId}/midi`;
+}
+
+export async function fetchMusicXml(scoreId: string): Promise<string> {
+  const response = await fetch(downloadUrl(scoreId), {
+    credentials: "include"
+  });
+  if (!response.ok) {
+    throw await responseError(response, "Não foi possível carregar o MusicXML.");
+  }
+  return response.text();
+}
+
+export async function fetchMidi(scoreId: string): Promise<Blob> {
+  const response = await fetch(midiDownloadUrl(scoreId), {
+    credentials: "include"
+  });
+  if (!response.ok) {
+    throw await responseError(response, "Não foi possível baixar o MIDI.");
+  }
+  return response.blob();
+}
+
 export async function downloadMusicXml(scoreId: string, filename: string): Promise<void> {
   const response = await fetch(downloadUrl(scoreId), {
     credentials: "include"
   });
   if (!response.ok) {
-    const body = await response.json().catch(() => ({ error: "Não foi possível baixar o MusicXML." }));
-    throw new Error(body.error ?? "Não foi possível baixar o MusicXML.");
+    throw await responseError(response, "Não foi possível baixar o MusicXML.");
   }
-  const blob = await response.blob();
+  await saveBlob(await response.blob(), filename);
+}
+
+export async function downloadMidi(scoreId: string, filename: string): Promise<void> {
+  await saveBlob(await fetchMidi(scoreId), filename);
+}
+
+async function saveBlob(blob: Blob, filename: string): Promise<void> {
   const objectUrl = window.URL.createObjectURL(blob);
   const link = document.createElement("a");
   link.href = objectUrl;

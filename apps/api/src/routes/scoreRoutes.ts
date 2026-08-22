@@ -10,7 +10,8 @@ import { z } from "zod";
 import { env } from "../config/env.js";
 import { AppError } from "../errors/AppError.js";
 import { requireAuth } from "../middleware/auth.js";
-import { downloadRateLimit, uploadRateLimit } from "../middleware/rateLimits.js";
+import { downloadRateLimit, midiDownloadRateLimit, uploadRateLimit } from "../middleware/rateLimits.js";
+import { safeMidiErrorCode } from "../services/MidiObservabilityService.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -71,10 +72,43 @@ scoreRoutes.delete("/:id", async (req, res) => {
 
 scoreRoutes.get("/:id/download", downloadRateLimit, async (req, res) => {
   const download = await req.services.scores.downloadFor(req.user!, String(req.params.id), req.ip);
+  setPrivateDownloadHeaders(res);
   res.setHeader("Content-Type", "application/vnd.recordare.musicxml+xml; charset=utf-8");
   res.download(download.path, download.filename, (error) => {
     if (error && !res.headersSent) res.status(500).json({ error: "Falha ao baixar o arquivo.", code: "DOWNLOAD_FAILED" });
   });
+});
+
+scoreRoutes.get("/:id/midi", midiDownloadRateLimit, async (req, res) => {
+  const startedAt = performance.now();
+  let metricRecorded = false;
+  const recordFailure = (errorCode: string) => {
+    if (metricRecorded) return;
+    metricRecorded = true;
+    req.services.midiObservability.recordFailure("download", performance.now() - startedAt, errorCode);
+  };
+
+  try {
+    const download = await req.services.scores.downloadMidiFor(req.user!, String(req.params.id), req.ip);
+    res.once("finish", () => {
+      if (metricRecorded) return;
+      metricRecorded = true;
+      req.services.midiObservability.recordSuccess("download", performance.now() - startedAt, download.buffer.byteLength);
+    });
+    res.once("close", () => {
+      if (!res.writableFinished) recordFailure("CLIENT_DISCONNECTED");
+    });
+    res.once("error", () => recordFailure("RESPONSE_STREAM_ERROR"));
+
+    setPrivateDownloadHeaders(res);
+    res.attachment(download.filename);
+    res.setHeader("Content-Type", "audio/midi");
+    res.setHeader("Content-Length", String(download.buffer.byteLength));
+    res.send(download.buffer);
+  } catch (error) {
+    recordFailure(safeMidiErrorCode(error));
+    throw error;
+  }
 });
 
 scoreRoutes.get("/:id/preview", async (req, res) => {
@@ -133,4 +167,10 @@ async function findCommand(candidates: string[]) {
     }
   }
   return null;
+}
+
+function setPrivateDownloadHeaders(res: import("express").Response): void {
+  res.setHeader("Cache-Control", "private, no-store, max-age=0");
+  res.setHeader("Pragma", "no-cache");
+  res.setHeader("Expires", "0");
 }

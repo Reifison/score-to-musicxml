@@ -27,7 +27,7 @@ export default function ProfileScreen() {
       <View style={[sharedStyles.content, { paddingBottom: bottomNavHeight + 24 }]}>
         <View style={{ gap: 6 }}>
           <Text style={sharedStyles.title}>Perfil</Text>
-          <Text style={sharedStyles.subtitle}>Dados da sua conta no MusicXML.</Text>
+          <Text style={sharedStyles.subtitle}>Dados da sua conta no Conversor de Partituras.</Text>
         </View>
 
         <View style={sharedStyles.panel}>
@@ -51,7 +51,7 @@ export default function ProfileScreen() {
             onPress={() => passwordMutation.mutate()}
             style={[sharedStyles.button, (!token || password.length < 8 || passwordMutation.isPending) && profileStyles.disabled]}
           >
-            {passwordMutation.isPending ? <ActivityIndicator color="#fff" /> : <Text style={sharedStyles.buttonText}>Salvar senha</Text>}
+            {passwordMutation.isPending ? <ActivityIndicator color={colors.onPrimary} /> : <Text style={sharedStyles.buttonText}>Salvar senha</Text>}
           </Pressable>
 
           {message ? <Text style={{ color: colors.success }}>{message}</Text> : null}

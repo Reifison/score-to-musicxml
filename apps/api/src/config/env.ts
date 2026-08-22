@@ -26,6 +26,7 @@ const schema = z.object({
   MAX_UPLOAD_BYTES: z.coerce.number().default(10 * 1024 * 1024),
   SCORE_RETENTION_DAYS: z.coerce.number().int().positive().default(365),
   AUDIT_RETENTION_DAYS: z.coerce.number().int().positive().default(730),
+  TEMP_FILE_RETENTION_HOURS: z.coerce.number().int().positive().default(24),
   FREE_SCAN_LIMIT: z.coerce.number().int().positive().default(3),
   APPLE_PREMIUM_PRODUCT_ID: z.string().default("premium_unlock"),
   APPLE_BUNDLE_ID: z.string().default("com.scoretomusicxml.app"),

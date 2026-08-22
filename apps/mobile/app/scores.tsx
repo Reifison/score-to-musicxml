@@ -253,7 +253,7 @@ export default function ScoresScreen() {
 
             <View style={sharedStyles.panel}>
               <Pressable disabled={uploadMutation.isPending} onPress={scanWithCamera} style={sharedStyles.button}>
-                <Ionicons color="#fff" name="camera-outline" size={20} />
+                <Ionicons color={colors.onPrimary} name="camera-outline" size={20} />
                 <Text style={sharedStyles.buttonText}>Escanear partitura</Text>
               </Pressable>
               <View style={{ flexDirection: "row", gap: 10 }}>
@@ -284,7 +284,7 @@ export default function ScoresScreen() {
             {Platform.OS === "ios" && !connected ? <Text style={{ color: colors.warning }}>Conectando com a App Store...</Text> : null}
             {purchaseStatus ? <Text style={sharedStyles.subtitle}>{purchaseStatus}</Text> : null}
             <Pressable disabled={purchaseMutation.isPending} onPress={buyPremium} style={sharedStyles.button}>
-              {purchaseMutation.isPending ? <ActivityIndicator color="#fff" /> : <Text style={sharedStyles.buttonText}>Desbloquear {premiumPrice}</Text>}
+              {purchaseMutation.isPending ? <ActivityIndicator color={colors.onPrimary} /> : <Text style={sharedStyles.buttonText}>Desbloquear {premiumPrice}</Text>}
             </Pressable>
             <Pressable disabled={purchaseMutation.isPending} onPress={restorePremium} style={[sharedStyles.button, sharedStyles.buttonSecondary]}>
               <Text style={[sharedStyles.buttonText, sharedStyles.buttonTextSecondary]}>Restaurar compra</Text>
@@ -300,7 +300,7 @@ export default function ScoresScreen() {
         <View style={[sharedStyles.screen, { padding: 20, gap: 16 }]}>
           <Text style={sharedStyles.title}>Conferir foto</Text>
           <Text style={sharedStyles.subtitle}>Envie apenas se a folha estiver reta, clara, recortada e ocupando quase toda a imagem.</Text>
-          {pendingImage ? <Image resizeMode="contain" source={{ uri: pendingImage.uri }} style={{ backgroundColor: "#fff", borderRadius: 8, flex: 1, width: "100%" }} /> : null}
+          {pendingImage ? <Image resizeMode="contain" source={{ uri: pendingImage.uri }} style={{ backgroundColor: colors.panel, borderRadius: 8, flex: 1, width: "100%" }} /> : null}
           <View style={{ flexDirection: "row", gap: 10 }}>
             <Pressable onPress={() => setPendingImage(null)} style={[sharedStyles.button, sharedStyles.buttonSecondary, { flex: 1 }]}>
               <Text style={[sharedStyles.buttonText, sharedStyles.buttonTextSecondary]}>Refazer</Text>

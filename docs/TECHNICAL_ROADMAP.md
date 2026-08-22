@@ -1,6 +1,6 @@
 # Technical Roadmap: iOS App
 
-Este roadmap descreve a criação da versão iOS do Score to MusicXML. A ideia é manter o backend atual como fonte de verdade e criar um app mobile em React Native/Expo, com foco especial em capturar fotos de partitura com qualidade próxima de scan antes do upload.
+Este roadmap descreve a criação da versão iOS do Conversor de Partituras. A ideia é manter o backend atual como fonte de verdade e criar um app mobile em React Native/Expo, com foco especial em capturar fotos de partitura com qualidade próxima de scan antes do upload.
 
 ## Como Executar Este Roadmap
 
@@ -472,7 +472,7 @@ Use esta seção como trilha operacional das atividades que podem ser feitas nes
 
 - [x] Gerar projeto iOS nativo com `npx expo prebuild -p ios`. Concluído em 2026-05-09. Commit/PR: pendente. Observação: `ios/` foi criado, CocoaPods foi instalado e `pod install` gerou `ScoretoMusicXML.xcworkspace`.
 - [x] Abrir o workspace iOS no Xcode e confirmar que o projeto carrega sem erro de configuração. Concluído em 2026-05-09. Commit/PR: pendente. Observação: `open apps/mobile/ios/ScoretoMusicXML.xcworkspace` executou sem erro e `xcodebuild -list` confirmou o scheme `ScoretoMusicXML`.
-- [x] Configurar/ajustar `bundleIdentifier`, nome do app, ícone e splash. Concluído em 2026-05-09. Commit/PR: pendente. Observação: `com.scoretomusicxml.app`, nome `Score to MusicXML`, ícone e splash gerados localmente.
+- [x] Configurar/ajustar `bundleIdentifier`, nome do app, ícone e splash. Concluído em 2026-05-09 e atualizado em 2026-07-16. Commit/PR: pendente. Observação: `com.scoretomusicxml.app`, nome `Conversor de Partituras`, ícone e splash atualizados com a identidade laranja.
 - [x] Rodar API, worker e app mobile localmente. Concluído em 2026-05-09. Commit/PR: pendente. Observação: API, worker e Metro iniciados e validados localmente.
 - [x] Corrigir configuração Babel/Metro do Expo Router para o bundle iOS. Concluído em 2026-05-10. Commit/PR: pendente. Observação: adicionado `apps/mobile/babel.config.js` com `babel-preset-expo`, `apps/mobile/index.js` com fallback explícito de `EXPO_ROUTER_APP_ROOT`, `apps/mobile/metro.config.js` para monorepo e `AppDelegate.swift` restaurado para a entrada virtual padrão do Expo.
 - [x] Corrigir resolução de dependências aninhadas do Expo Router no Metro. Concluído em 2026-05-10. Commit/PR: pendente. Observação: removido `disableHierarchicalLookup` do Metro para permitir resolver `@expo/metro-runtime` dentro de `expo-router/node_modules`.

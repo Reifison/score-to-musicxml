@@ -4,10 +4,11 @@ import * as DocumentPicker from "expo-document-picker";
 import * as ImagePicker from "expo-image-picker";
 import { Redirect, router } from "expo-router";
 import type { ComponentProps } from "react";
-import { ActivityIndicator, Alert, Pressable, SafeAreaView, ScrollView, StyleSheet, Text, View } from "react-native";
+import { ActivityIndicator, Alert, Image, Pressable, SafeAreaView, ScrollView, StyleSheet, Text, View } from "react-native";
 import { api } from "../src/api/client";
 import { useAuth } from "../src/auth/AuthProvider";
 import { BottomNav, bottomNavHeight } from "../src/components/BottomNav";
+import { BrandLockup } from "../src/components/BrandLockup";
 import { colors, sharedStyles } from "../src/theme/styles";
 
 type UploadFile = { uri: string; name: string; type: string };
@@ -37,7 +38,7 @@ export default function IndexScreen() {
   if (loading) {
     return (
       <View style={styles.loading}>
-        <ActivityIndicator color={colors.primary} />
+        <Image resizeMode="contain" source={require("../assets/splash.png")} style={styles.loadingImage} />
       </View>
     );
   }
@@ -46,9 +47,9 @@ export default function IndexScreen() {
 
   const tiles: Tile[] = [
     { color: colors.primary, icon: "musical-notes-outline", label: "Minhas partituras", onPress: () => router.push("/scores") },
-    { color: "#d99a8f", icon: "heart-outline", label: "Favoritas", onPress: () => Alert.alert("Favoritas", "Esta area ainda sera ligada as suas partituras favoritas.") },
-    { color: "#9280d4", icon: "settings-outline", label: "Configuracoes", onPress: () => Alert.alert("Configuracoes", "As configuracoes do app ainda estao em preparacao.") },
-    { color: "#2189ad", icon: "person-outline", label: "Perfil", onPress: () => router.push("/profile") }
+    { color: colors.accentCoral, icon: "heart-outline", label: "Favoritas", onPress: () => Alert.alert("Favoritas", "Esta área ainda será ligada às suas partituras favoritas.") },
+    { color: colors.accentGold, icon: "settings-outline", label: "Configurações", onPress: () => Alert.alert("Configurações", "As configurações do app ainda estão em preparação.") },
+    { color: colors.accentBlue, icon: "person-outline", label: "Perfil", onPress: () => router.push("/profile") }
   ];
 
   async function pickFile() {
@@ -103,9 +104,10 @@ export default function IndexScreen() {
   return (
     <SafeAreaView style={styles.screen}>
       <ScrollView contentContainerStyle={styles.content} style={styles.scroller}>
+        <BrandLockup />
         <View style={styles.uploadPanel}>
           <Pressable disabled={uploadMutation.isPending} onPress={scanWithCamera} style={sharedStyles.button}>
-            {uploadMutation.isPending ? <ActivityIndicator color="#fffffe" /> : <Ionicons color="#fffffe" name="camera-outline" size={22} />}
+            {uploadMutation.isPending ? <ActivityIndicator color={colors.onPrimary} /> : <Ionicons color={colors.onPrimary} name="camera-outline" size={22} />}
             <Text style={sharedStyles.buttonText}>{uploadMutation.isPending ? "Enviando..." : "Escanear partitura"}</Text>
           </Pressable>
           <View style={styles.uploadActions}>
@@ -124,7 +126,7 @@ export default function IndexScreen() {
           {tiles.map((tile) => (
             <Pressable key={tile.label} onPress={tile.onPress} style={styles.tile}>
               <View style={[styles.tileIcon, { backgroundColor: tile.color }]}>
-                <Ionicons color="#fffffe" name={tile.icon} size={46} />
+                <Ionicons color={colors.onPrimary} name={tile.icon} size={34} />
               </View>
               <Text style={styles.tileText}>{tile.label}</Text>
             </Pressable>
@@ -143,16 +145,19 @@ const styles = StyleSheet.create({
   content: {
     flexGrow: 1,
     gap: 28,
-    justifyContent: "center",
     padding: 20,
     paddingBottom: bottomNavHeight + 40,
-    paddingTop: 56
+    paddingTop: 28
   },
   loading: {
     alignItems: "center",
     backgroundColor: colors.surface,
     flex: 1,
     justifyContent: "center"
+  },
+  loadingImage: {
+    height: "100%",
+    width: "100%"
   },
   screen: {
     backgroundColor: colors.surface,
@@ -165,13 +170,15 @@ const styles = StyleSheet.create({
   tile: {
     alignItems: "center",
     backgroundColor: colors.panel,
-    borderRadius: 26,
+    borderColor: colors.line,
+    borderRadius: 20,
+    borderWidth: 1,
     flexBasis: "47%",
     gap: 18,
     justifyContent: "center",
-    minHeight: 160,
-    padding: 20,
-    shadowColor: "#0f172a",
+    minHeight: 144,
+    padding: 16,
+    shadowColor: "#4c2e22",
     shadowOffset: { width: 0, height: 16 },
     shadowOpacity: 0.06,
     shadowRadius: 24
@@ -184,18 +191,18 @@ const styles = StyleSheet.create({
   },
   tileIcon: {
     alignItems: "center",
-    borderRadius: 999,
-    height: 96,
+    borderRadius: 18,
+    height: 72,
     justifyContent: "center",
-    shadowColor: "#0f172a",
+    shadowColor: "#4c2e22",
     shadowOffset: { width: 0, height: 16 },
     shadowOpacity: 0.12,
     shadowRadius: 18,
-    width: 96
+    width: 72
   },
   tileText: {
     color: colors.ink,
-    fontSize: 18,
+    fontSize: 16,
     fontWeight: "800"
   },
   uploadActions: {
@@ -209,11 +216,11 @@ const styles = StyleSheet.create({
   uploadPanel: {
     backgroundColor: colors.panel,
     borderColor: colors.line,
-    borderRadius: 26,
+    borderRadius: 22,
     borderWidth: 1,
     gap: 14,
     padding: 18,
-    shadowColor: "#0f172a",
+    shadowColor: "#4c2e22",
     shadowOffset: { width: 0, height: 14 },
     shadowOpacity: 0.05,
     shadowRadius: 18

@@ -1,4 +1,7 @@
-import { File, Paths } from "expo-file-system";
+import { Directory, File, Paths } from "expo-file-system";
+import { createMidiDownloadPlan, runMidiDownload } from "../files/midiExport";
+import { validatePlayerMusicXml, validatePlayerMusicXmlSize } from "../player/bridge";
+import { createPlayerMusicXmlDownloadPlan } from "../player/musicXmlDownload";
 import type { AuditLog, Entitlement, PublicUser, Score } from "./types";
 
 export const API_URL = process.env.EXPO_PUBLIC_API_URL || "http://localhost:4000";
@@ -122,6 +125,54 @@ export const api = {
     });
   },
 
+  async loadMusicXmlForPlayer(token: string, score: Score) {
+    const plan = createPlayerMusicXmlDownloadPlan(API_URL, token, score);
+    const directory = new Directory(Paths.cache, ...plan.directorySegments);
+    directory.create({ idempotent: true, intermediates: true });
+    const target = new File(directory, plan.filename);
+    const downloaded = await File.downloadFileAsync(plan.url, target, {
+      headers: plan.headers,
+      idempotent: plan.idempotent
+    });
+
+    try {
+      if (downloaded.size !== null) validatePlayerMusicXmlSize(downloaded.size);
+      const musicXml = await downloaded.text();
+      validatePlayerMusicXml(musicXml, downloaded.size);
+      return musicXml;
+    } finally {
+      try {
+        if (downloaded.exists) downloaded.delete();
+      } catch {
+        // A próxima leitura sobrescreve o cache isolado; a limpeza é best-effort.
+      }
+    }
+  },
+
+  async downloadMidi(token: string, score: Score) {
+    const plan = createMidiDownloadPlan(API_URL, token, score);
+    const directoryFor = (segments: readonly string[]) => new Directory(Paths.cache, ...segments);
+    return runMidiDownload(plan, {
+      ensureDirectory(segments) {
+        directoryFor(segments).create({ idempotent: true, intermediates: true });
+      },
+      download(downloadPlan) {
+        const target = new File(directoryFor(downloadPlan.directorySegments), downloadPlan.filename);
+        return File.downloadFileAsync(downloadPlan.url, target, {
+          headers: downloadPlan.headers,
+          idempotent: downloadPlan.idempotent
+        });
+      },
+      removeStale(segments, currentUri) {
+        removeStaleMidiFiles(directoryFor(segments), currentUri);
+      },
+      removeLegacy(filename, currentUri) {
+        const legacyTarget = new File(Paths.cache, filename);
+        if (legacyTarget.exists && legacyTarget.uri !== currentUri) legacyTarget.delete();
+      }
+    });
+  },
+
   async downloadPreview(token: string, score: Score) {
     const extension = score.fileType === "image" ? imageExtension(score.mimeType) : "pdf";
     const target = new File(Paths.cache, `${score.id}-preview.${extension}`);
@@ -135,6 +186,18 @@ export const api = {
 function musicXmlName(name: string): string {
   const base = name.replace(/\.[^.]+$/, "").replace(/[^a-zA-Z0-9._ -]/g, "_").trim() || "score";
   return `${base}.musicxml`;
+}
+
+function removeStaleMidiFiles(directory: Directory, currentUri: string): void {
+  try {
+    for (const entry of directory.list()) {
+      if (entry instanceof File && entry.uri !== currentUri && entry.name.toLowerCase().endsWith(".mid")) {
+        entry.delete();
+      }
+    }
+  } catch {
+    // Cache cleanup must not invalidate a MIDI that was downloaded successfully.
+  }
 }
 
 function imageExtension(mimeType: string): string {

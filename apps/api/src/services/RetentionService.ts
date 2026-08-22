@@ -1,15 +1,22 @@
 import { env } from "../config/env.js";
 import type { AuditRepository, ScoreRepository } from "../repositories/contracts.js";
 import { FileStorageService } from "./FileStorageService.js";
+import { TemporaryFileCleanupService } from "./TemporaryFileCleanupService.js";
 
 export class RetentionService {
   constructor(
     private scores: ScoreRepository,
     private audits: AuditRepository,
-    private storage: FileStorageService
+    private storage: FileStorageService,
+    private temporaryFiles = new TemporaryFileCleanupService()
   ) {}
 
-  async cleanup(ipAddress?: string): Promise<{ auditsDeleted: number; cutoff: { audits: Date; scores: Date }; scoresDeleted: number }> {
+  async cleanup(ipAddress?: string): Promise<{
+    auditsDeleted: number;
+    cutoff: { audits: Date; scores: Date };
+    scoresDeleted: number;
+    tempDirectoriesDeleted: number;
+  }> {
     const scoreCutoff = daysAgo(env.SCORE_RETENTION_DAYS);
     const auditCutoff = daysAgo(env.AUDIT_RETENTION_DAYS);
     const expiredScores = await this.scores.listOlderThan(scoreCutoff);
@@ -30,10 +37,12 @@ export class RetentionService {
     }
 
     const auditsDeleted = await this.audits.deleteOlderThan(auditCutoff);
+    const tempDirectoriesDeleted = await this.temporaryFiles.cleanupStaleDirectories();
     return {
       auditsDeleted,
       cutoff: { audits: auditCutoff, scores: scoreCutoff },
-      scoresDeleted
+      scoresDeleted,
+      tempDirectoriesDeleted
     };
   }
 }

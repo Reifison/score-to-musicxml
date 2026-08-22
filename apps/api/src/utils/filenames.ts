@@ -18,6 +18,10 @@ export function safeMusicXmlFilename(originalFilename: string): string {
   return `${basenameWithoutExtension(originalFilename)}.musicxml`;
 }
 
+export function safeMidiFilename(originalFilename: string): string {
+  return `${basenameWithoutExtension(originalFilename)}.mid`;
+}
+
 export function renameOriginalFilename(currentFilename: string, nextName: string): string {
   const current = sanitizeOriginalFilename(currentFilename);
   const currentExt = path.extname(current);

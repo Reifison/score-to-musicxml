@@ -6,12 +6,15 @@ import { AuthService } from "./services/AuthService.js";
 import { EntitlementService } from "./services/EntitlementService.js";
 import { FileStorageService } from "./services/FileStorageService.js";
 import { FileSecurityService } from "./services/FileSecurityService.js";
+import { MidiExportService } from "./services/MidiExportService.js";
+import { MidiObservabilityService } from "./services/MidiObservabilityService.js";
 import { createOmrAdapter } from "./services/OmrAdapter.js";
 import { RetentionService } from "./services/RetentionService.js";
 import { ScoreConversionService } from "./services/ScoreConversionService.js";
 import { ScoreService } from "./services/ScoreService.js";
 import { ScoreUploadService } from "./services/ScoreUploadService.js";
 import { UserService } from "./services/UserService.js";
+import { TemporaryFileCleanupService } from "./services/TemporaryFileCleanupService.js";
 
 export type AppServices = ReturnType<typeof createServices>;
 
@@ -20,6 +23,9 @@ export function createServices(repositories: Repositories = createPrismaReposito
   const fileSecurity = new FileSecurityService();
   const auth = new AuthService(repositories.users, repositories.sessions, repositories.audits);
   const entitlements = new EntitlementService(repositories.entitlements, repositories.audits);
+  const midiObservability = new MidiObservabilityService();
+  const midiExport = new MidiExportService(undefined, midiObservability);
+  const temporaryFiles = new TemporaryFileCleanupService();
   const conversion = new ScoreConversionService(repositories.scores, repositories.audits, storage, createOmrAdapter());
   let queue: ScoreConversionQueue;
   if (options.inlineQueue || !env.REDIS_URL) {
@@ -31,12 +37,14 @@ export function createServices(repositories: Repositories = createPrismaReposito
     repositories,
     storage,
     fileSecurity,
+    midiObservability,
+    midiExport,
     auth,
     entitlements,
     users: new UserService(repositories.users, repositories.audits, auth),
-    retention: new RetentionService(repositories.scores, repositories.audits, storage),
+    retention: new RetentionService(repositories.scores, repositories.audits, storage, temporaryFiles),
     conversion,
-    scores: new ScoreService(repositories.scores, repositories.audits, storage),
+    scores: new ScoreService(repositories.scores, repositories.audits, storage, midiExport),
     uploads: new ScoreUploadService(repositories.audits, storage, queue, entitlements, fileSecurity)
   };
 }
