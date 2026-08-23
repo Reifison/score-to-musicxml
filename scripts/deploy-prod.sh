@@ -13,7 +13,7 @@ fi
 # Keep this check before sourcing the file so an accidentally shared secrets
 # file is rejected without loading it into the shell environment.
 env_mode="$(stat -c '%a' .env.production 2>/dev/null || stat -f '%Lp' .env.production)"
-if [[ ! "$env_mode" =~ ^[0-7]{3,4}$ ]] || (( 10#$env_mode & 77 )); then
+if [[ "$env_mode" != "600" ]]; then
   echo "Permissões inseguras em .env.production (use chmod 600)."
   exit 1
 fi
