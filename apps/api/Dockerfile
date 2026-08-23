@@ -39,7 +39,7 @@ RUN apt-get update \
     tesseract-ocr-por \
   && mkdir -p /usr/share/applications \
   && curl -fsSL "https://github.com/Audiveris/audiveris/releases/download/${AUDIVERIS_VERSION}/Audiveris-${AUDIVERIS_VERSION}-ubuntu22.04-x86_64.deb" -o /tmp/audiveris.deb \
-  && apt-get install -y --no-install-recommends /tmp/audiveris.deb \
+  && (apt-get install -y --no-install-recommends /tmp/audiveris.deb || test -x /opt/audiveris/bin/Audiveris) \
   && rm -f /tmp/audiveris.deb \
   && rm -rf /var/lib/apt/lists/*
 ENV AUDIVERIS_BIN=/opt/audiveris/bin/Audiveris \
