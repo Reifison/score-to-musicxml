@@ -41,14 +41,28 @@ export function NativePlayerPage() {
   const [command, setCommand] = useState<ScorePlayerCommand>();
   const commandIdRef = useRef(0);
 
-  const postToHost = useCallback((message: PlayerToHostMessage) => {
-    (window as NativeWebViewWindow).ReactNativeWebView?.postMessage(
-      serializePlayerToHostMessage(message)
-    );
+  const postToHost = useCallback((message: PlayerToHostMessage): boolean => {
+    const host = (window as NativeWebViewWindow).ReactNativeWebView;
+    if (!host) return false;
+    host.postMessage(serializePlayerToHostMessage(message));
+    return true;
   }, []);
 
   useEffect(() => {
-    postToHost(BRIDGE_READY_MESSAGE);
+    // iOS can inject ReactNativeWebView just after the page's first effect.
+    // Retry the announcement so a missed one-time handshake does not leave
+    // the native screen waiting forever.
+    const announceReady = () => postToHost(BRIDGE_READY_MESSAGE);
+    let readyTimer: number | undefined;
+    if (!announceReady()) {
+      readyTimer = window.setInterval(() => {
+        if (announceReady() && readyTimer !== undefined) {
+          window.clearInterval(readyTimer);
+          readyTimer = undefined;
+        }
+      }, 250);
+    }
+    window.addEventListener("pageshow", announceReady);
 
     const handleMessage = (event: MessageEvent<unknown>) => {
       const result = parseHostToPlayerMessage(event.data);
@@ -116,6 +130,8 @@ export function NativePlayerPage() {
     window.addEventListener("message", handleMessage);
     document.addEventListener("message", handleMessage as EventListener);
     return () => {
+      if (readyTimer !== undefined) window.clearInterval(readyTimer);
+      window.removeEventListener("pageshow", announceReady);
       window.removeEventListener("message", handleMessage);
       document.removeEventListener("message", handleMessage as EventListener);
     };
