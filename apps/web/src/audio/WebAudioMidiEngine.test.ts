@@ -116,6 +116,35 @@ describe("WebAudioMidiEngine", () => {
     expect(context.oscillators[0].stop).toHaveBeenCalledWith(0.51);
   });
 
+  it("expõe piano e violão com envelopes e formas de onda diferentes", async () => {
+    const pianoContext = new FakeAudioContext();
+    const piano = new WebAudioMidiEngine({ contextFactory: () => pianoContext, instrument: "piano" });
+    await piano.play([{ pitch: 60, startMs: 0, durationMs: 500, velocity: 1 }]);
+
+    const guitarContext = new FakeAudioContext();
+    const guitar = new WebAudioMidiEngine({ contextFactory: () => guitarContext, instrument: "guitar" });
+    await guitar.play([{ pitch: 60, startMs: 0, durationMs: 500, velocity: 1 }]);
+
+    expect(piano.getInstrument()).toBe("piano");
+    expect(guitar.getInstrument()).toBe("guitar");
+    expect(pianoContext.oscillators[0].type).toBe("triangle");
+    expect(guitarContext.oscillators[0].type).toBe("sawtooth");
+    expect(pianoContext.gains[0].gain.values[1].value).toBeGreaterThan(guitarContext.gains[0].gain.values[1].value);
+  });
+
+  it("troca o instrumento durante a execução sem perder a posição", async () => {
+    const context = new FakeAudioContext();
+    const engine = new WebAudioMidiEngine({ contextFactory: () => context });
+    engine.load([{ pitch: 60, startMs: 0, durationMs: 1_000 }]);
+    await engine.playFromUserGesture();
+
+    context.currentTime = 0.25;
+    engine.setInstrument("guitar");
+
+    expect(engine.getSnapshot()).toMatchObject({ state: "playing", positionMs: 250 });
+    expect(context.oscillators.at(-1)?.type).toBe("sawtooth");
+  });
+
   it("pausa, retoma da posição musical e encerra no fim", async () => {
     const context = new FakeAudioContext();
     const timer = createScheduler();
@@ -159,6 +188,173 @@ describe("WebAudioMidiEngine", () => {
     timer.run();
 
     expect(context.oscillators).toHaveLength(1);
+  });
+
+  it("usa uma antecipação padrão de pelo menos meio segundo", async () => {
+    const context = new FakeAudioContext();
+    const engine = new WebAudioMidiEngine({ contextFactory: () => context });
+    engine.load([{ pitch: 60, startMs: 450, durationMs: 100 }]);
+
+    await engine.playFromUserGesture();
+
+    expect(context.oscillators).toHaveLength(1);
+    expect(context.oscillators[0].start).toHaveBeenCalledWith(0.45);
+  });
+
+  it("expõe telemetria operacional para duas vozes sem conteúdo musical", async () => {
+    const context = new FakeAudioContext();
+    const engine = new WebAudioMidiEngine({ contextFactory: () => context });
+    engine.load([
+      { pitch: 60, startMs: 0, durationMs: 500, voiceId: "voice-a" },
+      { pitch: 67, startMs: 0, durationMs: 500, voiceId: "voice-b" }
+    ]);
+
+    await engine.playFromUserGesture();
+
+    expect(engine.getTelemetrySnapshot()).toMatchObject({
+      expectedEvents: 2,
+      scheduledEvents: 2,
+      lateEvents: 0,
+      duplicateEvents: 0,
+      minScheduleHorizonMs: 500,
+      activeVoices: 2,
+      maxActiveVoices: 2
+    });
+    expect(engine.getTelemetrySnapshot()).not.toHaveProperty("pitch");
+    expect(engine.getTelemetrySnapshot()).not.toHaveProperty("voiceId");
+  });
+
+  it("mede jitter do agendador e identifica uma nota atrasada", async () => {
+    const context = new FakeAudioContext();
+    const timer = createScheduler();
+    const clockValues = [0, 80];
+    const engine = new WebAudioMidiEngine({
+      contextFactory: () => context,
+      scheduler: timer.scheduler,
+      clock: () => clockValues.shift() ?? 80
+    });
+    engine.load([{ pitch: 60, startMs: 550, durationMs: 1_000 }]);
+    await engine.playFromUserGesture();
+
+    context.currentTime = 0.7;
+    timer.run();
+
+    expect(engine.getTelemetrySnapshot()).toMatchObject({
+      scheduledEvents: 1,
+      lateEvents: 1,
+      schedulerTicks: 2
+    });
+    expect(engine.getTelemetrySnapshot().schedulerJitterP95Ms).toBe(55);
+  });
+
+  it("mantém uma janela limitada para o p95 de jitter", async () => {
+    const context = new FakeAudioContext();
+    const timer = createScheduler();
+    let now = 0;
+    const engine = new WebAudioMidiEngine({
+      contextFactory: () => context,
+      scheduler: timer.scheduler,
+      clock: () => now
+    });
+    engine.load([{ pitch: 60, startMs: 9_000, durationMs: 1_000 }], 10_000);
+    await engine.playFromUserGesture();
+
+    // Twenty old stalls must age out of the 128-sample diagnostic window.
+    for (let index = 0; index < 20; index += 1) {
+      now += 125;
+      timer.run();
+    }
+    for (let index = 0; index < 140; index += 1) {
+      now += 25;
+      timer.run();
+    }
+
+    expect(engine.getTelemetrySnapshot()).toMatchObject({
+      schedulerTicks: 161,
+      schedulerJitterMs: 0,
+      schedulerJitterP95Ms: 0
+    });
+  });
+
+  it("registra um underrun quando um stall atravessa uma nota ainda não agendada", async () => {
+    const context = new FakeAudioContext();
+    const timer = createScheduler();
+    const engine = new WebAudioMidiEngine({ contextFactory: () => context, scheduler: timer.scheduler });
+    engine.load([{ pitch: 60, startMs: 600, durationMs: 100 }], 1_000);
+    await engine.playFromUserGesture();
+
+    context.currentTime = 0.8;
+    timer.run();
+
+    expect(engine.getTelemetrySnapshot()).toMatchObject({
+      expectedEvents: 1,
+      scheduledEvents: 0,
+      underrunEvents: 1
+    });
+  });
+
+  it("processa underruns pendentes antes de encerrar a reprodução", async () => {
+    const context = new FakeAudioContext();
+    const timer = createScheduler();
+    const engine = new WebAudioMidiEngine({ contextFactory: () => context, scheduler: timer.scheduler });
+    engine.load([{ pitch: 60, startMs: 900, durationMs: 100 }]);
+    await engine.playFromUserGesture();
+
+    context.currentTime = 1;
+    timer.run();
+
+    expect(engine.getSnapshot()).toMatchObject({ state: "ended", positionMs: 1_000 });
+    expect(engine.getTelemetrySnapshot()).toMatchObject({
+      scheduledEvents: 0,
+      underrunEvents: 1,
+      activeVoices: 0
+    });
+    expect(timer.scheduler.clear).toHaveBeenCalled();
+  });
+
+  it("libera vozes da geração anterior antes de retomar", async () => {
+    const context = new FakeAudioContext();
+    const engine = new WebAudioMidiEngine({ contextFactory: () => context });
+    engine.load([{ pitch: 60, startMs: 0, durationMs: 1_000 }]);
+    await engine.playFromUserGesture();
+
+    engine.pause();
+    await engine.resumeFromUserGesture();
+
+    expect(engine.getTelemetrySnapshot()).toMatchObject({ activeVoices: 1, maxActiveVoices: 1 });
+  });
+
+  it("não conta como duplicação a reprogramação intencional após seek", async () => {
+    const context = new FakeAudioContext();
+    const engine = new WebAudioMidiEngine({ contextFactory: () => context });
+    engine.load([{ pitch: 60, startMs: 0, durationMs: 1_000 }]);
+    await engine.playFromUserGesture();
+    engine.pause();
+    engine.seek(500);
+    await engine.resumeFromUserGesture();
+
+    expect(engine.getTelemetrySnapshot()).toMatchObject({
+      expectedEvents: 1,
+      scheduledEvents: 2,
+      duplicateEvents: 0
+    });
+  });
+
+  it("reagenda uma nota sustentada quando o seek cai no meio dela", async () => {
+    const context = new FakeAudioContext();
+    const engine = new WebAudioMidiEngine({ contextFactory: () => context });
+    engine.load([
+      { pitch: 60, startMs: 0, durationMs: 1_000 },
+      { pitch: 64, startMs: 100, durationMs: 100 }
+    ]);
+    await engine.playFromUserGesture();
+
+    engine.pause();
+    engine.seek(500);
+    await engine.resumeFromUserGesture();
+
+    expect(context.oscillators.at(-1)?.frequency.values[0].value).toBeCloseTo(261.625565);
+    expect(context.oscillators.at(-1)?.start).toHaveBeenCalledWith(0);
   });
 
   it("preserva pausas finais quando a duração total é fornecida", async () => {

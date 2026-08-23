@@ -1,6 +1,25 @@
-import { Pause, Play, RotateCcw } from "lucide-react";
+import { Guitar, Pause, Piano, Play, RotateCcw } from "lucide-react";
 
 export type PlaybackState = "stopped" | "playing" | "paused";
+export type PlaybackInstrument = "piano" | "guitar";
+
+type PlaybackControlsProps = {
+  state: PlaybackState;
+  positionMs: number;
+  durationMs: number;
+  tempoBpm: number;
+  tempoMin?: number;
+  tempoMax?: number;
+  tempoAssumed: boolean;
+  instrument?: PlaybackInstrument;
+  sampleStatus?: string;
+  disabled?: boolean;
+  onPlayPause: () => void;
+  onRestart: () => void;
+  onSeek: (positionMs: number) => void;
+  onTempoChange: (tempoBpm: number) => void;
+  onInstrumentChange?: (instrument: PlaybackInstrument) => void;
+};
 
 export function PlaybackControls({
   state,
@@ -10,25 +29,15 @@ export function PlaybackControls({
   tempoMin = 40,
   tempoMax = 240,
   tempoAssumed,
+  instrument = "piano",
+  sampleStatus,
   disabled = false,
   onPlayPause,
   onRestart,
   onSeek,
-  onTempoChange
-}: {
-  state: PlaybackState;
-  positionMs: number;
-  durationMs: number;
-  tempoBpm: number;
-  tempoMin?: number;
-  tempoMax?: number;
-  tempoAssumed: boolean;
-  disabled?: boolean;
-  onPlayPause: () => void;
-  onRestart: () => void;
-  onSeek: (positionMs: number) => void;
-  onTempoChange: (tempoBpm: number) => void;
-}) {
+  onTempoChange,
+  onInstrumentChange = () => undefined
+}: PlaybackControlsProps) {
   const isPlaying = state === "playing";
   const safeDuration = Math.max(0, durationMs);
   const safePosition = Math.min(Math.max(0, positionMs), safeDuration);
@@ -75,7 +84,33 @@ export function PlaybackControls({
         />
         <output>{tempoBpm} BPM{tempoAssumed ? " · assumido" : ""}</output>
       </label>
-      <p className="playback-timbre">Timbre: piano digital básico</p>
+
+      <fieldset className="instrument-control" disabled={disabled}>
+        <legend>Timbre</legend>
+        <div className="instrument-options" role="group" aria-label="Escolha o timbre">
+          <button
+            className={`instrument-option${instrument === "piano" ? " is-selected" : ""}`}
+            type="button"
+            aria-pressed={instrument === "piano"}
+            onClick={() => onInstrumentChange("piano")}
+          >
+            <Piano aria-hidden="true" size={17} />
+            Piano
+          </button>
+          <button
+            className={`instrument-option${instrument === "guitar" ? " is-selected" : ""}`}
+            type="button"
+            aria-pressed={instrument === "guitar"}
+            onClick={() => onInstrumentChange("guitar")}
+          >
+            <Guitar aria-hidden="true" size={17} />
+            Violão
+          </button>
+        </div>
+      </fieldset>
+      <p className="sample-credit" aria-live="polite">
+        {sampleStatus ?? "Timbres gravados locais: Piano Salamander Grand (CC BY 3.0) e Violão Shinyguitar (CC0)."}
+      </p>
     </div>
   );
 }
