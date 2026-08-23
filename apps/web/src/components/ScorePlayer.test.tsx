@@ -123,6 +123,11 @@ describe("ScorePlayer", () => {
     expect(await screen.findByText("Página 2 de 2")).toBeInTheDocument();
     expect(container.querySelector("#note-2.note")).not.toBeNull();
     expect(engine.renderPage).toHaveBeenLastCalledWith(2);
+
+    fireEvent.click(screen.getByRole("button", { name: "Página anterior" }));
+
+    expect(await screen.findByText("Página 1 de 2")).toBeInTheDocument();
+    expect(engine.renderPage).toHaveBeenCalledTimes(2);
   });
 
   it("assume 70 BPM quando o MusicXML não informa andamento", async () => {
@@ -207,7 +212,7 @@ describe("ScorePlayer", () => {
 
     expect(await screen.findByRole("button", { name: "Pausar partitura" })).toBeInTheDocument();
     await waitFor(() => expect(view.container.querySelector("#note-1")).toHaveClass("is-playing"));
-    await waitFor(() => expect(scrollTo).toHaveBeenCalledWith({ top: 290, behavior: "smooth" }));
+    await waitFor(() => expect(scrollTo).toHaveBeenCalledWith({ top: 290, behavior: "auto" }));
     expect(scrollIntoView).not.toHaveBeenCalled();
     expect(windowScrollTo).not.toHaveBeenCalled();
     expect(FakeAudioContext.instances).toHaveLength(1);

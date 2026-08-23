@@ -976,11 +976,66 @@ button:disabled,
   cursor: pointer;
 }
 
-.playback-timbre {
-  grid-column: 2 / -1;
-  margin: -4px 0 0;
+.instrument-control {
+  grid-column: 1 / -1;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  margin: -2px 0 0;
+  padding: 0;
+  border: 0;
   color: var(--muted);
   font-size: 12px;
+  font-weight: 750;
+}
+
+.instrument-control legend {
+  float: left;
+  width: auto;
+  margin: 0;
+  padding: 0;
+}
+
+.instrument-options {
+  display: inline-flex;
+  min-height: 38px;
+  padding: 3px;
+  border: 1px solid var(--line-strong);
+  border-radius: 11px;
+  background: var(--surface);
+}
+
+.instrument-option {
+  min-height: 32px;
+  padding: 0 11px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.instrument-option:hover {
+  background: var(--brand-soft);
+  color: var(--text);
+  transform: none;
+}
+
+.instrument-option.is-selected,
+.instrument-option.is-selected:hover {
+  background: var(--brand-soft);
+  color: var(--brand-2);
+  transform: none;
+}
+
+.sample-credit {
+  grid-column: 1 / -1;
+  margin: -3px 0 0;
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.4;
 }
 
 .playback-message {
@@ -1139,7 +1194,7 @@ button:disabled,
     grid-column: 1 / -1;
   }
 
-  .playback-timbre {
+  .instrument-control {
     grid-column: 1;
     margin-top: 0;
   }
@@ -1223,10 +1278,6 @@ button:disabled,
 
   .native-player-page .tempo-control > span {
     grid-column: auto;
-  }
-
-  .native-player-page .playback-timbre {
-    display: none;
   }
 
   .native-player-page .score-sheet {
@@ -1754,7 +1805,7 @@ td select {
     grid-column: 1 / -1;
   }
 
-  .playback-timbre {
+  .instrument-control {
     grid-column: 1;
     margin-top: 0;
   }
