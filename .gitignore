@@ -5,6 +5,9 @@ dist
 !.env.example
 !.env.production.example
 !apps/mobile/.env.production.example
+# Explicitly keep real production files private even if ignore rules change.
+/.env.production
+/apps/mobile/.env.production
 coverage
 storage/uploads/*
 storage/exports/*
