@@ -143,6 +143,7 @@
 				13B07F871A680F5B00A75B9A /* Sources */,
 				13B07F8C1A680F5B00A75B9A /* Frameworks */,
 				13B07F8E1A680F5B00A75B9A /* Resources */,
+				A938FC613A0B4D99B45F8E21 /* Embed bundled score player */,
 				00DD1BFF1BD5951E006B06BC /* Bundle React Native code and images */,
 				800E24972A6A228C8D4807E9 /* [CP] Copy Pods Resources */,
 				7E1EADE4F2B464E7096E7EEF /* [CP] Embed Pods Frameworks */,
@@ -202,6 +203,19 @@
 /* End PBXResourcesBuildPhase section */
 
 /* Begin PBXShellScriptBuildPhase section */
+		A938FC613A0B4D99B45F8E21 /* Embed bundled score player */ = {
+			isa = PBXShellScriptBuildPhase;
+			alwaysOutOfDate = 1;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			name = "Embed bundled score player";
+			outputPaths = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/sh;
+			shellScript = "if [[ \"$CONFIGURATION\" != *Release* ]]; then\n  exit 0\nfi\n\nset -e\nROOT_DIR=\"$(cd \"$SRCROOT/../../..\" && pwd)\"\ncd \"$ROOT_DIR\"\nnpm run build -w apps/web\nPLAYER_SOURCE=\"$ROOT_DIR/apps/web/dist\"\nPLAYER_DEST=\"${TARGET_BUILD_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}/player\"\nif [[ ! -f \"$PLAYER_SOURCE/index.html\" ]]; then\n  echo \"error: O player web não foi gerado.\" >&2\n  exit 1\nfi\nditto \"$PLAYER_SOURCE\" \"$PLAYER_DEST\"\n";
+		};
 		00DD1BFF1BD5951E006B06BC /* Bundle React Native code and images */ = {
 			isa = PBXShellScriptBuildPhase;
 			alwaysOutOfDate = 1;

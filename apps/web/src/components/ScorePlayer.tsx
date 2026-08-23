@@ -1,7 +1,7 @@
 import { ChevronLeft, ChevronRight, FileWarning, RefreshCw } from "lucide-react";
-import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState } from "react";
 import { fetchMusicXml } from "../api/client.js";
-import type { Instrument, PlaybackSnapshot, WebAudioMidiEngine } from "../audio/index.js";
+import type { PlaybackSnapshot, WebAudioMidiEngine } from "../audio/index.js";
 import { SAMPLE_BANK_RELEASE } from "../audio/index.js";
 import { sanitizeScoreSvg } from "../score/sanitizeScoreSvg.js";
 import { applyDefaultTempo, DEFAULT_TEMPO_BPM, hasExplicitTempo } from "../score/musicXmlTempo.js";
@@ -20,8 +20,10 @@ type ScorePlayerProps = {
   scoreId?: string;
   musicXml?: string;
   command?: ScorePlayerCommand;
+  initialImmersive?: boolean;
   onStatusChange?: (state: ScorePlayerState, message?: string) => void;
   onPlaybackChange?: (snapshot: PlaybackSnapshot) => void;
+  onImmersiveChange?: (immersive: boolean) => void;
 };
 
 const INITIAL_PLAYBACK: PlaybackSnapshot = {
@@ -36,18 +38,33 @@ const INITIAL_PLAYBACK: PlaybackSnapshot = {
 
 const PLAYBACK_UI_UPDATE_INTERVAL_MS = 50;
 
+// On a narrow phone viewport Verovio needs a narrower page to wrap systems
+// before the SVG is scaled into the score viewport. This gives the immersive
+// reader three comfortable measures per line without changing desktop layout.
+function getNarrowScoreLayout() {
+  if (typeof window === "undefined") return undefined;
+  return window.matchMedia?.("(max-width: 600px)").matches
+    ? { pageWidth: 1500, scale: 50 }
+    : undefined;
+}
+
 export function ScorePlayer({
   scoreId,
   scoreName,
   musicXml: providedMusicXml,
   command,
+  initialImmersive = false,
   onStatusChange,
-  onPlaybackChange
+  onPlaybackChange,
+  onImmersiveChange
 }: ScorePlayerProps) {
   const rendererRef = useRef<VerovioScoreRenderer | null>(null);
   const audioRef = useRef<WebAudioMidiEngine | null>(null);
   const unsubscribeAudioRef = useRef<(() => void) | null>(null);
   const sheetRef = useRef<HTMLDivElement | null>(null);
+  const immersiveTriggerRef = useRef<HTMLElement | null>(null);
+  const immersiveExitRef = useRef<HTMLButtonElement | null>(null);
+  const sheetHintId = useId();
   const pageRef = useRef(1);
   const pageSvgCacheRef = useRef(new Map<number, string>());
   const playbackStateRef = useRef<PlaybackSnapshot["state"]>("idle");
@@ -59,11 +76,11 @@ export function ScorePlayer({
   const [state, setState] = useState<ScorePlayerState>("loading");
   const [error, setError] = useState("");
   const [audioError, setAudioError] = useState("");
-  const [sampleStatus, setSampleStatus] = useState(`${SAMPLE_BANK_RELEASE} · o primeiro play prepara os timbres.`);
+  const [sampleStatus, setSampleStatus] = useState(`${SAMPLE_BANK_RELEASE} · o primeiro play prepara o piano.`);
   const [audioAvailable, setAudioAvailable] = useState(false);
   const [tempoAssumed, setTempoAssumed] = useState(true);
   const [baseTempoBpm, setBaseTempoBpm] = useState(DEFAULT_TEMPO_BPM);
-  const [instrument, setInstrument] = useState<Instrument>("piano");
+  const [isImmersive, setIsImmersive] = useState(initialImmersive);
   const [playback, setPlayback] = useState<PlaybackSnapshot>(INITIAL_PLAYBACK);
   const [page, setPage] = useState(1);
   const [pageCount, setPageCount] = useState(0);
@@ -77,6 +94,31 @@ export function ScorePlayer({
   useEffect(() => {
     onPlaybackChange?.(playback);
   }, [onPlaybackChange, playback]);
+
+  useEffect(() => {
+    onImmersiveChange?.(isImmersive);
+  }, [isImmersive, onImmersiveChange]);
+
+  useEffect(() => {
+    if (!isImmersive) return;
+    const previousOverflow = document.body.style.overflow;
+    const exitOnEscape = (event: KeyboardEvent) => {
+      if (event.key !== "Escape") return;
+      event.preventDefault();
+      setIsImmersive(false);
+    };
+    document.body.style.overflow = "hidden";
+    document.addEventListener("keydown", exitOnEscape);
+    return () => {
+      document.body.style.overflow = previousOverflow;
+      document.removeEventListener("keydown", exitOnEscape);
+    };
+  }, [isImmersive]);
+
+  useLayoutEffect(() => {
+    if (isImmersive) immersiveExitRef.current?.focus();
+    else immersiveTriggerRef.current?.focus();
+  }, [isImmersive, state]);
 
   useEffect(() => {
     const audio = audioRef.current;
@@ -189,9 +231,8 @@ export function ScorePlayer({
     setState("loading");
     setError("");
     setAudioError("");
-    setSampleStatus(`${SAMPLE_BANK_RELEASE} · o primeiro play prepara os timbres.`);
+    setSampleStatus(`${SAMPLE_BANK_RELEASE} · o primeiro play prepara o piano.`);
     setAudioAvailable(false);
-    setInstrument("piano");
     playbackStateRef.current = "idle";
     pageSvgCacheRef.current.clear();
     lastPlaybackUiUpdateRef.current = null;
@@ -220,7 +261,10 @@ export function ScorePlayer({
 
         const tempoAssumedForScore = !hasExplicitTempo(musicXml);
         const playableMusicXml = applyDefaultTempo(musicXml);
-        pendingRenderer = await scoreModule.createVerovioScoreRenderer(playableMusicXml);
+        const narrowScoreLayout = getNarrowScoreLayout();
+        pendingRenderer = narrowScoreLayout
+          ? await scoreModule.createVerovioScoreRenderer(playableMusicXml, narrowScoreLayout)
+          : await scoreModule.createVerovioScoreRenderer(playableMusicXml);
         const midi = audioModule.parseMidiPlayback(pendingRenderer.renderMidiBytes());
         const renderedDurationMs = pendingRenderer.getDurationMs();
         const initialTempo = tempoAssumedForScore ? DEFAULT_TEMPO_BPM : midi.initialTempoBpm || DEFAULT_TEMPO_BPM;
@@ -289,10 +333,9 @@ export function ScorePlayer({
       if (playback.state === "playing") audio.pause();
       else if (playback.state === "paused") await audio.resume();
       else await audio.play();
-      const selectedBank = audio.getSampleBankSnapshot(instrument);
+      const selectedBank = audio.getSampleBankSnapshot("piano");
       if (selectedBank.status === "ready") {
-        const instrumentLabel = instrument === "piano" ? "Piano" : "Violão";
-        setSampleStatus(`${SAMPLE_BANK_RELEASE} · timbre gravado ativo (${selectedBank.loadedSamples} samples de ${instrumentLabel}).`);
+        setSampleStatus(`${SAMPLE_BANK_RELEASE} · piano gravado ativo (${selectedBank.loadedSamples} samples).`);
       } else {
         setSampleStatus(`${SAMPLE_BANK_RELEASE} · fallback técnico ativo; verifique a conexão local.`);
       }
@@ -321,24 +364,36 @@ export function ScorePlayer({
     }
   }
 
-  function changeInstrument(nextInstrument: Instrument) {
-    try {
-      audioRef.current?.setInstrument(nextInstrument);
-      setInstrument(nextInstrument);
-      setAudioError("");
-    } catch (instrumentError) {
-      setAudioError(instrumentError instanceof Error ? instrumentError.message : "Não foi possível alterar o timbre.");
-    }
+  function enterImmersive(event: React.MouseEvent<HTMLDivElement> | React.KeyboardEvent<HTMLDivElement>) {
+    immersiveTriggerRef.current = event.currentTarget;
+    setIsImmersive(true);
   }
 
   if (state === "loading") {
     return (
-      <div className="score-player-state score-player-loading" role="status" aria-live="polite">
+      <section className="score-player" aria-label="Visualizador da partitura">
+        <PlaybackControls
+          state="stopped"
+          positionMs={0}
+          durationMs={0}
+          tempoBpm={DEFAULT_TEMPO_BPM}
+          tempoMin={20}
+          tempoMax={400}
+          tempoAssumed
+          sampleStatus="Preparando o piano..."
+          disabled
+          onPlayPause={() => undefined}
+          onRestart={() => undefined}
+          onSeek={() => undefined}
+          onTempoChange={() => undefined}
+        />
+        <div className="score-player-state score-player-loading" role="status" aria-live="polite">
         <span className="score-skeleton score-skeleton-heading" />
         <span className="score-skeleton score-skeleton-staff" />
         <span className="score-skeleton score-skeleton-staff" />
         <span>Preparando a partitura digital...</span>
-      </div>
+        </div>
+      </section>
     );
   }
 
@@ -378,7 +433,12 @@ export function ScorePlayer({
   const tempoMax = Math.min(400, Math.floor(baseTempoBpm * 4));
 
   return (
-    <section className="score-player" aria-label="Visualizador da partitura">
+    <section
+      className={`score-player${isImmersive ? " is-immersive" : ""}`}
+      role={isImmersive ? "dialog" : undefined}
+      aria-modal={isImmersive || undefined}
+      aria-label={isImmersive ? "Partitura em tela cheia" : "Visualizador da partitura"}
+    >
       <PlaybackControls
         state={controlState}
         positionMs={playback.positionMs}
@@ -387,14 +447,15 @@ export function ScorePlayer({
         tempoMin={tempoMin}
         tempoMax={tempoMax}
         tempoAssumed={tempoAssumed}
-        instrument={instrument}
         sampleStatus={sampleStatus}
         disabled={!audioAvailable}
+        immersive={isImmersive}
         onPlayPause={() => void togglePlayback()}
         onRestart={restartPlayback}
         onSeek={seekPlayback}
         onTempoChange={changeTempo}
-        onInstrumentChange={changeInstrument}
+        onExitImmersive={() => setIsImmersive(false)}
+        exitButtonRef={immersiveExitRef}
       />
       {!audioAvailable && <p className="playback-message">Esta partitura não contém notas reproduzíveis.</p>}
       {audioError && <p className="playback-message playback-message-error" role="alert">{audioError}</p>}
@@ -402,10 +463,18 @@ export function ScorePlayer({
         ref={sheetRef}
         className="score-sheet"
         role="region"
-        aria-label="Partitura rolável"
+        aria-label={isImmersive ? "Partitura ampliada" : "Partitura rolável, toque para ampliar"}
+        aria-describedby={isImmersive ? undefined : sheetHintId}
         tabIndex={0}
+        onClick={isImmersive ? undefined : enterImmersive}
+        onKeyDown={(event) => {
+          if (isImmersive || (event.key !== "Enter" && event.key !== " ")) return;
+          event.preventDefault();
+          enterImmersive(event);
+        }}
         dangerouslySetInnerHTML={{ __html: svg }}
       />
+      {!isImmersive && <span id={sheetHintId} className="sr-only">Pressione Enter ou Espaço para ampliar a partitura.</span>}
       {pageCount > 1 && (
         <nav className="score-pagination" aria-label="Páginas da partitura">
           <button className="secondary-button" type="button" disabled={playback.state === "playing" || page === 1} onClick={() => renderPage(page - 1)} aria-label="Página anterior" title={playback.state === "playing" ? "Pause para navegar manualmente" : undefined}>

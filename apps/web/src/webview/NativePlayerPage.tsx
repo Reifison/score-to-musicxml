@@ -24,6 +24,7 @@ type ScoreSession = {
   requestId: string;
   musicXml: string;
   scoreName: string;
+  immersive: boolean;
 };
 
 const BRIDGE_READY_MESSAGE: PlayerToHostMessage = {
@@ -39,6 +40,7 @@ export function NativePlayerPage() {
   const [session, setSession] = useState<ScoreSession | null>(null);
   const sessionRef = useRef<ScoreSession | null>(null);
   const [command, setCommand] = useState<ScorePlayerCommand>();
+  const [immersive, setImmersive] = useState(false);
   const commandIdRef = useRef(0);
 
   const postToHost = useCallback((message: PlayerToHostMessage): boolean => {
@@ -85,9 +87,11 @@ export function NativePlayerPage() {
         const nextSession = {
           requestId: message.requestId,
           musicXml: message.payload.musicXml,
-          scoreName: message.payload.scoreName
+          scoreName: message.payload.scoreName,
+          immersive: message.payload.immersive === true
         };
         sessionRef.current = nextSession;
+        setImmersive(nextSession.immersive);
         setSession(nextSession);
         return;
       }
@@ -109,6 +113,7 @@ export function NativePlayerPage() {
       if (message.payload.command === "dispose") {
         const disposedRequestId = sessionRef.current.requestId;
         sessionRef.current = null;
+        setImmersive(false);
         setSession(null);
         postToHost({
           channel: PLAYER_BRIDGE_CHANNEL,
@@ -169,16 +174,31 @@ export function NativePlayerPage() {
     });
   }, [postToHost]);
 
+  const reportImmersive = useCallback((nextImmersive: boolean) => {
+    setImmersive(nextImmersive);
+    const currentSession = sessionRef.current;
+    if (!currentSession) return;
+    postToHost({
+      channel: PLAYER_BRIDGE_CHANNEL,
+      version: PLAYER_BRIDGE_VERSION,
+      type: "viewport.state",
+      requestId: currentSession.requestId,
+      payload: { immersive: nextImmersive }
+    });
+  }, [postToHost]);
+
   return (
-    <main className="native-player-page">
+    <main className={`native-player-page${immersive ? " is-score-immersive" : ""}`}>
       {session ? (
         <ScorePlayer
           key={session.requestId}
           musicXml={session.musicXml}
           scoreName={session.scoreName}
           command={command}
+          initialImmersive={session.immersive}
           onStatusChange={reportStatus}
           onPlaybackChange={reportPlayback}
+          onImmersiveChange={reportImmersive}
         />
       ) : (
         <section className="native-player-waiting" role="status" aria-live="polite">

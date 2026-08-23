@@ -115,7 +115,7 @@ describe("ScorePlayer", () => {
     expect(await screen.findByText("Página 1 de 2")).toBeInTheDocument();
     expect(container.querySelector('svg[viewBox="0 0 100 140"]')).not.toBeNull();
     expect(container.querySelector("#note-1.note")).not.toBeNull();
-    expect(screen.getByRole("region", { name: "Partitura rolável" })).toHaveAttribute("tabindex", "0");
+    expect(screen.getByRole("region", { name: "Partitura rolável, toque para ampliar" })).toHaveAttribute("tabindex", "0");
     expect(screen.getByRole("button", { name: "Página anterior" })).toBeDisabled();
 
     fireEvent.click(screen.getByRole("button", { name: "Próxima página" }));
@@ -139,6 +139,44 @@ describe("ScorePlayer", () => {
 
     expect(await screen.findByText("70 BPM · assumido")).toBeInTheDocument();
     expect(createVerovioScoreRenderer).toHaveBeenCalledWith(expect.stringContaining('<sound tempo="70"/>'));
+  });
+
+  it("amplia a partitura ao tocar e oferece uma saída acessível", async () => {
+    const engine = renderer(1);
+    const onImmersiveChange = vi.fn();
+    vi.mocked(fetchMusicXml).mockResolvedValue("<score-partwise />");
+    vi.mocked(createVerovioScoreRenderer).mockResolvedValue(engine as never);
+
+    render(<ScorePlayer scoreId="score-1" scoreName="Estudo.musicxml" onImmersiveChange={onImmersiveChange} />);
+
+    const sheet = await screen.findByRole("region", { name: "Partitura rolável, toque para ampliar" });
+    fireEvent.click(sheet);
+
+    expect(screen.getByRole("dialog", { name: "Partitura em tela cheia" })).toBeInTheDocument();
+    expect(screen.getByRole("region", { name: "Partitura ampliada" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Sair da tela cheia" })).toHaveFocus();
+    expect(onImmersiveChange).toHaveBeenLastCalledWith(true);
+
+    fireEvent.keyDown(document, { key: "Escape" });
+
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "Partitura em tela cheia" })).not.toBeInTheDocument());
+    expect(onImmersiveChange).toHaveBeenLastCalledWith(false);
+  });
+
+  it("pode nascer imersivo quando aberto pelo app nativo", async () => {
+    const engine = renderer(1);
+    vi.mocked(createVerovioScoreRenderer).mockResolvedValue(engine as never);
+
+    render(
+      <ScorePlayer
+        initialImmersive
+        musicXml="<score-partwise />"
+        scoreName="Estudo.musicxml"
+      />
+    );
+
+    expect(await screen.findByRole("dialog", { name: "Partitura em tela cheia" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Sair da tela cheia" })).toHaveFocus();
   });
 
   it("descarta o toolkit quando o player sai da tela", async () => {

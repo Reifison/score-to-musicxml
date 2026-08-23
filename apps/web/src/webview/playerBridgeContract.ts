@@ -20,6 +20,7 @@ export type HostToPlayerMessage =
       payload: {
         musicXml: string;
         scoreName: string;
+        immersive?: boolean;
       };
     }
   | {
@@ -57,6 +58,13 @@ export type PlayerToHostMessage =
       type: "playback.state";
       requestId: string;
       payload: Pick<PlaybackSnapshot, "state" | "positionMs" | "durationMs" | "tempo">;
+    }
+  | {
+      channel: typeof PLAYER_BRIDGE_CHANNEL;
+      version: typeof PLAYER_BRIDGE_VERSION;
+      type: "viewport.state";
+      requestId: string;
+      payload: { immersive: boolean };
     }
   | {
       channel: typeof PLAYER_BRIDGE_CHANNEL;
@@ -119,9 +127,12 @@ export function parseHostToPlayerMessage(raw: unknown): PlayerBridgeParseResult 
     if (
       !hasOnlyKeys(value, ["channel", "version", "type", "requestId", "payload"])
       || !isRecord(value.payload)
-      || !hasOnlyKeys(value.payload, ["musicXml", "scoreName"])
+      || !hasOnlyKeys(value.payload, value.payload.immersive === undefined
+        ? ["musicXml", "scoreName"]
+        : ["musicXml", "scoreName", "immersive"])
       || typeof value.payload.musicXml !== "string"
       || typeof value.payload.scoreName !== "string"
+      || (value.payload.immersive !== undefined && typeof value.payload.immersive !== "boolean")
       || !value.payload.scoreName.trim()
       || value.payload.scoreName.trim().length > MAX_SCORE_NAME_LENGTH
       || !isValidMusicXml(value.payload.musicXml)
@@ -137,7 +148,8 @@ export function parseHostToPlayerMessage(raw: unknown): PlayerBridgeParseResult 
         requestId: value.requestId,
         payload: {
           musicXml: value.payload.musicXml,
-          scoreName: value.payload.scoreName.trim()
+          scoreName: value.payload.scoreName.trim(),
+          ...(value.payload.immersive === true ? { immersive: true } : {})
         }
       }
     };
@@ -174,6 +186,11 @@ export function serializePlayerToHostMessage(message: PlayerToHostMessage): stri
 export function isPlayerWebViewPath(pathname: string): boolean {
   const normalized = pathname.length > 1 ? pathname.replace(/\/+$/, "") : pathname;
   return normalized === PLAYER_WEBVIEW_PATH;
+}
+
+/** Release builds load this signed document from the app bundle, not the web route. */
+export function isBundledPlayerWebViewLocation(location: Pick<Location, "pathname" | "protocol">): boolean {
+  return location.protocol === "file:" && location.pathname.endsWith("/player/index.html");
 }
 
 function failure(

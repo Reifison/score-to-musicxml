@@ -195,20 +195,63 @@ export class VerovioScoreRenderer {
       // Verovio treats exact boundaries as the preceding event; one millisecond selects
       // the event that is visually active after that boundary.
       const elements = this.toolkit.getElementsAtTime(Math.floor(timeMs) + 1);
-      return {
+      const directElements = {
         chords: stringArray(elements.chords),
         measure: nonEmptyString(elements.measure),
         notes: stringArray(elements.notes),
         page: optionalValidPage(elements.page, this.pageCount),
         rests: stringArray(elements.rests)
       };
+      // The direct lookup can lose its cursor while Verovio expands a repeat.
+      // Its timemap preserves every performed pass, so it is the reliable
+      // fallback whenever no visual target is returned.
+      if (hasVisualTarget(directElements)) return directElements;
+      return this.getElementsFromTimemap(timeMs);
     } catch (error) {
-      if (error instanceof VerovioRenderError) throw error;
-      throw new VerovioRenderError(
-        "TIMELINE_FAILED",
-        "Não foi possível localizar as notas neste instante."
-      );
+      try {
+        return this.getElementsFromTimemap(timeMs);
+      } catch {
+        if (error instanceof VerovioRenderError) throw error;
+        throw new VerovioRenderError(
+          "TIMELINE_FAILED",
+          "Não foi possível localizar as notas neste instante."
+        );
+      }
     }
+  }
+
+  /**
+   * Resolves the visual target from Verovio's performed timeline. This is
+   * repeat-aware because `renderToTimemap` expands each ritornello pass.
+   */
+  private getElementsFromTimemap(timeMs: number): VerovioTimeElements {
+    const activeIds = new Set<string>();
+    let measure: string | undefined;
+    const rawTimeline = this.toolkit.renderToTimemap({ includeMeasures: true, includeRests: true });
+    const timeline = Array.isArray(rawTimeline)
+      ? rawTimeline.slice().sort((left, right) => finiteNumber(left.tstamp) - finiteNumber(right.tstamp))
+      : [];
+
+    for (const event of timeline) {
+      if (finiteNumber(event.tstamp) > timeMs + 1) break;
+      for (const id of stringArray(event.off)) activeIds.delete(id);
+      for (const id of stringArray(event.on)) activeIds.add(id);
+      const nextMeasure = nonEmptyString(event.measureOn);
+      if (nextMeasure) measure = nextMeasure;
+    }
+
+    const notes = [...activeIds];
+    const pageTarget = measure ?? notes[0];
+    let page: number | undefined;
+    if (pageTarget) {
+      try {
+        page = optionalValidPage(this.toolkit.getPageWithElement(pageTarget), this.pageCount);
+      } catch {
+        // A missing page reference must not suppress a valid note highlight.
+      }
+    }
+
+    return { chords: [], measure, notes, rests: [], ...(page ? { page } : {}) };
   }
 
   /** Returns the tempo active at a playback position, or the supplied fallback. */
@@ -429,6 +472,12 @@ function finiteNumber(value: unknown): number {
 function stringArray(value: unknown): string[] {
   if (!Array.isArray(value)) return [];
   return value.filter((item): item is string => typeof item === "string" && item.length > 0);
+}
+
+function hasVisualTarget(elements: VerovioTimeElements): boolean {
+  return elements.notes.length > 0
+    || elements.chords.length > 0
+    || elements.rests.length > 0;
 }
 
 function nonEmptyString(value: unknown): string | undefined {

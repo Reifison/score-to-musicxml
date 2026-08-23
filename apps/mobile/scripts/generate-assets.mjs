@@ -10,11 +10,10 @@ const brandAssetsDir = path.join(repoRoot, "ID/branding_assets");
 const iosAssetsDir = path.join(mobileRoot, "ios/ScoretoMusicXML/Images.xcassets");
 
 const iconSource = path.join(brandAssetsDir, "Gemini_Generated_Image_14ktlm14ktlm14kt.png");
-const splashSource = path.join(brandAssetsDir, "Gemini_Generated_Image_14ktlm14ktlm14kt (5).png");
 const iconPath = path.join(assetsDir, "icon.png");
 const splashPath = path.join(assetsDir, "splash.png");
 
-for (const source of [iconSource, splashSource]) {
+for (const source of [iconSource]) {
   if (!fs.existsSync(source)) {
     throw new Error(`Arquivo de marca não encontrado: ${source}`);
   }
@@ -33,8 +32,9 @@ await sharp(iconSource)
   .png({ compressionLevel: 9 })
   .toFile(iconPath);
 
-// A tela de abertura usa exatamente o mockup indicado no briefing.
-await sharp(splashSource)
+// A abertura deve mostrar apenas o símbolo da marca. O mockup anterior incluía
+// uma prancha com fundo quadriculado, que acabou sendo exibida no app.
+await sharp(iconPath)
   .png({ compressionLevel: 9 })
   .toFile(splashPath);
 

@@ -3,6 +3,7 @@ import {
   PLAYER_BRIDGE_CHANNEL,
   PLAYER_BRIDGE_VERSION,
   MAX_PLAYER_MUSICXML_BYTES,
+  isBundledPlayerWebViewLocation,
   isPlayerWebViewPath,
   parseHostToPlayerMessage,
   serializePlayerToHostMessage
@@ -50,6 +51,25 @@ describe("playerBridgeContract", () => {
     });
 
     expect(result.ok).toBe(true);
+  });
+
+  it("aceita a abertura inicial do player no modo imersivo", () => {
+    const result = parseHostToPlayerMessage({
+      channel: PLAYER_BRIDGE_CHANNEL,
+      version: PLAYER_BRIDGE_VERSION,
+      type: "score.load",
+      requestId: "load-fullscreen",
+      payload: {
+        musicXml: "<score-partwise />",
+        scoreName: "Estudo.musicxml",
+        immersive: true
+      }
+    });
+
+    expect(result).toMatchObject({
+      ok: true,
+      message: { payload: { immersive: true } }
+    });
   });
 
   it("recusa JSON, canal, versão e tipos desconhecidos sem refletir o conteúdo recebido", () => {
@@ -112,6 +132,10 @@ describe("playerBridgeContract", () => {
     }).ok).toBe(false);
     expect(parseHostToPlayerMessage({
       ...envelope,
+      payload: { ...envelope.payload, immersive: "sim" }
+    }).ok).toBe(false);
+    expect(parseHostToPlayerMessage({
+      ...envelope,
       payload: {
         ...envelope.payload,
         musicXml: `<score-partwise>${"a".repeat(MAX_PLAYER_MUSICXML_BYTES)}</score-partwise>`
@@ -143,5 +167,17 @@ describe("playerBridgeContract", () => {
     expect(isPlayerWebViewPath("/mobile/player/")).toBe(true);
     expect(isPlayerWebViewPath("/")).toBe(false);
     expect(isPlayerWebViewPath("/scores/mobile/player")).toBe(false);
+    expect(isBundledPlayerWebViewLocation({
+      pathname: "/private/var/app/player/index.html",
+      protocol: "file:"
+    })).toBe(true);
+    expect(isBundledPlayerWebViewLocation({
+      pathname: "/private/var/app/index.html",
+      protocol: "file:"
+    })).toBe(false);
+    expect(isBundledPlayerWebViewLocation({
+      pathname: "/player/index.html",
+      protocol: "https:"
+    })).toBe(false);
   });
 });

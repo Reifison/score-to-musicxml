@@ -56,6 +56,13 @@ export type PlayerToHostMessage =
   | {
       channel: typeof PLAYER_BRIDGE_CHANNEL;
       version: typeof PLAYER_BRIDGE_VERSION;
+      type: "viewport.state";
+      requestId: string;
+      payload: { immersive: boolean };
+    }
+  | {
+      channel: typeof PLAYER_BRIDGE_CHANNEL;
+      version: typeof PLAYER_BRIDGE_VERSION;
       type: "bridge.error";
       requestId?: string;
       payload: { code: PlayerBridgeErrorCode; message: string };
@@ -68,7 +75,8 @@ export type PlayerMessageParseResult =
 export function createScoreLoadMessage(
   requestId: string,
   musicXml: string,
-  scoreName: string
+  scoreName: string,
+  immersive = false
 ): string {
   assertRequestId(requestId);
   const normalizedName = scoreName.trim();
@@ -81,7 +89,11 @@ export function createScoreLoadMessage(
     version: PLAYER_BRIDGE_VERSION,
     type: "score.load",
     requestId,
-    payload: { musicXml, scoreName: normalizedName }
+    payload: {
+      musicXml,
+      scoreName: normalizedName,
+      ...(immersive ? { immersive: true } : {})
+    }
   });
 }
 
@@ -182,6 +194,23 @@ export function parsePlayerToHostMessage(raw: unknown): PlayerMessageParseResult
           durationMs: value.payload.durationMs,
           tempo: value.payload.tempo
         }
+      }
+    };
+  }
+
+  if (value.type === "viewport.state") {
+    if (!validEnvelopeWithRequest(value) || !isRecord(value.payload)) return invalid("invalid-message");
+    if (!hasOnlyKeys(value.payload, ["immersive"]) || typeof value.payload.immersive !== "boolean") {
+      return invalid("invalid-message");
+    }
+    return {
+      ok: true,
+      message: {
+        channel: PLAYER_BRIDGE_CHANNEL,
+        version: PLAYER_BRIDGE_VERSION,
+        type: "viewport.state",
+        requestId: value.requestId,
+        payload: { immersive: value.payload.immersive }
       }
     };
   }

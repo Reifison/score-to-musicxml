@@ -1,4 +1,5 @@
 import { Ionicons } from "@expo/vector-icons";
+import { Paths } from "expo-file-system";
 import { useFocusEffect } from "expo-router";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ActivityIndicator, AppState, Pressable, StyleSheet, Text, View } from "react-native";
@@ -15,6 +16,7 @@ import {
 import {
   isTrustedPlayerDocument,
   isTrustedPlayerOrigin,
+  resolveBundledPlayerWebViewConfig,
   resolvePlayerWebViewConfig,
   type PlayerWebViewConfig
 } from "./config";
@@ -34,13 +36,19 @@ type NativePlayerState =
   | "error";
 
 type ScorePlayerWebViewProps = {
+  immersive?: boolean;
+  onImmersiveChange?: (immersive: boolean) => void;
   score: Score;
   token: string;
 };
 
-export function ScorePlayerWebView({ score, token }: ScorePlayerWebViewProps) {
+export function ScorePlayerWebView({ immersive = false, onImmersiveChange, score, token }: ScorePlayerWebViewProps) {
   const webViewRef = useRef<WebView>(null);
   const activeRequestIdRef = useRef<string | null>(null);
+  // Keep the last downloaded document outside render state. Native fullscreen
+  // can recreate the WebView while the score screen stays mounted; the new
+  // bridge must receive the existing XML again without another API request.
+  const musicXmlCacheRef = useRef<string | null>(null);
   const requestSequenceRef = useRef(0);
   const commandSequenceRef = useRef(0);
   const hasFocusedRef = useRef(false);
@@ -54,7 +62,12 @@ export function ScorePlayerWebView({ score, token }: ScorePlayerWebViewProps) {
     try {
       return {
         ok: true as const,
-        value: resolvePlayerWebViewConfig(process.env.EXPO_PUBLIC_PLAYER_URL, __DEV__)
+        value: __DEV__
+          ? resolvePlayerWebViewConfig(
+            process.env.EXPO_PUBLIC_PLAYER_URL,
+            process.env.EXPO_PUBLIC_ALLOW_HTTP_PLAYER === "1"
+          )
+          : resolveBundledPlayerWebViewConfig(Paths.bundle.uri)
       };
     } catch (configError) {
       return {
@@ -101,6 +114,7 @@ export function ScorePlayerWebView({ score, token }: ScorePlayerWebViewProps) {
     if (score.conversionStatus !== "converted" || !configResult.ok) return;
     let cancelled = false;
     activeRequestIdRef.current = null;
+    musicXmlCacheRef.current = null;
     setBridgeReady(false);
     setMusicXml(null);
     setError("");
@@ -109,6 +123,7 @@ export function ScorePlayerWebView({ score, token }: ScorePlayerWebViewProps) {
     void api.loadMusicXmlForPlayer(token, score)
       .then((document) => {
         if (cancelled) return;
+        musicXmlCacheRef.current = document;
         setMusicXml(document);
         setState("waiting-webview");
       })
@@ -126,14 +141,14 @@ export function ScorePlayerWebView({ score, token }: ScorePlayerWebViewProps) {
     return () => {
       cancelled = true;
     };
-  }, [configResult.ok, retryKey, score, token]);
+  }, [configResult.ok, retryKey, score.conversionStatus, score.id, score.originalFilename, token]);
 
   useEffect(() => {
     if (!bridgeReady || !musicXml || !webViewRef.current || state === "error") return;
     requestSequenceRef.current += 1;
     const requestId = `load-${Date.now().toString(36)}-${requestSequenceRef.current}`;
     try {
-      const message = createScoreLoadMessage(requestId, musicXml, score.originalFilename);
+      const message = createScoreLoadMessage(requestId, musicXml, score.originalFilename, immersive);
       activeRequestIdRef.current = requestId;
       setState("sending");
       webViewRef.current.postMessage(message);
@@ -165,9 +180,18 @@ export function ScorePlayerWebView({ score, token }: ScorePlayerWebViewProps) {
     const message = parsed.message;
     if (message.type === "bridge.ready") {
       setBridgeReady(true);
+      // The WebView remains mounted while the native shell changes its bounds.
+      // Reuse the cached document only when the web document itself is new.
+      const cachedMusicXml = musicXmlCacheRef.current;
+      if (cachedMusicXml && !musicXml) setMusicXml(cachedMusicXml);
       return;
     }
     if (message.requestId && message.requestId !== activeRequestIdRef.current) return;
+
+    if (message.type === "viewport.state") {
+      if (message.payload.immersive !== immersive) onImmersiveChange?.(message.payload.immersive);
+      return;
+    }
 
     if (message.type === "score.status") {
       if (message.payload.state === "loading") setState("loading");
@@ -184,7 +208,7 @@ export function ScorePlayerWebView({ score, token }: ScorePlayerWebViewProps) {
       setError("O player não conseguiu processar a partitura. Tente novamente.");
       setState("error");
     }
-  }, [configResult]);
+  }, [configResult, immersive, musicXml, onImmersiveChange]);
 
   const failWebView = useCallback(() => {
     setError("Não foi possível carregar o player visual. Verifique sua conexão e tente novamente.");
@@ -208,15 +232,18 @@ export function ScorePlayerWebView({ score, token }: ScorePlayerWebViewProps) {
   }
 
   const config = configResult.value;
-  const showBlockingNotice = state !== "ready";
-
-  return (
-    <View style={styles.container}>
+  const usesBundledPlayer = config.kind === "bundled";
+  // Keep the web player's transport visible while MusicXML is being prepared.
+  // Only terminal states should cover the WebView; otherwise the user can
+  // already see the player controls and their disabled/loading state.
+  const showBlockingNotice = state === "error" || state === "empty";
+  const player = (
+    <View style={[styles.container, immersive && styles.immersiveContainer]}>
       <WebView
         ref={webViewRef}
         key={`${score.id}-${retryKey}`}
         source={{ uri: config.url }}
-        originWhitelist={[config.origin]}
+        originWhitelist={usesBundledPlayer ? ["file://*"] : [config.origin]}
         onMessage={handleMessage}
         onShouldStartLoadWithRequest={(request) => shouldAllowNavigation(request.url, request.isTopFrame, config)}
         onError={failWebView}
@@ -235,8 +262,8 @@ export function ScorePlayerWebView({ score, token }: ScorePlayerWebViewProps) {
         allowsAirPlayForMediaPlayback={false}
         allowsPictureInPictureMediaPlayback={false}
         mediaPlaybackRequiresUserAction
-        allowFileAccess={false}
-        allowFileAccessFromFileURLs={false}
+        allowFileAccess={usesBundledPlayer}
+        allowFileAccessFromFileURLs={usesBundledPlayer}
         allowUniversalAccessFromFileURLs={false}
         mixedContentMode="never"
         webviewDebuggingEnabled={__DEV__}
@@ -269,6 +296,8 @@ export function ScorePlayerWebView({ score, token }: ScorePlayerWebViewProps) {
       ) : null}
     </View>
   );
+
+  return player;
 }
 
 function PlayerNotice({ icon, message, title }: { icon: keyof typeof Ionicons.glyphMap; message: string; title: string }) {
@@ -310,6 +339,10 @@ const styles = StyleSheet.create({
     overflow: "hidden",
     position: "relative",
     width: "100%"
+  },
+  immersiveContainer: {
+    flex: 1,
+    height: "100%"
   },
   noticeMessage: {
     color: colors.muted,

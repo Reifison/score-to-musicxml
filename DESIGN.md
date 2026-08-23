@@ -11,7 +11,7 @@ Tema claro com estratégia de cor restrita para o produto. O gradiente laranja e
 - Fonte principal: `ID/branding_assets/`.
 - Símbolo: arquivo PDF, seta de transformação e clave de sol em branco sobre laranja.
 - Nome oficial: Conversor de Partituras.
-- Tela de abertura: composição baseada em `Gemini_Generated_Image_14ktlm14ktlm14kt (5).png`.
+- Tela de abertura: somente o símbolo da marca, centralizado sobre o fundo Canvas.
 
 ## Color tokens
 

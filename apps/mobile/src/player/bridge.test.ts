@@ -43,6 +43,21 @@ describe("player bridge", () => {
     expect(() => createPlayerCommandMessage("command-2", "play" as never)).toThrow(/comando/);
   });
 
+  it("solicita uma sessão imersiva sem incluir credenciais", () => {
+    const serialized = createScoreLoadMessage(
+      "score-fullscreen",
+      "<score-partwise />",
+      "Estudo.musicxml",
+      true
+    );
+
+    expect(JSON.parse(serialized)).toMatchObject({
+      type: "score.load",
+      payload: { immersive: true }
+    });
+    expect(serialized).not.toContain("Bearer");
+  });
+
   it("aceita somente mensagens de retorno conhecidas e bem formadas", () => {
     const ready = parsePlayerToHostMessage(JSON.stringify({
       channel: PLAYER_BRIDGE_CHANNEL,
@@ -64,10 +79,21 @@ describe("player bridge", () => {
       requestId: "score-1",
       payload: { state: "playing", positionMs: 1200, durationMs: 5000, tempo: 120 }
     }));
+    const viewport = parsePlayerToHostMessage(JSON.stringify({
+      channel: PLAYER_BRIDGE_CHANNEL,
+      version: PLAYER_BRIDGE_VERSION,
+      type: "viewport.state",
+      requestId: "score-1",
+      payload: { immersive: true }
+    }));
 
     expect(ready).toEqual(expect.objectContaining({ ok: true }));
     expect(status).toEqual(expect.objectContaining({ ok: true }));
     expect(playback).toEqual(expect.objectContaining({ ok: true }));
+    expect(viewport).toEqual(expect.objectContaining({
+      ok: true,
+      message: expect.objectContaining({ type: "viewport.state", payload: { immersive: true } })
+    }));
   });
 
   it("rejeita canal, versão, tipo, campos extras e números suspeitos", () => {
@@ -82,6 +108,13 @@ describe("player bridge", () => {
         type: "playback.state",
         requestId: "score-1",
         payload: { state: "playing", positionMs: Number.NaN, durationMs: 5000, tempo: 120 }
+      },
+      {
+        channel: PLAYER_BRIDGE_CHANNEL,
+        version: 1,
+        type: "viewport.state",
+        requestId: "score-1",
+        payload: { immersive: "sim" }
       }
     ];
 

@@ -75,8 +75,31 @@ describe("VerovioScoreRenderer playback API", () => {
     expect(toolkit.getElementsAtTime).toHaveBeenCalledWith(102);
   });
 
+  it("mantém o destaque visual na segunda passagem de um ritornello", async () => {
+    // Verovio may return an empty direct lookup while its internal cursor
+    // crosses a repeat. The performed timemap still contains the active note.
+    toolkit.getElementsAtTime.mockReturnValue({});
+    toolkit.renderToTimemap.mockReturnValue([
+      { measureOn: "measure-1", on: ["note-a"], tstamp: 0 },
+      { measureOn: "measure-2", off: ["note-a"], on: ["note-b"], tstamp: 800 },
+      { measureOn: "measure-1", off: ["note-b"], on: ["note-a"], tstamp: 1600 },
+      { off: ["note-a"], tstamp: 2400 }
+    ]);
+    toolkit.getPageWithElement.mockReturnValue(1);
+    const renderer = await loadedRenderer();
+
+    expect(renderer.getElementsAtTime(1750)).toEqual({
+      chords: [],
+      measure: "measure-1",
+      notes: ["note-a"],
+      page: 1,
+      rests: []
+    });
+  });
+
   it("retorna coleções vazias fora do conteúdo executado", async () => {
     toolkit.getElementsAtTime.mockReturnValue({});
+    toolkit.renderToTimemap.mockReturnValue([]);
     const renderer = await loadedRenderer();
 
     expect(renderer.getElementsAtTime(9999)).toEqual({

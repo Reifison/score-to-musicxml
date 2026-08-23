@@ -47,15 +47,21 @@ const guitarPoints: SamplePoint[] = [
   { fileStem: "c6", midi: 84 }
 ];
 
+// Production uses the generated JavaScript file as the reference point. This
+// resolves to the app-bundled `player/audio` folder on iPhone, with no network.
+const sampleBaseUrl = import.meta.env.PROD
+  ? new URL("../audio/samples/", import.meta.url).toString()
+  : "/audio/samples/";
+
 const velocityLayers = (directory: string, points: SamplePoint[]) => points.flatMap(({ fileStem, midi }) => [
   {
-    url: `/audio/samples/${directory}/${fileStem}-soft.m4a`,
+    url: `${sampleBaseUrl}${directory}/${fileStem}-soft.m4a`,
     midi,
     minVelocity: 0,
     maxVelocity: 0.55
   },
   {
-    url: `/audio/samples/${directory}/${fileStem}-loud.m4a`,
+    url: `${sampleBaseUrl}${directory}/${fileStem}-loud.m4a`,
     midi,
     minVelocity: 0.55,
     maxVelocity: 1

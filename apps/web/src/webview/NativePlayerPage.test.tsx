@@ -15,7 +15,9 @@ vi.mock("../components/ScorePlayer.js", () => ({
     musicXml: string;
     scoreName: string;
     command?: { id: number; action: string };
+    initialImmersive?: boolean;
     onStatusChange: (state: string) => void;
+    onImmersiveChange?: (immersive: boolean) => void;
   }) => {
     scorePlayerSpy(props);
     useEffect(() => props.onStatusChange("ready"), [props.onStatusChange]);
@@ -66,7 +68,8 @@ describe("NativePlayerPage", () => {
     expect(await screen.findByRole("generic", { name: "Player reutilizado" })).toHaveTextContent("Estudo.musicxml");
     expect(scorePlayerSpy).toHaveBeenLastCalledWith(expect.objectContaining({
       musicXml: "<score-partwise />",
-      scoreName: "Estudo.musicxml"
+      scoreName: "Estudo.musicxml",
+      onImmersiveChange: expect.any(Function)
     }));
     expect(messages(postMessage)).toContainEqual({
       channel: PLAYER_BRIDGE_CHANNEL,
@@ -75,6 +78,52 @@ describe("NativePlayerPage", () => {
       requestId: "load-1",
       payload: { state: "ready" }
     });
+  });
+
+  it("recebe o estado imersivo do player compartilhado sem exigir Fullscreen API", async () => {
+    const { container } = render(<NativePlayerPage />);
+    dispatchHostMessage({
+      channel: PLAYER_BRIDGE_CHANNEL,
+      version: PLAYER_BRIDGE_VERSION,
+      type: "score.load",
+      requestId: "load-immersive",
+      payload: {
+        musicXml: "<score-partwise />",
+        scoreName: "Estudo.musicxml"
+      }
+    });
+    await screen.findByLabelText("Player reutilizado");
+
+    const props = scorePlayerSpy.mock.lastCall?.[0] as { onImmersiveChange: (immersive: boolean) => void };
+    act(() => props.onImmersiveChange(true));
+
+    expect(container.querySelector(".native-player-page")).toHaveClass("is-score-immersive");
+    expect(messages(postMessage)).toContainEqual({
+      channel: PLAYER_BRIDGE_CHANNEL,
+      version: PLAYER_BRIDGE_VERSION,
+      type: "viewport.state",
+      requestId: "load-immersive",
+      payload: { immersive: true }
+    });
+  });
+
+  it("inicia a sessão em tela cheia quando o app nativo solicita", async () => {
+    const { container } = render(<NativePlayerPage />);
+    dispatchHostMessage({
+      channel: PLAYER_BRIDGE_CHANNEL,
+      version: PLAYER_BRIDGE_VERSION,
+      type: "score.load",
+      requestId: "load-fullscreen",
+      payload: {
+        musicXml: "<score-partwise />",
+        scoreName: "Estudo.musicxml",
+        immersive: true
+      }
+    });
+
+    await screen.findByLabelText("Player reutilizado");
+    expect(container.querySelector(".native-player-page")).toHaveClass("is-score-immersive");
+    expect(scorePlayerSpy).toHaveBeenLastCalledWith(expect.objectContaining({ initialImmersive: true }));
   });
 
   it("encaminha comandos limitados e desmonta o player ao descartar", async () => {
