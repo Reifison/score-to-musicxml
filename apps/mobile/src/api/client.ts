@@ -1,10 +1,14 @@
 import { Directory, File, Paths } from "expo-file-system";
+import { resolveApiUrl } from "./config";
 import { createMidiDownloadPlan, runMidiDownload } from "../files/midiExport";
 import { validatePlayerMusicXml, validatePlayerMusicXmlSize } from "../player/bridge";
 import { createPlayerMusicXmlDownloadPlan } from "../player/musicXmlDownload";
 import type { AuditLog, Entitlement, PublicUser, Score } from "./types";
 
-export const API_URL = process.env.EXPO_PUBLIC_API_URL || "http://localhost:4000";
+export const API_URL = resolveApiUrl(
+  process.env.EXPO_PUBLIC_API_URL,
+  __DEV__ || process.env.EXPO_PUBLIC_ALLOW_HTTP_API === "1"
+);
 const mobileHeader = "score-to-musicxml-ios";
 
 type ApiErrorBody = {
