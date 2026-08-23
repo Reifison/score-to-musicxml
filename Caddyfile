@@ -1,9 +1,12 @@
-{$API_DOMAIN} {
-	encode gzip
-	reverse_proxy api:4000
-}
-
 {$WEB_DOMAIN} {
 	encode gzip
-	reverse_proxy web:80
+
+	@api path /api/* /health
+	handle @api {
+		reverse_proxy api:4000
+	}
+
+	handle {
+		reverse_proxy web:80
+	}
 }
