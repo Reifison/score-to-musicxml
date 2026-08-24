@@ -100,6 +100,8 @@ export class InMemoryScoreRepository implements ScoreRepository {
       confidence: null,
       musicxmlFilename: null,
       isFavorite: false,
+      deletedAt: null,
+      purgeAt: null,
       convertedAt: null,
       createdAt,
       updatedAt: createdAt,
@@ -111,11 +113,17 @@ export class InMemoryScoreRepository implements ScoreRepository {
   }
 
   async findById(id: string): Promise<Score | null> {
+    const score = this.scores.get(id);
+    return score && !score.deletedAt ? score : null;
+  }
+
+  async findByIdIncludingDeleted(id: string): Promise<Score | null> {
     return this.scores.get(id) ?? null;
   }
 
   async list(filters: ScoreFilters = {}): Promise<Score[]> {
     return [...this.scores.values()]
+      .filter((score) => !score.deletedAt)
       .filter((score) => !filters.userId || score.userId === filters.userId)
       .filter((score) => filters.favorite === undefined || score.isFavorite === filters.favorite)
       .filter((score) => !filters.status || score.conversionStatus === filters.status)
@@ -124,16 +132,50 @@ export class InMemoryScoreRepository implements ScoreRepository {
       .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime());
   }
 
+  async listTrash(filters: ScoreFilters = {}): Promise<Score[]> {
+    return [...this.scores.values()]
+      .filter((score) => Boolean(score.deletedAt))
+      .filter((score) => !filters.userId || score.userId === filters.userId)
+      .filter((score) => filters.favorite === undefined || score.isFavorite === filters.favorite)
+      .filter((score) => !filters.status || score.conversionStatus === filters.status)
+      .filter((score) => !filters.from || score.deletedAt! >= filters.from)
+      .filter((score) => !filters.to || score.deletedAt! <= filters.to)
+      .sort((a, b) => a.purgeAt!.getTime() - b.purgeAt!.getTime());
+  }
+
   async listOlderThan(date: Date): Promise<Score[]> {
     return [...this.scores.values()]
+      .filter((score) => !score.deletedAt)
       .filter((score) => score.createdAt < date)
       .sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime());
+  }
+
+  async listExpiredTrash(date: Date): Promise<Score[]> {
+    return [...this.scores.values()]
+      .filter((score) => Boolean(score.deletedAt && score.purgeAt && score.purgeAt <= date))
+      .sort((a, b) => a.purgeAt!.getTime() - b.purgeAt!.getTime());
   }
 
   async update(id: string, input: UpdateScoreInput): Promise<Score> {
     const existing = this.scores.get(id);
     if (!existing) throw new Error("Score not found");
     const updated = { ...existing, ...input, updatedAt: now() };
+    this.scores.set(id, updated);
+    return updated;
+  }
+
+  async softDelete(id: string, input: { deletedAt: Date; purgeAt: Date }): Promise<Score> {
+    const existing = this.scores.get(id);
+    if (!existing) throw new Error("Score not found");
+    const updated = { ...existing, ...input, updatedAt: now() };
+    this.scores.set(id, updated);
+    return updated;
+  }
+
+  async restore(id: string): Promise<Score> {
+    const existing = this.scores.get(id);
+    if (!existing) throw new Error("Score not found");
+    const updated = { ...existing, deletedAt: null, purgeAt: null, updatedAt: now() };
     this.scores.set(id, updated);
     return updated;
   }

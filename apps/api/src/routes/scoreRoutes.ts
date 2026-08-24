@@ -37,6 +37,30 @@ scoreRoutes.get("/", async (req, res) => {
   res.json({ scores });
 });
 
+scoreRoutes.get("/trash", async (req, res) => {
+  const favorite = req.query.favorite === "true" ? true : req.query.favorite === "false" ? false : undefined;
+  const scores = await req.services.scores.listTrashFor(req.user!, { favorite });
+  res.json({ scores });
+});
+
+scoreRoutes.post("/bulk", async (req, res) => {
+  const input = z.object({
+    ids: z.array(z.string().trim().min(1)).min(1).max(100),
+    action: z.enum(["delete", "favorite"]),
+    isFavorite: z.boolean().optional()
+  }).superRefine((value, context) => {
+    if (value.action === "favorite" && value.isFavorite === undefined) {
+      context.addIssue({ code: z.ZodIssueCode.custom, path: ["isFavorite"], message: "Informe o estado do favorito." });
+    }
+  }).parse(req.body);
+
+  if (input.action === "delete") {
+    res.json(await req.services.scores.bulkDeleteFor(req.user!, input.ids, req.ip));
+    return;
+  }
+  res.json(await req.services.scores.bulkFavoriteFor(req.user!, input.ids, input.isFavorite!));
+});
+
 scoreRoutes.patch("/:id/favorite", async (req, res) => {
   const input = z.object({ isFavorite: z.boolean() }).parse(req.body);
   const score = await req.services.scores.setFavoriteFor(req.user!, req.params.id, input.isFavorite);
@@ -46,6 +70,11 @@ scoreRoutes.patch("/:id/favorite", async (req, res) => {
 scoreRoutes.patch("/:id", async (req, res) => {
   const input = z.object({ originalFilename: z.string().trim().min(1).max(180) }).parse(req.body);
   const score = await req.services.scores.renameFor(req.user!, req.params.id, input.originalFilename, req.ip);
+  res.json({ score });
+});
+
+scoreRoutes.post("/:id/restore", async (req, res) => {
+  const score = await req.services.scores.restoreFor(req.user!, req.params.id, req.ip);
   res.json({ score });
 });
 

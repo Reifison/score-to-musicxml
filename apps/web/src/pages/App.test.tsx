@@ -1,11 +1,15 @@
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { api, downloadMidi, downloadMusicXml } from "../api/client.js";
+import { api, bulkScoreAction, deleteScore, downloadMidi, downloadMusicXml } from "../api/client.js";
 import type { Score, User } from "../types/domain.js";
 import { App } from "./App.js";
 
 vi.mock("../api/client.js", () => ({
   api: vi.fn(),
+  bulkScoreAction: vi.fn(),
+  deleteScore: vi.fn(),
+  listTrashScores: vi.fn().mockResolvedValue([]),
+  restoreScore: vi.fn(),
   downloadMidi: vi.fn(),
   downloadMusicXml: vi.fn(),
   previewUrl: (scoreId: string) => `http://localhost:4000/api/scores/${scoreId}/preview`
@@ -132,5 +136,39 @@ describe("regressão do fluxo principal web", () => {
     fireEvent.click(screen.getByRole("button", { name: "Minhas partituras" }));
     expect(await screen.findByText(convertedScore.originalFilename)).toBeInTheDocument();
     expect(screen.getByText("Convertido")).toBeInTheDocument();
+  });
+
+  it("seleciona várias partituras para favoritar e mover para a lixeira", async () => {
+    const secondScore = { ...convertedScore, id: "score-2", originalFilename: "Escala.pdf" };
+    vi.mocked(api).mockImplementation(async (path, options = {}) => {
+      if (path === "/api/auth/me") return { user } as never;
+      if (path === "/api/scores/score-1/favorite") return { score: { ...convertedScore, isFavorite: true } } as never;
+      if (path === "/api/scores/score-2/favorite") return { score: { ...secondScore, isFavorite: true } } as never;
+      if (path === "/api/scores") return { scores: [convertedScore, secondScore] } as never;
+      throw new Error(`Chamada não prevista: ${path} ${options.method ?? "GET"}`);
+    });
+    vi.mocked(deleteScore).mockResolvedValue(undefined);
+    vi.mocked(bulkScoreAction).mockResolvedValue(undefined);
+    const confirm = vi.spyOn(window, "confirm").mockReturnValue(true);
+
+    render(<App />);
+    expect(await screen.findByText("Envie PDF ou imagem da partitura")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Minhas partituras" }));
+    expect(await screen.findByText(convertedScore.originalFilename)).toBeInTheDocument();
+    fireEvent.click(await screen.findByRole("button", { name: "Selecionar" }));
+    fireEvent.click(screen.getByRole("checkbox", { name: `Selecionar ${convertedScore.originalFilename}` }));
+    fireEvent.click(screen.getByRole("checkbox", { name: `Selecionar ${secondScore.originalFilename}` }));
+    expect(within(screen.getByRole("toolbar")).getByText("2")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Favoritar" }));
+    await waitFor(() => expect(bulkScoreAction).toHaveBeenCalledWith(["score-1", "score-2"], "favorite", true));
+    expect(screen.getByRole("button", { name: "Selecionar" })).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Selecionar" }));
+    fireEvent.click(screen.getByRole("button", { name: "Selecionar todas" }));
+    fireEvent.click(within(screen.getByRole("toolbar")).getByRole("button", { name: "Excluir" }));
+    await waitFor(() => expect(bulkScoreAction).toHaveBeenCalledWith(["score-1", "score-2"], "delete"));
+    expect(confirm).toHaveBeenCalledWith(expect.stringContaining("Mover 2 partituras"));
+    confirm.mockRestore();
   });
 });

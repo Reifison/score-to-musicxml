@@ -20,9 +20,10 @@ export class RetentionService {
     const scoreCutoff = daysAgo(env.SCORE_RETENTION_DAYS);
     const auditCutoff = daysAgo(env.AUDIT_RETENTION_DAYS);
     const expiredScores = await this.scores.listOlderThan(scoreCutoff);
+    const expiredTrash = await this.scores.listExpiredTrash(new Date());
     let scoresDeleted = 0;
 
-    for (const score of expiredScores) {
+    for (const score of [...expiredScores, ...expiredTrash]) {
       await this.storage.deleteUpload(score.storedFilename);
       await this.storage.deleteExport(score.musicxmlFilename);
       await this.scores.delete(score.id);
@@ -31,7 +32,11 @@ export class RetentionService {
         entity: "score",
         entityId: score.id,
         ipAddress,
-        metadata: { reason: "retention", scoreRetentionDays: env.SCORE_RETENTION_DAYS }
+        metadata: {
+          reason: expiredTrash.includes(score) ? "trash_expired" : "retention",
+          scoreRetentionDays: env.SCORE_RETENTION_DAYS,
+          purgeAt: score.purgeAt
+        }
       });
       scoresDeleted += 1;
     }

@@ -14,6 +14,7 @@ export class ScoreService {
   ) {}
 
   async listFor(user: User, filters: { status?: string; userId?: string; favorite?: boolean } = {}) {
+    await this.purgeExpired();
     if (user.role === "admin") {
       return this.scores.list({
         status: this.parseStatus(filters.status),
@@ -22,6 +23,14 @@ export class ScoreService {
       });
     }
     return this.scores.list({ userId: user.id, status: this.parseStatus(filters.status), favorite: filters.favorite });
+  }
+
+  async listTrashFor(user: User, filters: { favorite?: boolean } = {}) {
+    await this.purgeExpired();
+    return this.scores.listTrash({
+      userId: user.role === "admin" ? undefined : user.id,
+      favorite: filters.favorite
+    });
   }
 
   async getFor(user: User, scoreId: string) {
@@ -33,15 +42,74 @@ export class ScoreService {
 
   async deleteFor(user: User, scoreId: string, ipAddress?: string) {
     const score = await this.getFor(user, scoreId);
-    await this.storage.deleteUpload(score.storedFilename);
-    await this.storage.deleteExport(score.musicxmlFilename);
-    await this.scores.delete(score.id);
-    await this.audits.create({ actorId: user.id, action: "score_deleted", entity: "score", entityId: score.id, ipAddress });
+    const deletedAt = new Date();
+    const purgeAt = new Date(deletedAt.getTime() + 7 * 24 * 60 * 60 * 1000);
+    await this.scores.softDelete(score.id, { deletedAt, purgeAt });
+    await this.audits.create({
+      actorId: user.id,
+      action: "score_deleted",
+      entity: "score",
+      entityId: score.id,
+      ipAddress,
+      metadata: { reason: "trash", deletedAt, purgeAt }
+    });
+  }
+
+  async restoreFor(user: User, scoreId: string, ipAddress?: string) {
+    await this.purgeExpired();
+    const score = await this.scores.findByIdIncludingDeleted(scoreId);
+    if (!score) throw notFound();
+    if (user.role !== "admin" && score.userId !== user.id) throw forbidden();
+    if (!score.deletedAt) throw new AppError(409, "A partitura já está na sua lista.", "SCORE_NOT_IN_TRASH");
+    const restored = await this.scores.restore(score.id);
+    await this.audits.create({ actorId: user.id, action: "score_restored", entity: "score", entityId: score.id, ipAddress });
+    return restored;
+  }
+
+  async bulkDeleteFor(user: User, scoreIds: string[], ipAddress?: string) {
+    const uniqueIds = [...new Set(scoreIds)];
+    const scores = await Promise.all(uniqueIds.map((scoreId) => this.getFor(user, scoreId)));
+    const deletedAt = new Date();
+    const purgeAt = new Date(deletedAt.getTime() + 7 * 24 * 60 * 60 * 1000);
+    for (const score of scores) {
+      await this.scores.softDelete(score.id, { deletedAt, purgeAt });
+      await this.audits.create({
+        actorId: user.id,
+        action: "score_deleted",
+        entity: "score",
+        entityId: score.id,
+        ipAddress,
+        metadata: { reason: "trash", deletedAt, purgeAt, bulk: true }
+      });
+    }
+    return { deletedCount: scores.length, purgeAt };
+  }
+
+  async bulkFavoriteFor(user: User, scoreIds: string[], isFavorite: boolean) {
+    const uniqueIds = [...new Set(scoreIds)];
+    const scores = await Promise.all(uniqueIds.map((scoreId) => this.getFor(user, scoreId)));
+    for (const score of scores) await this.scores.update(score.id, { isFavorite });
+    return { updatedCount: scores.length };
   }
 
   async setFavoriteFor(user: User, scoreId: string, isFavorite: boolean) {
     const score = await this.getFor(user, scoreId);
     return this.scores.update(score.id, { isFavorite });
+  }
+
+  private async purgeExpired() {
+    const expired = await this.scores.listExpiredTrash(new Date());
+    for (const score of expired) {
+      await this.storage.deleteUpload(score.storedFilename);
+      await this.storage.deleteExport(score.musicxmlFilename);
+      await this.scores.delete(score.id);
+      await this.audits.create({
+        action: "score_deleted",
+        entity: "score",
+        entityId: score.id,
+        metadata: { reason: "trash_expired", purgeAt: score.purgeAt }
+      });
+    }
   }
 
   async renameFor(user: User, scoreId: string, originalFilename: string, ipAddress?: string) {

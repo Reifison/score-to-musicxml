@@ -112,6 +112,28 @@ export const api = {
     }, token);
   },
 
+  /** Move a score to the seven-day trash instead of deleting its file immediately. */
+  async deleteScore(token: string, id: string) {
+    return apiRequest<void>(`/api/scores/${id}`, { method: "DELETE" }, token);
+  },
+
+  async bulkScores(token: string, ids: string[], action: "delete" | "favorite", isFavorite?: boolean) {
+    return apiRequest<{ deletedCount?: number; updatedCount?: number; purgeAt?: string }>("/api/scores/bulk", {
+      method: "POST",
+      body: JSON.stringify({ ids, action, ...(action === "favorite" ? { isFavorite: Boolean(isFavorite) } : {}) })
+    }, token);
+  },
+
+  /** List scores currently in the user's trash. */
+  async trashScores(token: string) {
+    return apiRequest<{ scores: Score[] }>("/api/scores/trash", {}, token);
+  },
+
+  /** Restore a score from the seven-day trash. */
+  async restoreScore(token: string, id: string) {
+    return apiRequest<{ score: Score }>(`/api/scores/${id}/restore`, { method: "POST" }, token);
+  },
+
   async upload(token: string, file: { uri: string; name: string; type: string }) {
     const body = new FormData();
     body.append("file", file as unknown as Blob);

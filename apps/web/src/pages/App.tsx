@@ -1,17 +1,19 @@
 import { FileMusic, Home, KeyRound, LogOut, Shield, UserRound, Users } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
-import { api, downloadMidi, downloadMusicXml } from "../api/client.js";
+import { api, bulkScoreAction, deleteScore as deleteScoreRequest, downloadMidi, downloadMusicXml, listTrashScores, restoreScore } from "../api/client.js";
+import type { TrashScore } from "../api/client.js";
 import { HomeMenuGrid } from "../components/HomeMenuGrid.js";
 import { ScoreCard } from "../components/ScoreCard.js";
 import { ScoreDetails } from "../components/ScoreDetails.js";
 import { UploadPanel } from "../components/UploadPanel.js";
 import type { AuditLog, Score, ScoreStatus, User } from "../types/domain.js";
 
-type View = "home" | "scores" | "favorites" | "settings" | "profile" | "admin-users" | "admin-scores" | "audits";
+type View = "home" | "scores" | "favorites" | "trash" | "settings" | "profile" | "admin-users" | "admin-scores" | "audits";
 
 export function App() {
   const [user, setUser] = useState<User | null>(null);
   const [scores, setScores] = useState<Score[]>([]);
+  const [trashScores, setTrashScores] = useState<TrashScore[]>([]);
   const [users, setUsers] = useState<User[]>([]);
   const [audits, setAudits] = useState<AuditLog[]>([]);
   const [selected, setSelected] = useState<Score | null>(null);
@@ -40,6 +42,10 @@ export function App() {
     setAudits(auditResponse.audits);
   }
 
+  async function refreshTrash() {
+    setTrashScores(await listTrashScores());
+  }
+
   useEffect(() => {
     api<{ user: User }>("/api/auth/me")
       .then((response) => setUser(response.user))
@@ -54,6 +60,11 @@ export function App() {
     const timer = window.setInterval(refreshScores, 5000);
     return () => window.clearInterval(timer);
   }, [user?.id]);
+
+  useEffect(() => {
+    if (!user || view !== "trash") return;
+    void refreshTrash().catch((err) => setError(err instanceof Error ? err.message : "Não foi possível carregar a lixeira."));
+  }, [user?.id, view]);
 
   if (loading) {
     return (
@@ -81,8 +92,26 @@ export function App() {
 
   async function deleteScore(score: Score) {
     if (!window.confirm(`Excluir ${score.originalFilename}?`)) return;
-    await api(`/api/scores/${score.id}`, { method: "DELETE" });
-    await refreshScores();
+    setError("");
+    try {
+      await deleteScoreRequest(score.id);
+      setNotice("Partitura movida para a lixeira por 7 dias.");
+      await refreshScores();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Não foi possível mover a partitura para a lixeira.");
+    }
+  }
+
+  async function bulkDeleteScores(selectedScores: Score[]) {
+    if (!selectedScores.length || !window.confirm(`Mover ${selectedScores.length} partituras para a lixeira? Elas poderão ser restauradas por 7 dias.`)) return;
+    setError("");
+    try {
+      await bulkScoreAction(selectedScores.map((score) => score.id), "delete");
+      setNotice(`${selectedScores.length} ${selectedScores.length === 1 ? "partitura movida" : "partituras movidas"} para a lixeira.`);
+      await refreshScores();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Não foi possível mover as partituras para a lixeira.");
+    }
   }
 
   async function toggleFavorite(score: Score) {
@@ -96,6 +125,30 @@ export function App() {
       if (selected?.id === score.id) setSelected(response.score);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Não foi possível atualizar os favoritos.");
+    }
+  }
+
+  async function bulkFavoriteScores(selectedScores: Score[]) {
+    if (!selectedScores.length) return;
+    setError("");
+    try {
+      await bulkScoreAction(selectedScores.map((score) => score.id), "favorite", true);
+      setScores((current) => current.map((score) => selectedScores.some((selected) => selected.id === score.id) ? { ...score, isFavorite: true } : score));
+      setNotice(`${selectedScores.length === 1 ? "Partitura marcada" : "Partituras marcadas"} como favorita${selectedScores.length === 1 ? "" : "s"}.`);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Não foi possível atualizar os favoritos.");
+    }
+  }
+
+  async function restoreTrashScore(score: TrashScore) {
+    setError("");
+    try {
+      await restoreScore(score.id);
+      setTrashScores((current) => current.filter((item) => item.id !== score.id));
+      await refreshScores();
+      setNotice("Partitura restaurada.");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Não foi possível restaurar a partitura.");
     }
   }
 
@@ -165,12 +218,13 @@ export function App() {
           </>
         )}
 
-        {view === "scores" && <ScoreList scores={scores} onOpen={setSelected} onDelete={deleteScore} onDownload={downloadScore} onToggleFavorite={toggleFavorite} />}
+        {view === "scores" && <ScoreList scores={scores} onOpen={setSelected} onDelete={deleteScore} onBulkDelete={bulkDeleteScores} onBulkFavorite={bulkFavoriteScores} onDownload={downloadScore} onToggleFavorite={toggleFavorite} />}
         {view === "favorites" && <Favorites scores={scores} onOpen={setSelected} onDelete={deleteScore} onDownload={downloadScore} onToggleFavorite={toggleFavorite} />}
+        {view === "trash" && <TrashList scores={trashScores} onRestore={restoreTrashScore} />}
         {view === "settings" && <SettingsPanel />}
         {view === "profile" && <Profile user={user} onUpdated={setUser} />}
         {view === "admin-users" && <AdminUsers currentUser={user} users={users} onRefresh={refreshAdmin} />}
-        {view === "admin-scores" && <ScoreList scores={scores} onOpen={setSelected} onDelete={deleteScore} onDownload={downloadScore} onToggleFavorite={toggleFavorite} />}
+        {view === "admin-scores" && <ScoreList scores={scores} onOpen={setSelected} onDelete={deleteScore} onBulkDelete={bulkDeleteScores} onBulkFavorite={bulkFavoriteScores} onDownload={downloadScore} onToggleFavorite={toggleFavorite} />}
         {view === "audits" && <AuditPanel audits={audits} scores={scores} users={users} />}
         {notice && <p className="success-text">{notice}</p>}
         {error && <p className="error-text">{error}</p>}
@@ -219,9 +273,137 @@ function Login({ onLogged }: { onLogged: (user: User) => void }) {
   );
 }
 
-function ScoreList({ scores, onOpen, onDelete, onDownload, onToggleFavorite }: { scores: Score[]; onOpen: (score: Score) => void; onDelete: (score: Score) => void; onDownload: (score: Score) => void; onToggleFavorite: (score: Score) => void }) {
-  if (!scores.length) return <section className="empty-state">Nenhuma partitura enviada ainda.</section>;
-  return <section className="score-grid">{scores.map((score) => <ScoreCard key={score.id} score={score} onOpen={onOpen} onDelete={onDelete} onDownload={onDownload} onToggleFavorite={onToggleFavorite} />)}</section>;
+function ScoreList({ scores, onOpen, onDelete, onBulkDelete, onBulkFavorite, onDownload, onToggleFavorite }: {
+  scores: Score[];
+  onOpen: (score: Score) => void;
+  onDelete: (score: Score) => void;
+  onBulkDelete: (scores: Score[]) => Promise<void>;
+  onBulkFavorite: (scores: Score[]) => Promise<void>;
+  onDownload: (score: Score) => void;
+  onToggleFavorite: (score: Score) => void;
+}) {
+  const [selectionMode, setSelectionMode] = useState(false);
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const selectedScores = scores.filter((score) => selectedIds.has(score.id));
+
+  useEffect(() => {
+    setSelectedIds((current) => new Set([...current].filter((id) => scores.some((score) => score.id === id))));
+  }, [scores]);
+
+  function closeSelection() {
+    setSelectionMode(false);
+    setSelectedIds(new Set());
+  }
+
+  function toggleSelection(score: Score) {
+    setSelectedIds((current) => {
+      const next = new Set(current);
+      if (next.has(score.id)) next.delete(score.id);
+      else next.add(score.id);
+      return next;
+    });
+  }
+
+  function toggleAll() {
+    setSelectedIds((current) => current.size === scores.length ? new Set() : new Set(scores.map((score) => score.id)));
+  }
+
+  async function bulkDelete() {
+    await onBulkDelete(selectedScores);
+    closeSelection();
+  }
+
+  async function bulkFavorite() {
+    await onBulkFavorite(selectedScores);
+    closeSelection();
+  }
+
+  return (
+    <section className="scores-section" aria-label="Minhas partituras">
+      <div className="score-list-toolbar">
+        <div>
+          <strong>{scores.length} {scores.length === 1 ? "partitura" : "partituras"}</strong>
+          <span>{selectionMode ? "Escolha as partituras para uma ação" : "Favoritos permanecem na ordem original"}</span>
+        </div>
+        <button className="secondary-button" type="button" onClick={() => selectionMode ? closeSelection() : setSelectionMode(true)}>
+          {selectionMode ? "Cancelar" : "Selecionar"}
+        </button>
+      </div>
+      {selectionMode && (
+        <div className="selection-toolbar" role="toolbar" aria-label="Ações para partituras selecionadas">
+          <div className="selection-summary">
+            <strong>{selectedScores.length}</strong>
+            <span>{selectedScores.length === 1 ? "selecionada" : "selecionadas"}</span>
+          </div>
+          <button className="secondary-button" type="button" onClick={toggleAll}>
+            {selectedScores.length === scores.length && scores.length ? "Limpar seleção" : "Selecionar todas"}
+          </button>
+          <button className="secondary-button" type="button" disabled={!selectedScores.length} onClick={bulkFavorite}>Favoritar</button>
+          <button className="danger-button" type="button" disabled={!selectedScores.length} onClick={bulkDelete}>Excluir</button>
+        </div>
+      )}
+      {!scores.length ? (
+        <section className="empty-state">Nenhuma partitura enviada ainda.</section>
+      ) : (
+        <section className="score-grid">
+          {scores.map((score) => (
+            <ScoreCard
+              key={score.id}
+              score={score}
+              selectionMode={selectionMode}
+              selected={selectedIds.has(score.id)}
+              onSelect={() => toggleSelection(score)}
+              onOpen={onOpen}
+              onDelete={onDelete}
+              onDownload={onDownload}
+              onToggleFavorite={onToggleFavorite}
+            />
+          ))}
+        </section>
+      )}
+    </section>
+  );
+}
+
+function TrashList({ scores, onRestore }: { scores: TrashScore[]; onRestore: (score: TrashScore) => Promise<void> }) {
+  if (!scores.length) {
+    return (
+      <section className="empty-state trash-empty">
+        <div>
+          <strong>A lixeira está vazia</strong>
+          <span>Partituras excluídas ficam disponíveis por 7 dias.</span>
+        </div>
+      </section>
+    );
+  }
+
+  return (
+    <section className="trash-list" aria-label="Partituras na lixeira">
+      <div className="trash-intro">
+        <strong>Exclusão temporária</strong>
+        <span>Você pode restaurar estas partituras durante 7 dias. Depois disso, elas serão removidas automaticamente.</span>
+      </div>
+      <div className="trash-items">
+        {scores.map((score) => <TrashRow key={score.id} score={score} onRestore={onRestore} />)}
+      </div>
+    </section>
+  );
+}
+
+function TrashRow({ score, onRestore }: { score: TrashScore; onRestore: (score: TrashScore) => Promise<void> }) {
+  const expiration = score.expiresAt ? new Date(score.expiresAt) : score.deletedAt ? new Date(new Date(score.deletedAt).getTime() + 7 * 24 * 60 * 60 * 1000) : null;
+  const days = expiration ? Math.max(0, Math.ceil((expiration.getTime() - Date.now()) / (24 * 60 * 60 * 1000))) : null;
+  return (
+    <article className="trash-row">
+      <div className="trash-row-icon" aria-hidden="true"><FileMusic size={20} /></div>
+      <div className="trash-row-copy">
+        <strong>{score.originalFilename}</strong>
+        <span>{score.fileType.toUpperCase()} · {formatBytes(score.fileSize)}</span>
+        <small>{days === null ? "Disponível por 7 dias" : days === 0 ? "Expira hoje" : `Expira em ${days} ${days === 1 ? "dia" : "dias"}`}</small>
+      </div>
+      <button className="secondary-button" type="button" onClick={() => void onRestore(score)}>Restaurar</button>
+    </article>
+  );
 }
 
 function Favorites({ scores, onOpen, onDelete, onDownload, onToggleFavorite }: { scores: Score[]; onOpen: (score: Score) => void; onDelete: (score: Score) => void; onDownload: (score: Score) => void; onToggleFavorite: (score: Score) => void }) {
@@ -306,6 +488,12 @@ function musicXmlName(originalFilename: string) {
 
 function midiName(originalFilename: string) {
   return musicXmlName(originalFilename).replace(/\.musicxml$/i, ".mid");
+}
+
+function formatBytes(bytes: number) {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
 function AdminUsers({ currentUser, users, onRefresh }: { currentUser: User; users: User[]; onRefresh: () => Promise<void> }) {
@@ -605,6 +793,7 @@ function viewTitle(view: View) {
     home: "Início",
     scores: "Minhas partituras",
     favorites: "Favoritas",
+    trash: "Lixeira",
     settings: "Configurações",
     profile: "Perfil",
     "admin-users": "Usuários",
