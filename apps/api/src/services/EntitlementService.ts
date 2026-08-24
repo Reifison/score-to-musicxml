@@ -4,6 +4,7 @@ import type { EntitlementSummary, User } from "../domain.js";
 import { AppError } from "../errors/AppError.js";
 import type { AuditRepository, CreateScoreInput, EntitlementRepository } from "../repositories/contracts.js";
 import { ApplePurchaseValidationService } from "./ApplePurchaseValidationService.js";
+import { GooglePlayValidationService } from "./GooglePlayValidationService.js";
 
 const applePurchaseSchema = z.object({
   productId: z.string().min(1),
@@ -18,11 +19,14 @@ const adminGrantSchema = z.object({
   reason: z.string().trim().min(1).max(300).optional()
 });
 
+const googlePurchaseSchema = z.object({ productId: z.string().min(1), purchaseToken: z.string().min(20), restored: z.boolean().optional() });
+
 export class EntitlementService {
   constructor(
     private entitlements: EntitlementRepository,
     private audits: AuditRepository,
-    private appleValidator = new ApplePurchaseValidationService()
+    private appleValidator = new ApplePurchaseValidationService(),
+    private googleValidator = new GooglePlayValidationService()
   ) {}
 
   async getFor(user: User): Promise<EntitlementSummary> {
@@ -168,5 +172,51 @@ export class EntitlementService {
     });
 
     return { handled: true, notificationType: notification.notificationType };
+  }
+
+  async registerGooglePurchase(user: User, body: unknown, ipAddress?: string): Promise<EntitlementSummary> {
+    const input = googlePurchaseSchema.parse(body);
+    if (input.productId !== env.GOOGLE_PLAY_PRODUCT_ID) throw new AppError(400, "Produto de compra inválido.", "INVALID_PURCHASE_PRODUCT");
+    let purchase = { productId: input.productId, purchaseToken: input.purchaseToken, purchasedAt: new Date() };
+    if (env.NODE_ENV === "production" && !this.googleValidator.isConfigured()) throw new AppError(501, "Validação server-side do Google Play ainda não está configurada.", "GOOGLE_VALIDATION_NOT_CONFIGURED");
+    if (env.NODE_ENV === "production" || this.googleValidator.isConfigured()) purchase = await this.googleValidator.validate(input);
+    const currentOwnerId = await this.entitlements.findUserByGooglePurchaseToken(purchase.purchaseToken);
+    if (currentOwnerId && currentOwnerId !== user.id) {
+      throw new AppError(409, "Esta compra Google Play já está vinculada a outra conta.", "GOOGLE_PURCHASE_ALREADY_CLAIMED");
+    }
+    const summary = await this.entitlements.recordGooglePurchase({ userId: user.id, productId: purchase.productId, purchaseToken: purchase.purchaseToken, purchasedAt: purchase.purchasedAt }, env.FREE_SCAN_LIMIT);
+    await this.audits.create({ actorId: user.id, action: input.restored ? "purchase_restored" : "purchase_completed", entity: "entitlement", entityId: user.id, ipAddress, metadata: { productId: input.productId, source: "google_play" } });
+    return summary;
+  }
+
+  async handleGoogleNotification(body: unknown, authorization?: string, ipAddress?: string): Promise<{ handled: boolean; eventType?: string }> {
+    if (!authorization || !(await this.googleValidator.verifyPushToken(authorization))) throw new AppError(401, "Token do push Google Play inválido.", "GOOGLE_RTDN_UNAUTHORIZED");
+    const input = z.object({ message: z.object({ messageId: z.string().min(1), data: z.string().min(1) }) }).parse(body);
+    const decoded = JSON.parse(Buffer.from(input.message.data, "base64").toString("utf8")) as {
+      packageName?: string;
+      oneTimeProductNotification?: { notificationType?: number; purchaseToken?: string; sku?: string };
+      voidedPurchaseNotification?: { purchaseToken?: string; productType?: number; refundType?: number };
+    };
+    if (decoded.packageName !== env.GOOGLE_PLAY_PACKAGE_NAME) throw new AppError(400, "Pacote da notificação Google Play inválido.", "GOOGLE_RTDN_PACKAGE_MISMATCH");
+
+    const voided = decoded.voidedPurchaseNotification;
+    const oneTime = decoded.oneTimeProductNotification;
+    const purchaseToken = voided?.purchaseToken ?? oneTime?.purchaseToken;
+    const eventType = voided
+      ? `voided:${voided.productType ?? "unknown"}:${voided.refundType ?? "unknown"}`
+      : oneTime
+        ? `one_time:${oneTime.notificationType ?? "unknown"}`
+        : undefined;
+    if (!purchaseToken || !eventType) return { handled: false };
+    if (!(await this.entitlements.claimGoogleNotification({ messageId: input.message.messageId, eventType, purchaseToken }))) return { handled: false, eventType };
+
+    // A cancellation only applies to a pending transaction, which has never
+    // granted entitlement. A voided one-time product is the refund/revocation
+    // signal that removes access for this permanent unlock.
+    if (!voided || voided.productType !== 2 || voided.refundType !== 1) return { handled: true, eventType };
+    const revoked = await this.entitlements.revokeGooglePurchase(purchaseToken, env.FREE_SCAN_LIMIT);
+    if (!revoked) return { handled: false, eventType };
+    await this.audits.create({ actorId: revoked.userId, action: "purchase_revoked", entity: "entitlement", entityId: revoked.userId, ipAddress, metadata: { source: "google_play", eventType } });
+    return { handled: true, eventType };
   }
 }

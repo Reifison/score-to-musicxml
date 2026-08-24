@@ -1,6 +1,6 @@
 # Conversor de Partituras
 
-Aplicação web e iOS para usuários autenticados enviarem partituras em PDF/imagem, exportarem MusicXML ou MIDI e acompanharem a reprodução visual das notas. O fluxo usa um adaptador OMR substituível e mantém autenticação e autorização no backend.
+Aplicação web, iOS e Android para usuários autenticados enviarem partituras em PDF/imagem, exportarem MusicXML ou MIDI e acompanharem a reprodução visual das notas. O fluxo usa um adaptador OMR substituível e mantém autenticação e autorização no backend.
 
 ## Stack
 

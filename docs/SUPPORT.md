@@ -4,7 +4,7 @@ Para ajuda com o Conversor de Partituras, envie:
 
 - E-mail da conta usada no app.
 - Descricao do problema.
-- Modelo do iPhone/iPad e versao do iOS.
+- Modelo do aparelho e versao do iOS ou Android.
 - Se o problema for conversao, informe se o arquivo era foto, imagem ou PDF.
 
 Nao envie senhas. Para problemas com compra, use tambem a opcao "Restaurar compra" no app antes de abrir suporte.
@@ -23,7 +23,7 @@ Nao envie senhas. Para problemas com compra, use tambem a opcao "Restaurar compr
 - Para corrigir ou preparar uma partitura para impressao, prefira o MusicXML. Para praticar, ouvir ou usar em um sequenciador, o MIDI costuma ser mais adequado.
 - Os dois formatos podem ser baixados separadamente. Exportar MIDI nao remove nem substitui o MusicXML.
 
-Na web, use `Baixar MusicXML` ou `Baixar MIDI`. No iPhone, use a acao de exportacao correspondente e escolha MuseScore, Arquivos ou outro app compativel na folha de compartilhamento. A disponibilidade dos destinos depende dos apps instalados no aparelho.
+Na web, use `Baixar MusicXML` ou `Baixar MIDI`. No iPhone/iPad ou Android, use a acao de exportacao correspondente e escolha MuseScore, Arquivos ou outro app compativel no seletor de compartilhamento. A disponibilidade dos destinos depende dos apps instalados no aparelho.
 
 ### Abrir No MuseScore
 
@@ -39,7 +39,7 @@ O reconhecimento da partitura e automatico. Qualidade da foto, sombras, paginas 
 
 Repeticoes simples costumam ser reproduzidas. Casas de repeticao, saltos, codas e repeticoes complexas podem ser interpretados de forma diferente do original. Se a ordem dos compassos estiver incorreta, confira o MusicXML no MuseScore e compare com a imagem ou PDF enviado.
 
-O player web e o player exibido dentro do app iOS usam um piano digital leve. Esse timbre serve como referencia de notas e ritmo e nao reproduz com fidelidade o som de cada instrumento, tecnicas de execucao, dinamica ou articulacoes. O MIDI aberto em outro app pode soar diferente conforme o banco de sons usado por esse app.
+O player web e o player exibido dentro do app iOS/Android usam um piano digital leve. Esse timbre serve como referencia de notas e ritmo e nao reproduz com fidelidade o som de cada instrumento, tecnicas de execucao, dinamica ou articulacoes. O MIDI aberto em outro app pode soar diferente conforme o banco de sons usado por esse app.
 
 Quando a partitura nao informa andamento, o app assume 70 BPM e mostra essa informacao nos controles. Quando nao ha instrumento reconhecido, o piano digital e usado como padrao. Esses valores permitem a reproducao, mas podem nao representar a intencao da partitura original.
 
@@ -57,4 +57,4 @@ Nao envie senha, token de acesso, cookie, arquivo em base64 nem o conteudo compl
 
 ## Exclusao De Dados
 
-O usuario pode excluir partituras no app. Para solicitar exclusao completa da conta ou dados associados, entre em contato pelo canal de suporte informado na App Store.
+O usuario pode excluir partituras no app. Para solicitar exclusao completa da conta ou dados associados, entre em contato pelo canal de suporte informado na App Store ou Google Play.
