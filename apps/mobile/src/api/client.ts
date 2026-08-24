@@ -3,13 +3,17 @@ import { resolveApiUrl } from "./config";
 import { createMidiDownloadPlan, runMidiDownload } from "../files/midiExport";
 import { validatePlayerMusicXml, validatePlayerMusicXmlSize } from "../player/bridge";
 import { createPlayerMusicXmlDownloadPlan } from "../player/musicXmlDownload";
+import { googlePurchaseRequest, type GooglePurchaseRegistration } from "./purchases";
 import type { AuditLog, Entitlement, PublicUser, Score } from "./types";
 
 export const API_URL = resolveApiUrl(
   process.env.EXPO_PUBLIC_API_URL,
   __DEV__ || process.env.EXPO_PUBLIC_ALLOW_HTTP_API === "1"
 );
-const mobileHeader = "score-to-musicxml-ios";
+// The bearer-token response is needed by every native mobile target. Keep this
+// value platform-neutral so Android does not accidentally receive the web
+// session-cookie response.
+export const mobileClientHeader = "score-to-musicxml-mobile";
 
 type ApiErrorBody = {
   error?: string;
@@ -61,7 +65,7 @@ export const api = {
   async login(email: string, password: string) {
     const response = await apiRequest<{ user: PublicUser; token?: string }>("/api/auth/login", {
       method: "POST",
-      headers: { "x-mobile-client": mobileHeader },
+      headers: { "x-mobile-client": mobileClientHeader },
       body: JSON.stringify({ email, password })
     });
     if (!response.token) {
@@ -155,6 +159,14 @@ export const api = {
       method: "POST",
       body: JSON.stringify(purchase)
     }, token);
+  },
+
+  async registerGooglePurchase(
+    token: string,
+    purchase: GooglePurchaseRegistration
+  ) {
+    const request = googlePurchaseRequest(purchase);
+    return apiRequest<{ entitlement: Entitlement }>(request.path, request, token);
   },
 
   async downloadMusicXml(token: string, score: Score) {

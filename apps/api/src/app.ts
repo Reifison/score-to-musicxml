@@ -9,6 +9,7 @@ import { errorHandler } from "./middleware/errorHandler.js";
 import { attachServices } from "./middleware/services.js";
 import { adminRoutes } from "./routes/adminRoutes.js";
 import { appleRoutes } from "./routes/appleRoutes.js";
+import { googleRoutes } from "./routes/googleRoutes.js";
 import { authRoutes } from "./routes/authRoutes.js";
 import { debugRoutes } from "./routes/debugRoutes.js";
 import { meRoutes } from "./routes/meRoutes.js";
@@ -28,6 +29,7 @@ export function createApp(services: AppServices = createServices()) {
   app.get("/health", (_req, res) => res.json({ ok: true }));
   app.use("/debug", debugRoutes);
   app.use("/api/apple", appleRoutes);
+  app.use("/api/google", googleRoutes);
   app.use("/api/auth", authRoutes);
   app.use("/api/me", meRoutes);
   app.use("/api/users", userRoutes);

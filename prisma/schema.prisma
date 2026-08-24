@@ -29,6 +29,7 @@ enum EntitlementPlan {
 enum EntitlementSource {
   free
   apple
+  google_play
   legacy_grant
   admin_grant
 }
@@ -133,6 +134,8 @@ model Entitlement {
   freeScansUsed              Int             @default(0)
   appleOriginalTransactionId String?         @unique
   appleProductId             String?
+  googlePurchaseToken        String?         @unique
+  googleProductId            String?
   purchasedAt                DateTime?
   grantedAt                  DateTime?
   grantedById                String?
@@ -144,6 +147,17 @@ model Entitlement {
   @@index([plan])
   @@index([source])
   @@index([grantedById])
+}
+
+model GooglePlayNotification {
+  id          String   @id @default(uuid())
+  messageId   String   @unique
+  eventType   String
+  purchaseToken String?
+  createdAt   DateTime @default(now())
+
+  @@index([purchaseToken])
+  @@index([createdAt])
 }
 
 model ScanUsage {

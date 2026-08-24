@@ -1,7 +1,7 @@
 export type Role = "admin" | "user";
 export type ScoreStatus = "uploaded" | "queued" | "processing" | "converted" | "failed";
 export type EntitlementPlan = "free" | "paid";
-export type EntitlementSource = "free" | "apple" | "legacy_grant" | "admin_grant";
+export type EntitlementSource = "free" | "apple" | "google_play" | "legacy_grant" | "admin_grant";
 
 export type User = {
   id: string;
@@ -40,6 +40,8 @@ export type Score = {
   confidence: number | null;
   musicxmlFilename: string | null;
   isFavorite: boolean;
+  deletedAt: Date | null;
+  purgeAt: Date | null;
   createdAt: Date;
   updatedAt: Date;
   convertedAt: Date | null;
@@ -62,6 +64,7 @@ export type AuditAction =
   | "conversion_failed"
   | "score_downloaded"
   | "score_deleted"
+  | "score_restored"
   | "score_renamed"
   | "purchase_started"
   | "purchase_completed"
@@ -79,6 +82,7 @@ export type EntitlementSummary = {
   freeScansRemaining: number | null;
   purchasedAt: Date | null;
   appleProductId: string | null;
+  googleProductId: string | null;
   grantedAt: Date | null;
   grantedById: string | null;
   grantReason: string | null;

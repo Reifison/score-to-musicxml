@@ -76,13 +76,39 @@ describe("API", () => {
   it("emite token mobile sob demanda e aceita Authorization Bearer", async () => {
     const response = await request(ctx.app)
       .post("/api/auth/login")
-      .set("x-mobile-client", "score-to-musicxml-ios")
+      .set("x-mobile-client", "score-to-musicxml-mobile")
       .send({ email: "user@example.com", password: "Password123!" })
       .expect(200);
     expect(response.body.token).toEqual(expect.any(String));
     await request(ctx.app).get("/api/auth/me").set("Authorization", `Bearer ${response.body.token}`).expect(200);
     await request(ctx.app).post("/api/auth/logout").set("Authorization", `Bearer ${response.body.token}`).expect(204);
     await request(ctx.app).get("/api/auth/me").set("Authorization", `Bearer ${response.body.token}`).expect(401);
+  });
+
+  it("registra compra Google Play e impede reutilizar o token em outra conta", async () => {
+    const cookie = await login(ctx.app, "user@example.com");
+    const token = "google-purchase-token-unique-12345";
+    const purchase = await request(ctx.app)
+      .post("/api/me/entitlement/google")
+      .set("Cookie", cookie)
+      .send({ productId: "premium_unlock", purchaseToken: token })
+      .expect(200);
+    expect(purchase.body.entitlement).toMatchObject({ plan: "paid", source: "google_play", googleProductId: "premium_unlock" });
+
+    const other = await ctx.repos.users.create({
+      name: "Other",
+      email: "other-purchase@example.com",
+      passwordHash: await ctx.services.auth.hashPassword("Password123!"),
+      role: "user",
+      isActive: true
+    });
+    expect(other.id).toBeTruthy();
+    const otherCookie = await login(ctx.app, "other-purchase@example.com");
+    await request(ctx.app)
+      .post("/api/me/entitlement/google")
+      .set("Cookie", otherCookie)
+      .send({ productId: "premium_unlock", purchaseToken: token })
+      .expect(409);
   });
 
   it("bloqueia usuário comum em rota admin e permite admin", async () => {

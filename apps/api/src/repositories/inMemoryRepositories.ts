@@ -215,6 +215,7 @@ export class InMemoryAuditRepository implements AuditRepository {
 }
 
 export class InMemoryEntitlementRepository implements EntitlementRepository {
+  private googleNotifications = new Set<string>();
   private entitlements = new Map<string, {
     plan: EntitlementPlan;
     source: EntitlementSource;
@@ -222,6 +223,8 @@ export class InMemoryEntitlementRepository implements EntitlementRepository {
     purchasedAt: Date | null;
     appleProductId: string | null;
     appleOriginalTransactionId: string | null;
+    googlePurchaseToken: string | null;
+    googleProductId: string | null;
     grantedAt: Date | null;
     grantedById: string | null;
     grantReason: string | null;
@@ -259,6 +262,23 @@ export class InMemoryEntitlementRepository implements EntitlementRepository {
     entitlement.source = "apple";
     entitlement.appleProductId = input.productId;
     entitlement.appleOriginalTransactionId = input.originalTransactionId;
+    entitlement.googlePurchaseToken = null;
+    entitlement.googleProductId = null;
+    entitlement.purchasedAt = input.purchasedAt;
+    entitlement.grantedAt = null;
+    entitlement.grantedById = null;
+    entitlement.grantReason = null;
+    return this.summary(input.userId, freeScanLimit);
+  }
+
+  async recordGooglePurchase(input: { userId: string; productId: string; purchaseToken: string; purchasedAt: Date }, freeScanLimit: number): Promise<EntitlementSummary> {
+    const entitlement = this.ensure(input.userId);
+    entitlement.plan = "paid";
+    entitlement.source = "google_play";
+    entitlement.googleProductId = input.productId;
+    entitlement.googlePurchaseToken = input.purchaseToken;
+    entitlement.appleProductId = null;
+    entitlement.appleOriginalTransactionId = null;
     entitlement.purchasedAt = input.purchasedAt;
     entitlement.grantedAt = null;
     entitlement.grantedById = null;
@@ -272,6 +292,8 @@ export class InMemoryEntitlementRepository implements EntitlementRepository {
     entitlement.source = "admin_grant";
     entitlement.appleProductId = null;
     entitlement.appleOriginalTransactionId = null;
+    entitlement.googlePurchaseToken = null;
+    entitlement.googleProductId = null;
     entitlement.purchasedAt = null;
     entitlement.grantedAt = now();
     entitlement.grantedById = input.grantedById;
@@ -299,10 +321,36 @@ export class InMemoryEntitlementRepository implements EntitlementRepository {
       entitlement.source = "free";
       entitlement.appleProductId = null;
       entitlement.appleOriginalTransactionId = null;
+      entitlement.googlePurchaseToken = null;
+      entitlement.googleProductId = null;
       entitlement.purchasedAt = null;
       return { entitlement: await this.summary(userId, freeScanLimit), userId };
     }
     return null;
+  }
+
+  async revokeGooglePurchase(purchaseToken: string, freeScanLimit: number): Promise<{ entitlement: EntitlementSummary; userId: string } | null> {
+    for (const [userId, entitlement] of this.entitlements) {
+      if (entitlement.googlePurchaseToken !== purchaseToken || entitlement.source !== "google_play") continue;
+      entitlement.plan = "free";
+      entitlement.source = "free";
+      entitlement.googlePurchaseToken = null;
+      entitlement.googleProductId = null;
+      entitlement.purchasedAt = null;
+      return { entitlement: await this.summary(userId, freeScanLimit), userId };
+    }
+    return null;
+  }
+
+  async findUserByGooglePurchaseToken(purchaseToken: string): Promise<string | null> {
+    for (const [userId, entitlement] of this.entitlements) if (entitlement.googlePurchaseToken === purchaseToken) return userId;
+    return null;
+  }
+
+  async claimGoogleNotification(input: { messageId: string; eventType: string; purchaseToken?: string | null }): Promise<boolean> {
+    if (this.googleNotifications.has(input.messageId)) return false;
+    this.googleNotifications.add(input.messageId);
+    return true;
   }
 
   private ensure(userId: string) {
@@ -315,6 +363,8 @@ export class InMemoryEntitlementRepository implements EntitlementRepository {
       purchasedAt: null,
       appleProductId: null,
       appleOriginalTransactionId: null,
+      googlePurchaseToken: null,
+      googleProductId: null,
       grantedAt: null,
       grantedById: null,
       grantReason: null
@@ -333,6 +383,7 @@ export class InMemoryEntitlementRepository implements EntitlementRepository {
       freeScansRemaining: entitlement.plan === "paid" ? null : Math.max(0, freeScanLimit - entitlement.freeScansUsed),
       purchasedAt: entitlement.purchasedAt,
       appleProductId: entitlement.appleProductId,
+      googleProductId: entitlement.googleProductId,
       grantedAt: entitlement.grantedAt,
       grantedById: entitlement.grantedById,
       grantReason: entitlement.grantReason

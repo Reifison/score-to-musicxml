@@ -23,3 +23,13 @@ apps/mobile/.expo/
 apps/mobile/ios/Pods/
 apps/mobile/ios/build/
 apps/mobile/ios/DerivedData/
+
+# Mobile/Android generated artifacts
+apps/mobile/android/.gradle/
+apps/mobile/android/build/
+apps/mobile/android/app/build/
+apps/mobile/android/app/debug.keystore
+apps/mobile/android/.cxx/
+apps/mobile/android/local.properties
+apps/mobile/android/*.iml
+apps/mobile/android/captures/

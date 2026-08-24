@@ -17,6 +17,17 @@ import { colors, sharedStyles } from "../src/theme/styles";
 const premiumProductId = "premium_unlock";
 const premiumProductIds = [premiumProductId];
 
+type PurchaseRegistration = {
+  productId: string;
+  originalTransactionId?: string;
+  purchaseToken?: string;
+  packageName?: string;
+  purchasedAt?: string;
+  restored?: boolean;
+  transactionId?: string;
+  quantity?: number;
+};
+
 export default function ScoresScreen() {
   const { token, user } = useAuth();
   const queryClient = useQueryClient();
@@ -28,6 +39,8 @@ export default function ScoresScreen() {
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const processedPurchases = useRef(new Set<string>());
 
+  const isAndroid = Platform.OS === "android";
+  const storeName = isAndroid ? "Google Play" : "App Store";
   const {
     availablePurchases,
     connected,
@@ -41,7 +54,7 @@ export default function ScoresScreen() {
       setPurchaseStatus(purchaseErrorMessage(error));
     },
     onPurchaseSuccess: (purchase) => {
-      void completeApplePurchase(purchase, false);
+      void completeStorePurchase(purchase, false);
     }
   });
 
@@ -107,7 +120,28 @@ export default function ScoresScreen() {
   });
 
   const purchaseMutation = useMutation({
-    mutationFn: (purchase: { originalTransactionId: string; productId: string; purchaseToken?: string; purchasedAt?: string; restored?: boolean; transactionId?: string }) => api.registerApplePurchase(token!, purchase),
+    mutationFn: (purchase: PurchaseRegistration) => {
+      if (isAndroid) {
+        if (!purchase.purchaseToken) throw new Error("A compra Google não forneceu um token válido.");
+        return api.registerGooglePurchase(token!, {
+          productId: purchase.productId,
+          purchaseToken: purchase.purchaseToken,
+          packageName: purchase.packageName,
+          purchasedAt: purchase.purchasedAt,
+          restored: purchase.restored,
+          transactionId: purchase.transactionId,
+          quantity: purchase.quantity
+        });
+      }
+      return api.registerApplePurchase(token!, {
+        originalTransactionId: purchase.originalTransactionId!,
+        productId: purchase.productId,
+        purchaseToken: purchase.purchaseToken,
+        purchasedAt: purchase.purchasedAt,
+        restored: purchase.restored,
+        transactionId: purchase.transactionId
+      });
+    },
     onSuccess: async () => {
       setPaywallVisible(false);
       setPurchaseStatus(null);
@@ -118,17 +152,17 @@ export default function ScoresScreen() {
 
   const premiumProduct = products.find((product) => product.id === premiumProductId);
   const premiumPrice = premiumProduct?.displayPrice ?? "R$ 29,90";
-  const canUseStoreKit = Platform.OS === "ios" && connected;
+  const canUseStore = connected;
 
   useEffect(() => {
-    if (Platform.OS === "ios" && connected) {
+    if (connected) {
       void fetchProducts({ skus: premiumProductIds, type: "in-app" });
     }
   }, [connected, fetchProducts]);
 
   useEffect(() => {
     const restored = availablePurchases.find((purchase) => purchase.productId === premiumProductId);
-    if (restored) void completeApplePurchase(restored, true);
+    if (restored) void completeStorePurchase(restored, true);
   }, [availablePurchases]);
 
   const subtitle = useMemo(() => {
@@ -143,7 +177,7 @@ export default function ScoresScreen() {
     return false;
   }
 
-  async function completeApplePurchase(purchase: Purchase, restored: boolean) {
+  async function completeStorePurchase(purchase: Purchase, restored: boolean) {
     if (!token || purchase.productId !== premiumProductId) return;
     const purchaseKey = purchase.purchaseToken || purchase.transactionId || purchase.id;
     if (processedPurchases.current.has(purchaseKey)) return;
@@ -151,14 +185,15 @@ export default function ScoresScreen() {
 
     setPurchaseStatus(restored ? "Restaurando compra..." : "Validando compra...");
     try {
-      const originalTransactionId = getOriginalTransactionId(purchase);
       await purchaseMutation.mutateAsync({
         productId: purchase.productId,
-        originalTransactionId,
+        originalTransactionId: isAndroid ? undefined : getOriginalTransactionId(purchase),
+        packageName: "packageNameAndroid" in purchase ? purchase.packageNameAndroid ?? undefined : undefined,
         purchaseToken: purchase.purchaseToken ?? undefined,
         purchasedAt: new Date(purchase.transactionDate).toISOString(),
         restored,
-        transactionId: purchase.transactionId ?? undefined
+        transactionId: purchase.transactionId ?? undefined,
+        quantity: purchase.quantity
       });
       await finishTransaction({ purchase, isConsumable: false });
       setPurchaseStatus(restored ? "Compra restaurada." : "Compra concluida.");
@@ -171,34 +206,27 @@ export default function ScoresScreen() {
   async function buyPremium() {
     setUploadError(null);
     setPurchaseStatus(null);
-    if (!canUseStoreKit) {
-      await purchaseMutation.mutateAsync({
-        productId: premiumProductId,
-        originalTransactionId: `local-${Date.now()}`,
-        purchasedAt: new Date().toISOString()
-      });
+    if (!canUseStore) {
+      setPurchaseStatus(`Conectando com a ${storeName}...`);
       return;
     }
-    setPurchaseStatus("Abrindo App Store...");
+    setPurchaseStatus(`Abrindo ${storeName}...`);
     await requestPurchase({
       type: "in-app",
-      request: { apple: { sku: premiumProductId } }
+      request: isAndroid
+        ? { google: { skus: premiumProductIds } }
+        : { apple: { sku: premiumProductId } }
     });
   }
 
   async function restorePremium() {
     setUploadError(null);
     setPurchaseStatus(null);
-    if (!canUseStoreKit) {
-      await purchaseMutation.mutateAsync({
-        productId: premiumProductId,
-        originalTransactionId: `local-restore-${Date.now()}`,
-        purchasedAt: new Date().toISOString(),
-        restored: true
-      });
+    if (!canUseStore) {
+      setPurchaseStatus(`Conectando com a ${storeName}...`);
       return;
     }
-    setPurchaseStatus("Buscando compras anteriores...");
+    setPurchaseStatus(`Buscando compras anteriores na ${storeName}...`);
     await restorePurchases();
   }
 
@@ -221,7 +249,7 @@ export default function ScoresScreen() {
   async function scanWithCamera() {
     if (!(await ensureUploadAllowed())) return;
     const proceed = await new Promise<boolean>((resolve) => {
-      Alert.alert("Escanear partitura", "Use modo documento/scan quando o iPhone oferecer essa opcao. Mantenha a folha reta, bem iluminada, sem sombras e ocupando quase toda a tela.", [
+      Alert.alert("Escanear partitura", "Use o modo documento/scan quando o aparelho oferecer essa opcao. Mantenha a folha reta, bem iluminada, sem sombras e ocupando quase toda a tela.", [
         { text: "Cancelar", style: "cancel", onPress: () => resolve(false) },
         { text: "Abrir camera", onPress: () => resolve(true) }
       ]);
@@ -402,7 +430,7 @@ export default function ScoresScreen() {
           <View style={{ backgroundColor: colors.panel, borderTopLeftRadius: 16, borderTopRightRadius: 16, gap: 14, padding: 20 }}>
             <Text style={{ color: colors.ink, fontSize: 22, fontWeight: "700" }}>Desbloquear scans</Text>
             <Text style={sharedStyles.subtitle}>Voce usou os 3 scans gratis. A versao paga libera novos envios nesta conta.</Text>
-            {Platform.OS === "ios" && !connected ? <Text style={{ color: colors.warning }}>Conectando com a App Store...</Text> : null}
+            {!connected ? <Text style={{ color: colors.warning }}>Conectando com a {storeName}...</Text> : null}
             {purchaseStatus ? <Text style={sharedStyles.subtitle}>{purchaseStatus}</Text> : null}
             <Pressable disabled={purchaseMutation.isPending} onPress={buyPremium} style={sharedStyles.button}>
               {purchaseMutation.isPending ? <ActivityIndicator color={colors.onPrimary} /> : <Text style={sharedStyles.buttonText}>Desbloquear {premiumPrice}</Text>}

@@ -25,14 +25,13 @@ Este guia registra exemplos e criterios para orientar testes manuais, suporte e 
 
 ## Decisao Sobre Recorte E Perspectiva
 
-Para o MVP iOS, o app usa recorte manual via `expo-image-picker` com `allowsEditing`. A correcao automatica de perspectiva fica como melhoria posterior porque normalmente exige uma biblioteca nativa de visao computacional ou um fluxo de document scanner que deve ser validado em dispositivo real.
+Para o MVP mobile, o app usa recorte manual via `expo-image-picker` com `allowsEditing`. A correcao automatica de perspectiva fica como melhoria posterior porque normalmente exige uma biblioteca nativa de visao computacional ou um fluxo de document scanner que deve ser validado em dispositivos reais.
 
 Critérios para escolher uma biblioteca futura:
 
-- Funcionar em Expo Dev Client/EAS sem quebrar o fluxo iOS.
+- Funcionar em Expo Dev Client/EAS sem quebrar os fluxos iOS e Android.
 - Detectar bordas da folha com baixa taxa de falso positivo.
 - Permitir ajuste manual quando a deteccao automatica falhar.
 - Preservar resolucao suficiente para OMR.
 - Nao reter imagens em servicos de terceiros sem consentimento explicito.
 - Ter manutencao ativa e licenca compativel com app comercial.
-

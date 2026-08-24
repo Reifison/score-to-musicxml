@@ -32,10 +32,11 @@ function mapAudit(log: Awaited<ReturnType<typeof prisma.auditLog.findFirst>>): A
 
 function entitlementSummary(input: {
   plan: "free" | "paid";
-  source: "free" | "apple" | "legacy_grant" | "admin_grant";
+  source: "free" | "apple" | "google_play" | "legacy_grant" | "admin_grant";
   freeScansUsed: number;
   purchasedAt: Date | null;
   appleProductId: string | null;
+  googleProductId: string | null;
   grantedAt: Date | null;
   grantedById: string | null;
   grantReason: string | null;
@@ -48,6 +49,7 @@ function entitlementSummary(input: {
     freeScansRemaining: input.plan === "paid" ? null : Math.max(0, freeScanLimit - input.freeScansUsed),
     purchasedAt: input.purchasedAt,
     appleProductId: input.appleProductId,
+    googleProductId: input.googleProductId,
     grantedAt: input.grantedAt,
     grantedById: input.grantedById,
     grantReason: input.grantReason
@@ -257,11 +259,22 @@ class PrismaEntitlementRepository implements EntitlementRepository {
         source: "apple",
         appleOriginalTransactionId: input.originalTransactionId,
         appleProductId: input.productId,
+        googlePurchaseToken: null,
+        googleProductId: null,
         purchasedAt: input.purchasedAt,
         grantedAt: null,
         grantedById: null,
         grantReason: null
       }
+    });
+    return entitlementSummary(entitlement, freeScanLimit);
+  }
+
+  async recordGooglePurchase(input: { userId: string; productId: string; purchaseToken: string; purchasedAt: Date }, freeScanLimit: number): Promise<EntitlementSummary> {
+    const entitlement = await prisma.entitlement.upsert({
+      where: { userId: input.userId },
+      create: { userId: input.userId, plan: "paid", source: "google_play", googlePurchaseToken: input.purchaseToken, googleProductId: input.productId, purchasedAt: input.purchasedAt },
+      update: { plan: "paid", source: "google_play", googlePurchaseToken: input.purchaseToken, googleProductId: input.productId, purchasedAt: input.purchasedAt, appleOriginalTransactionId: null, appleProductId: null, grantedAt: null, grantedById: null, grantReason: null }
     });
     return entitlementSummary(entitlement, freeScanLimit);
   }
@@ -282,6 +295,8 @@ class PrismaEntitlementRepository implements EntitlementRepository {
         source: "admin_grant",
         appleOriginalTransactionId: null,
         appleProductId: null,
+        googlePurchaseToken: null,
+        googleProductId: null,
         purchasedAt: null,
         grantedAt: new Date(),
         grantedById: input.grantedById,
@@ -327,10 +342,34 @@ class PrismaEntitlementRepository implements EntitlementRepository {
         source: "free",
         appleOriginalTransactionId: null,
         appleProductId: null,
-        purchasedAt: null
+        purchasedAt: null,
+        googlePurchaseToken: null,
+        googleProductId: null
       }
     });
     return { entitlement: entitlementSummary(entitlement, freeScanLimit), userId: entitlement.userId };
+  }
+
+  async revokeGooglePurchase(purchaseToken: string, freeScanLimit: number): Promise<{ entitlement: EntitlementSummary; userId: string } | null> {
+    const existing = await prisma.entitlement.findFirst({ where: { googlePurchaseToken: purchaseToken, source: "google_play" } });
+    if (!existing) return null;
+    const entitlement = await prisma.entitlement.update({ where: { userId: existing.userId }, data: { plan: "free", source: "free", googlePurchaseToken: null, googleProductId: null, purchasedAt: null } });
+    return { entitlement: entitlementSummary(entitlement, freeScanLimit), userId: entitlement.userId };
+  }
+
+  async findUserByGooglePurchaseToken(purchaseToken: string): Promise<string | null> {
+    const existing = await prisma.entitlement.findUnique({ where: { googlePurchaseToken: purchaseToken } });
+    return existing?.userId ?? null;
+  }
+
+  async claimGoogleNotification(input: { messageId: string; eventType: string; purchaseToken?: string | null }): Promise<boolean> {
+    try {
+      await prisma.googlePlayNotification.create({ data: input });
+      return true;
+    } catch (error) {
+      if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002") return false;
+      throw error;
+    }
   }
 }
 

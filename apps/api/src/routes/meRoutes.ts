@@ -13,3 +13,8 @@ meRoutes.post("/entitlement/apple", async (req, res) => {
   const entitlement = await req.services.entitlements.registerApplePurchase(req.user!, req.body, req.ip);
   res.json({ entitlement });
 });
+
+meRoutes.post("/entitlement/google", async (req, res) => {
+  const entitlement = await req.services.entitlements.registerGooglePurchase(req.user!, req.body, req.ip);
+  res.json({ entitlement });
+});

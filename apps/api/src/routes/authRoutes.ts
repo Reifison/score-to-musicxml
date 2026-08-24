@@ -16,7 +16,7 @@ authRoutes.post("/login", loginRateLimit, async (req, res) => {
   const input = loginSchema.parse(req.body);
   const result = await req.services.auth.login(input.email, input.password, req.ip);
   req.services.auth.setSessionCookie(res, result.token);
-  const mobile = req.header("x-mobile-client") === "score-to-musicxml-ios";
+  const mobile = ["score-to-musicxml-ios", "score-to-musicxml-android", "score-to-musicxml-mobile"].includes(req.header("x-mobile-client") ?? "");
   res.json({ user: result.user, ...(mobile ? { token: result.token } : {}) });
 });
 

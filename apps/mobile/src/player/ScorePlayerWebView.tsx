@@ -25,6 +25,7 @@ import {
   playerCommandForAppState,
   playerCommandForRouteExit
 } from "./lifecycle";
+import { loadCachedPlayerMusicXml, savePlayerMusicXmlToCache } from "./musicXmlCache";
 
 type NativePlayerState =
   | "downloading"
@@ -120,7 +121,16 @@ export function ScorePlayerWebView({ immersive = false, onImmersiveChange, score
     setError("");
     setState("downloading");
 
-    void api.loadMusicXmlForPlayer(token, score)
+    void loadCachedPlayerMusicXml(score)
+      .then((cachedDocument) => cachedDocument ?? api.loadMusicXmlForPlayer(token, score)
+        .then((downloadedDocument) => {
+          try {
+            savePlayerMusicXmlToCache(score, downloadedDocument);
+          } catch {
+            // The current download remains usable if persistent storage fails.
+          }
+          return downloadedDocument;
+        }))
       .then((document) => {
         if (cancelled) return;
         musicXmlCacheRef.current = document;
