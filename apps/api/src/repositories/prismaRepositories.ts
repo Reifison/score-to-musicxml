@@ -105,12 +105,18 @@ class PrismaScoreRepository implements ScoreRepository {
   }
 
   async findById(id: string): Promise<Score | null> {
+    const score = await prisma.score.findFirst({ where: { id, deletedAt: null } });
+    return mapScore(score);
+  }
+
+  async findByIdIncludingDeleted(id: string): Promise<Score | null> {
     const score = await prisma.score.findUnique({ where: { id } });
     return mapScore(score);
   }
 
   async list(filters: ScoreFilters = {}): Promise<Score[]> {
     const where: Prisma.ScoreWhereInput = {};
+    where.deletedAt = null;
     if (filters.userId) where.userId = filters.userId;
     if (filters.favorite !== undefined) where.isFavorite = filters.favorite;
     if (filters.status) where.conversionStatus = filters.status as PrismaScoreStatus;
@@ -124,8 +130,28 @@ class PrismaScoreRepository implements ScoreRepository {
     return scores.map((score) => mapScore(score)!);
   }
 
+  async listTrash(filters: ScoreFilters = {}): Promise<Score[]> {
+    const where: Prisma.ScoreWhereInput = { deletedAt: { not: null } };
+    if (filters.userId) where.userId = filters.userId;
+    if (filters.favorite !== undefined) where.isFavorite = filters.favorite;
+    if (filters.status) where.conversionStatus = filters.status as PrismaScoreStatus;
+    if (filters.from || filters.to) {
+      where.deletedAt = { not: null, gte: filters.from, lte: filters.to };
+    }
+    const scores = await prisma.score.findMany({ where, orderBy: { purgeAt: "asc" } });
+    return scores.map((score) => mapScore(score)!);
+  }
+
   async listOlderThan(date: Date): Promise<Score[]> {
-    const scores = await prisma.score.findMany({ where: { createdAt: { lt: date } }, orderBy: { createdAt: "asc" } });
+    const scores = await prisma.score.findMany({ where: { deletedAt: null, createdAt: { lt: date } }, orderBy: { createdAt: "asc" } });
+    return scores.map((score) => mapScore(score)!);
+  }
+
+  async listExpiredTrash(date: Date): Promise<Score[]> {
+    const scores = await prisma.score.findMany({
+      where: { deletedAt: { not: null }, purgeAt: { lte: date } },
+      orderBy: { purgeAt: "asc" }
+    });
     return scores.map((score) => mapScore(score)!);
   }
 
@@ -140,8 +166,20 @@ class PrismaScoreRepository implements ScoreRepository {
     return mapScore(score)!;
   }
 
+  async softDelete(id: string, input: { deletedAt: Date; purgeAt: Date }): Promise<Score> {
+    const score = await prisma.score.update({ where: { id }, data: input });
+    return mapScore(score)!;
+  }
+
+  async restore(id: string): Promise<Score> {
+    const score = await prisma.score.update({ where: { id }, data: { deletedAt: null, purgeAt: null } });
+    return mapScore(score)!;
+  }
+
   async delete(id: string): Promise<void> {
-    await prisma.score.delete({ where: { id } });
+    // Purge can be triggered concurrently by two list requests. deleteMany
+    // keeps this final physical removal idempotent in that case.
+    await prisma.score.deleteMany({ where: { id } });
   }
 }
 

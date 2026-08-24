@@ -18,6 +18,17 @@ const fieldLabels: Record<string, string> = {
   originalFilename: "Nome da partitura"
 };
 
+export type TrashScore = {
+  id: string;
+  originalFilename: string;
+  fileType: string;
+  fileSize: number;
+  isFavorite: boolean;
+  createdAt: string;
+  deletedAt?: string | null;
+  expiresAt?: string | null;
+};
+
 function apiErrorMessage(body: ApiErrorBody, fallback = "Erro inesperado.") {
   const fieldError = Object.entries(body.details?.fieldErrors ?? {}).find(([, messages]) => messages?.length);
   if (fieldError) {
@@ -77,6 +88,28 @@ export async function fetchMidi(scoreId: string): Promise<Blob> {
     throw await responseError(response, "Não foi possível baixar o MIDI.");
   }
   return response.blob();
+}
+
+/** Move a score to the seven-day trash. */
+export async function deleteScore(scoreId: string): Promise<void> {
+  await api(`/api/scores/${scoreId}`, { method: "DELETE" });
+}
+
+export async function listTrashScores(): Promise<TrashScore[]> {
+  const response = await api<{ scores: TrashScore[] }>("/api/scores/trash");
+  return response.scores;
+}
+
+export async function restoreScore(scoreId: string): Promise<TrashScore> {
+  const response = await api<{ score: TrashScore }>(`/api/scores/${scoreId}/restore`, { method: "POST" });
+  return response.score;
+}
+
+export async function bulkScoreAction(scoreIds: string[], action: "delete" | "favorite", isFavorite?: boolean): Promise<void> {
+  await api("/api/scores/bulk", {
+    method: "POST",
+    body: JSON.stringify({ ids: scoreIds, action, ...(action === "favorite" ? { isFavorite: isFavorite ?? true } : {}) })
+  });
 }
 
 export async function downloadMusicXml(scoreId: string, filename: string): Promise<void> {

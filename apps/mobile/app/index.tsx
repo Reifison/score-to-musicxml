@@ -14,6 +14,7 @@ import { colors, sharedStyles } from "../src/theme/styles";
 type UploadFile = { uri: string; name: string; type: string };
 type Tile = {
   color: string;
+  iconColor?: string;
   icon: ComponentProps<typeof Ionicons>["name"];
   label: string;
   onPress: () => void;
@@ -48,6 +49,7 @@ export default function IndexScreen() {
   const tiles: Tile[] = [
     { color: colors.primary, icon: "musical-notes-outline", label: "Minhas partituras", onPress: () => router.push("/scores") },
     { color: colors.accentCoral, icon: "heart-outline", label: "Favoritas", onPress: () => Alert.alert("Favoritas", "Esta área ainda será ligada às suas partituras favoritas.") },
+    { color: colors.surfaceSoft, iconColor: colors.muted, icon: "trash-outline", label: "Lixeira", onPress: () => router.push("/trash") },
     { color: colors.accentGold, icon: "settings-outline", label: "Configurações", onPress: () => Alert.alert("Configurações", "As configurações do app ainda estão em preparação.") },
     { color: colors.accentBlue, icon: "person-outline", label: "Perfil", onPress: () => router.push("/profile") }
   ];
@@ -126,7 +128,7 @@ export default function IndexScreen() {
           {tiles.map((tile) => (
             <Pressable key={tile.label} onPress={tile.onPress} style={styles.tile}>
               <View style={[styles.tileIcon, { backgroundColor: tile.color }]}>
-                <Ionicons color={colors.onPrimary} name={tile.icon} size={34} />
+                <Ionicons color={tile.iconColor ?? colors.onPrimary} name={tile.icon} size={34} />
               </View>
               <Text style={styles.tileText}>{tile.label}</Text>
             </Pressable>

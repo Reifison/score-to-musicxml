@@ -458,6 +458,116 @@ button:disabled,
   gap: 14px;
 }
 
+.scores-section {
+  display: grid;
+  gap: 14px;
+}
+
+.score-list-toolbar,
+.selection-toolbar,
+.trash-intro {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  justify-content: space-between;
+}
+
+.score-list-toolbar > div,
+.selection-summary,
+.trash-intro {
+  display: grid;
+  gap: 4px;
+}
+
+.score-list-toolbar strong,
+.selection-summary strong,
+.trash-intro strong {
+  color: var(--text);
+  font-size: 15px;
+}
+
+.score-list-toolbar span,
+.selection-summary span,
+.trash-intro span,
+.trash-row-copy span,
+.trash-row-copy small {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.selection-toolbar {
+  justify-content: flex-start;
+  flex-wrap: wrap;
+  padding: 10px 12px;
+  border: 1px solid oklch(0.88 0.055 50);
+  border-radius: var(--radius);
+  background: var(--brand-soft);
+}
+
+.selection-toolbar .selection-summary {
+  min-width: 110px;
+  margin-right: auto;
+}
+
+.selection-toolbar button {
+  min-height: 40px;
+}
+
+.danger-button {
+  border-color: oklch(0.82 0.08 27);
+  background: var(--surface);
+  color: var(--danger);
+}
+
+.danger-button:hover {
+  border-color: oklch(0.76 0.12 27);
+  background: oklch(0.965 0.025 27);
+  color: var(--danger);
+}
+
+.score-card-header {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: start;
+  gap: 10px;
+}
+
+.score-select-control {
+  display: grid;
+  place-items: center;
+  width: 32px;
+  min-height: 32px;
+  padding: 0;
+  cursor: pointer;
+}
+
+.score-select-control input {
+  width: 20px;
+  height: 20px;
+  min-height: 20px;
+  margin: 0;
+  accent-color: var(--brand);
+}
+
+.favorite-button {
+  width: 40px;
+  min-width: 40px;
+  min-height: 40px;
+  padding: 0;
+  border-color: var(--line);
+  background: var(--surface-soft);
+  color: var(--muted);
+}
+
+.favorite-button:hover,
+.favorite-button.active {
+  border-color: oklch(0.88 0.055 50);
+  background: var(--brand-soft);
+  color: var(--brand);
+  transform: none;
+}
+
 .card {
   background: var(--surface);
   border: 1px solid var(--line);
@@ -614,6 +724,78 @@ button:disabled,
   background: var(--surface);
   color: var(--muted);
   box-shadow: var(--shadow-card);
+}
+
+.trash-list {
+  display: grid;
+  gap: 14px;
+}
+
+.trash-intro {
+  justify-content: flex-start;
+  padding: 14px 16px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface-soft);
+}
+
+.trash-items {
+  display: grid;
+  gap: 10px;
+}
+
+.trash-row {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 12px;
+  padding: 14px 16px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface);
+  box-shadow: var(--shadow-card);
+}
+
+.trash-row-icon {
+  width: 40px;
+  height: 40px;
+  display: grid;
+  place-items: center;
+  border-radius: 12px;
+  background: var(--surface-soft);
+  color: var(--muted);
+}
+
+.trash-row-copy {
+  min-width: 0;
+  display: grid;
+  gap: 3px;
+}
+
+.trash-row-copy strong {
+  overflow-wrap: anywhere;
+  color: var(--text);
+  font-size: 14px;
+}
+
+.trash-row-copy small {
+  color: var(--warning);
+  font-weight: 700;
+}
+
+.trash-empty > div {
+  display: grid;
+  gap: 5px;
+  text-align: center;
+}
+
+.trash-empty strong {
+  color: var(--text);
+}
+
+.trash-empty span {
+  color: var(--muted);
+  font-size: 13px;
 }
 
 .modal-backdrop {
@@ -1709,6 +1891,46 @@ td select {
   .score-grid {
     grid-template-columns: 1fr;
     gap: 12px;
+  }
+
+  .score-list-toolbar {
+    align-items: flex-start;
+  }
+
+  .score-list-toolbar > button {
+    flex: 0 0 auto;
+  }
+
+  .selection-toolbar {
+    position: sticky;
+    bottom: 10px;
+    z-index: 4;
+    padding: 10px;
+    box-shadow: var(--shadow-float);
+  }
+
+  .selection-toolbar .selection-summary {
+    flex: 1 0 100%;
+    margin-right: 0;
+  }
+
+  .selection-toolbar button {
+    flex: 1 1 0;
+    min-width: 0;
+    padding: 0 9px;
+  }
+
+  .trash-intro {
+    align-items: flex-start;
+  }
+
+  .trash-row {
+    grid-template-columns: auto minmax(0, 1fr);
+  }
+
+  .trash-row > button {
+    grid-column: 2;
+    justify-self: start;
   }
 
   .card {

@@ -7,19 +7,35 @@ export function ScoreCard({
   onOpen,
   onDelete,
   onDownload,
-  onToggleFavorite
+  onToggleFavorite,
+  selectionMode = false,
+  selected = false,
+  onSelect
 }: {
   score: Score;
   onOpen: (score: Score) => void;
   onDelete: (score: Score) => void;
   onDownload: (score: Score) => void;
   onToggleFavorite: (score: Score) => void;
+  selectionMode?: boolean;
+  selected?: boolean;
+  onSelect?: () => void;
 }) {
   const hasLongError = score.errorMessage && score.errorMessage.length > 120;
 
   return (
     <article className="card score-card">
       <div className="score-card-header">
+        {selectionMode && (
+          <label className="score-select-control">
+            <input
+              type="checkbox"
+              checked={selected}
+              onChange={onSelect}
+              aria-label={`Selecionar ${score.originalFilename}`}
+            />
+          </label>
+        )}
         <div>
           <h3>{score.originalFilename}</h3>
           <p>{score.fileType.toUpperCase()} · {formatBytes(score.fileSize)} · {new Date(score.createdAt).toLocaleDateString()}</p>

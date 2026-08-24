@@ -51,9 +51,14 @@ export interface SessionRepository {
 export interface ScoreRepository {
   create(input: CreateScoreInput): Promise<Score>;
   findById(id: string): Promise<Score | null>;
+  findByIdIncludingDeleted(id: string): Promise<Score | null>;
   list(filters?: ScoreFilters): Promise<Score[]>;
+  listTrash(filters?: ScoreFilters): Promise<Score[]>;
   listOlderThan(date: Date): Promise<Score[]>;
+  listExpiredTrash(now: Date): Promise<Score[]>;
   update(id: string, input: UpdateScoreInput): Promise<Score>;
+  softDelete(id: string, input: { deletedAt: Date; purgeAt: Date }): Promise<Score>;
+  restore(id: string): Promise<Score>;
   delete(id: string): Promise<void>;
 }
 

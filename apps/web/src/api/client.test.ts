@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { api, downloadMidi, downloadMusicXml, fetchMusicXml } from "./client.js";
+import { api, bulkScoreAction, deleteScore, downloadMidi, downloadMusicXml, fetchMusicXml, listTrashScores, restoreScore } from "./client.js";
 
 describe("cliente HTTP web", () => {
   const fetchMock = vi.fn();
@@ -83,5 +83,31 @@ describe("cliente HTTP web", () => {
       "Estudo.mid"
     ]);
     expect(document.querySelectorAll("a")).toHaveLength(0);
+  });
+
+  it("move, lista e restaura partituras pela lixeira", async () => {
+    fetchMock
+      .mockResolvedValueOnce(new Response(null, { status: 204 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ scores: [{ id: "score-1" }] }), { status: 200 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ score: { id: "score-1" } }), { status: 200 }));
+
+    await deleteScore("score-1");
+    await expect(listTrashScores()).resolves.toEqual([{ id: "score-1" }]);
+    await expect(restoreScore("score-1")).resolves.toEqual({ id: "score-1" });
+
+    expect(fetchMock).toHaveBeenNthCalledWith(1, "http://localhost:4000/api/scores/score-1", expect.objectContaining({ method: "DELETE" }));
+    expect(fetchMock).toHaveBeenNthCalledWith(2, "http://localhost:4000/api/scores/trash", expect.objectContaining({ credentials: "include" }));
+    expect(fetchMock).toHaveBeenNthCalledWith(3, "http://localhost:4000/api/scores/score-1/restore", expect.objectContaining({ method: "POST" }));
+  });
+
+  it("envia ações em lote com ids e estado de favorito", async () => {
+    fetchMock.mockResolvedValue(new Response(JSON.stringify({ updatedCount: 2 }), { status: 200 }));
+
+    await bulkScoreAction(["score-1", "score-2"], "favorite", true);
+
+    expect(fetchMock).toHaveBeenCalledWith("http://localhost:4000/api/scores/bulk", expect.objectContaining({
+      method: "POST",
+      body: JSON.stringify({ ids: ["score-1", "score-2"], action: "favorite", isFavorite: true })
+    }));
   });
 });
