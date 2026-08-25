@@ -211,11 +211,13 @@ export default function ScoresScreen() {
       return;
     }
     setPurchaseStatus(`Abrindo ${storeName}...`);
+    if (!token) return;
+    const { binding } = await api.purchaseBinding(token);
     await requestPurchase({
       type: "in-app",
       request: isAndroid
-        ? { google: { skus: premiumProductIds } }
-        : { apple: { sku: premiumProductId } }
+        ? { google: { skus: premiumProductIds, obfuscatedAccountId: binding.googleObfuscatedAccountId } }
+        : { apple: { sku: premiumProductId, appAccountToken: binding.appleAppAccountToken } }
     });
   }
 

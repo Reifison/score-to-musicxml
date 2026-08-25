@@ -86,6 +86,10 @@ export const api = {
     return apiRequest<{ entitlement: Entitlement }>("/api/me/entitlement", {}, token);
   },
 
+  async purchaseBinding(token: string) {
+    return apiRequest<{ binding: { googleObfuscatedAccountId: string; appleAppAccountToken: string } }>("/api/me/purchase-binding", {}, token);
+  },
+
   async scores(token: string) {
     return apiRequest<{ scores: Score[] }>("/api/scores", {}, token);
   },

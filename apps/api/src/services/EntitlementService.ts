@@ -1,3 +1,4 @@
+import { createHmac } from "node:crypto";
 import { z } from "zod";
 import { env } from "../config/env.js";
 import type { EntitlementSummary, User } from "../domain.js";
@@ -31,6 +32,16 @@ export class EntitlementService {
 
   async getFor(user: User): Promise<EntitlementSummary> {
     return this.entitlements.getSummary(user.id, env.FREE_SCAN_LIMIT);
+  }
+
+  purchaseBindingFor(user: User): { googleObfuscatedAccountId: string; appleAppAccountToken: string } {
+    if (!env.PURCHASE_ACCOUNT_BINDING_SECRET) {
+      throw new AppError(501, "A vinculação segura de compras ainda não está configurada.", "PURCHASE_BINDING_NOT_CONFIGURED");
+    }
+    return {
+      googleObfuscatedAccountId: createHmac("sha256", env.PURCHASE_ACCOUNT_BINDING_SECRET).update(`google-play:${user.id}`).digest("base64url"),
+      appleAppAccountToken: user.id
+    };
   }
 
   async assertCanUpload(user: User): Promise<void> {
@@ -105,7 +116,7 @@ export class EntitlementService {
 
     if (env.NODE_ENV === "production" || this.appleValidator.isConfigured()) {
       try {
-        purchase = await this.appleValidator.validate(input);
+        purchase = await this.appleValidator.validate({ ...input, expectedAppAccountToken: this.purchaseBindingFor(user).appleAppAccountToken });
       } catch (error) {
         await this.audits.create({ actorId: user.id, action: "purchase_failed", ipAddress, metadata: { reason: "apple_validation_failed", productId: input.productId } });
         throw error;
@@ -179,7 +190,9 @@ export class EntitlementService {
     if (input.productId !== env.GOOGLE_PLAY_PRODUCT_ID) throw new AppError(400, "Produto de compra inválido.", "INVALID_PURCHASE_PRODUCT");
     let purchase = { productId: input.productId, purchaseToken: input.purchaseToken, purchasedAt: new Date() };
     if (env.NODE_ENV === "production" && !this.googleValidator.isConfigured()) throw new AppError(501, "Validação server-side do Google Play ainda não está configurada.", "GOOGLE_VALIDATION_NOT_CONFIGURED");
-    if (env.NODE_ENV === "production" || this.googleValidator.isConfigured()) purchase = await this.googleValidator.validate(input);
+    if (env.NODE_ENV === "production" || this.googleValidator.isConfigured()) {
+      purchase = await this.googleValidator.validate({ ...input, expectedAccountId: this.purchaseBindingFor(user).googleObfuscatedAccountId });
+    }
     const currentOwnerId = await this.entitlements.findUserByGooglePurchaseToken(purchase.purchaseToken);
     if (currentOwnerId && currentOwnerId !== user.id) {
       throw new AppError(409, "Esta compra Google Play já está vinculada a outra conta.", "GOOGLE_PURCHASE_ALREADY_CLAIMED");
@@ -208,15 +221,16 @@ export class EntitlementService {
         ? `one_time:${oneTime.notificationType ?? "unknown"}`
         : undefined;
     if (!purchaseToken || !eventType) return { handled: false };
-    if (!(await this.entitlements.claimGoogleNotification({ messageId: input.message.messageId, eventType, purchaseToken }))) return { handled: false, eventType };
-
-    // A cancellation only applies to a pending transaction, which has never
-    // granted entitlement. A voided one-time product is the refund/revocation
-    // signal that removes access for this permanent unlock.
-    if (!voided || voided.productType !== 2 || voided.refundType !== 1) return { handled: true, eventType };
-    const revoked = await this.entitlements.revokeGooglePurchase(purchaseToken, env.FREE_SCAN_LIMIT);
-    if (!revoked) return { handled: false, eventType };
-    await this.audits.create({ actorId: revoked.userId, action: "purchase_revoked", entity: "entitlement", entityId: revoked.userId, ipAddress, metadata: { source: "google_play", eventType } });
-    return { handled: true, eventType };
+    // Notifications only trigger reconciliation. The store API remains the
+    // authority, including for every refund, chargeback and cancellation.
+    const status = await this.googleValidator.inspect({ productId: env.GOOGLE_PLAY_PRODUCT_ID, purchaseToken });
+    if (!status.active) {
+      const revoked = await this.entitlements.revokeGooglePurchase(purchaseToken, env.FREE_SCAN_LIMIT);
+      if (revoked) {
+        await this.audits.create({ actorId: revoked.userId, action: "purchase_revoked", entity: "entitlement", entityId: revoked.userId, ipAddress, metadata: { source: "google_play", eventType } });
+      }
+    }
+    const claimed = await this.entitlements.claimGoogleNotification({ messageId: input.message.messageId, eventType, purchaseToken });
+    return { handled: claimed, eventType };
   }
 }
