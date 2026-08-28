@@ -26,12 +26,12 @@ const score: Score = {
 };
 
 describe("ScoreDetails", () => {
-  it("expõe baixa confiança e avisos do OMR em linguagem revisável", () => {
+  it("oculta o resumo técnico do reconhecimento", () => {
     render(<ScoreDetails score={score} onClose={vi.fn()} onDownload={vi.fn()} onDownloadMidi={vi.fn()} onRename={vi.fn()} />);
 
-    expect(screen.getByRole("region", { name: "Qualidade do reconhecimento" })).toHaveTextContent("Revise esta conversão");
-    expect(screen.getByText(/Confiança estimada: 62%/)).toBeInTheDocument();
-    expect(screen.getByText("Uma pauta precisa de revisão.")).toBeInTheDocument();
+    expect(screen.queryByRole("region", { name: "Qualidade do reconhecimento" })).not.toBeInTheDocument();
+    expect(screen.queryByText(/Confiança estimada: 62%/)).not.toBeInTheDocument();
+    expect(screen.queryByText("Uma pauta precisa de revisão.")).not.toBeInTheDocument();
   });
 
   it("fecha com Escape e oferece foco inicial previsível", () => {

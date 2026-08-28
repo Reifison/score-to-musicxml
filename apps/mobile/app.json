@@ -3,7 +3,7 @@
     "name": "Conversor de Partituras",
     "slug": "score-to-musicxml",
     "scheme": "scoretomusicxml",
-    "version": "0.1.0",
+    "version": "1.0",
     "orientation": "default",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "automatic",
@@ -25,16 +25,29 @@
     },
     "android": {
       "package": "com.scoretomusicxml.app",
-      "versionCode": 1,
+      "versionCode": 4,
       "adaptiveIcon": {
         "foregroundImage": "./assets/icon.png",
         "backgroundColor": "#faf8f4"
       },
-      "permissions": ["CAMERA"]
+      "permissions": [
+        "CAMERA",
+        "com.android.vending.BILLING"
+      ],
+      "blockedPermissions": [
+        "android.permission.READ_EXTERNAL_STORAGE",
+        "android.permission.WRITE_EXTERNAL_STORAGE",
+        "android.permission.SYSTEM_ALERT_WINDOW"
+      ]
     },
     "plugins": [
       "expo-router",
-      "expo-secure-store",
+      [
+        "expo-secure-store",
+        {
+          "faceIDPermission": false
+        }
+      ],
       "./plugins/withAndroidPlayerAssets",
       [
         "expo-document-picker",
@@ -49,10 +62,14 @@
           "cameraPermission": "Tire fotos de partituras para converter em MusicXML.",
           "microphonePermission": false
         }
-      ]
+      ],
+      "./plugins/withStorePermissionCleanup"
     ],
     "extra": {
-      "apiUrl": "${EXPO_PUBLIC_API_URL}"
+      "apiUrl": "${EXPO_PUBLIC_API_URL}",
+      "eas": {
+        "projectId": "2a6a7ef7-97db-44a4-9e96-54c605e22ed7"
+      }
     }
   }
 }

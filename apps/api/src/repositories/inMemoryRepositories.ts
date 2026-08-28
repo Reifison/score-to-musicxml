@@ -164,6 +164,14 @@ export class InMemoryScoreRepository implements ScoreRepository {
     return updated;
   }
 
+  async claimRepair(id: string): Promise<Score | null> {
+    const existing = this.scores.get(id);
+    if (!existing || existing.deletedAt || existing.conversionStatus !== "converted") return null;
+    const updated = { ...existing, conversionStatus: "queued" as const, errorMessage: null, updatedAt: now() };
+    this.scores.set(id, updated);
+    return updated;
+  }
+
   async softDelete(id: string, input: { deletedAt: Date; purgeAt: Date }): Promise<Score> {
     const existing = this.scores.get(id);
     if (!existing) throw new Error("Score not found");

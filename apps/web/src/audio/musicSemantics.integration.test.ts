@@ -123,6 +123,50 @@ describe("homologacao musical MusicXML -> Verovio -> MIDI", () => {
     }
   });
 
+  it("registra a matriz base de associação sem fundir canais repetidos", async () => {
+    const renderer = await createVerovioScoreRenderer(
+      applyDefaultTempo(await loadFixture("association-edge-cases.musicxml"))
+    );
+
+    try {
+      const midi = new Midi(renderer.renderMidiBytes());
+      const soundingTracks = midi.tracks.filter((track) => track.notes.length > 0);
+      const metadata = soundingTracks.map((track, trackIndex) => ({
+        trackIndex,
+        channel: track.channel,
+        program: track.instrument.number,
+        notes: track.notes.length,
+        firstMs: Math.round((track.notes[0]?.time ?? 0) * 1_000),
+        lastMs: Math.round(((track.notes.at(-1)?.time ?? 0) + (track.notes.at(-1)?.duration ?? 0)) * 1_000)
+      }));
+
+      // P3 contains only a rest and therefore must not become an audio voice.
+      expect(soundingTracks).toHaveLength(5);
+      expect(metadata.map(({ channel }) => channel)).toEqual([0, 0, 3, 4, 5]);
+      expect(metadata.map(({ program }) => program)).toEqual([0, 73, 68, 40, 40]);
+      expect(metadata.every(({ notes, firstMs, lastMs }) => notes > 0 && firstMs === 0 && lastMs > 0)).toBe(true);
+      expect(metadata.filter(({ channel }) => channel === 0)).toHaveLength(2); // M02: mesmo canal, programas distintos
+    } finally {
+      renderer.destroy();
+    }
+  });
+
+  it("preserva três partes na ordem do part-list com canais e programas únicos", async () => {
+    const musicXml = await loadFixture("three-parts-distinct.musicxml");
+    const renderer = await createVerovioScoreRenderer(applyDefaultTempo(musicXml));
+
+    try {
+      const midi = new Midi(renderer.renderMidiBytes());
+      const tracks = midi.tracks.filter((track) => track.notes.length > 0);
+      expect(tracks).toHaveLength(3); // M13
+      expect(tracks.map((track) => track.notes[0]?.midi)).toEqual([60, 64, 67]);
+      expect(tracks.map((track) => track.channel)).toEqual([0, 1, 2]);
+      expect(tracks.map((track) => track.instrument.number)).toEqual([0, 40, 73]);
+    } finally {
+      renderer.destroy();
+    }
+  });
+
   it("preserva e renderiza as páginas codificadas no MusicXML", async () => {
     const renderer = await createVerovioScoreRenderer(applyDefaultTempo(await loadFixture("multiple-pages.musicxml")));
 

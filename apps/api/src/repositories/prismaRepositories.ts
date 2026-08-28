@@ -168,6 +168,15 @@ class PrismaScoreRepository implements ScoreRepository {
     return mapScore(score)!;
   }
 
+  async claimRepair(id: string): Promise<Score | null> {
+    const claimed = await prisma.score.updateMany({
+      where: { id, deletedAt: null, conversionStatus: "converted" },
+      data: { conversionStatus: "queued", errorMessage: null }
+    });
+    if (claimed.count !== 1) return null;
+    return this.findById(id);
+  }
+
   async softDelete(id: string, input: { deletedAt: Date; purgeAt: Date }): Promise<Score> {
     const score = await prisma.score.update({ where: { id }, data: input });
     return mapScore(score)!;

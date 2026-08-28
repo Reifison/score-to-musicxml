@@ -1,12 +1,12 @@
 import { Ionicons } from "@expo/vector-icons";
-import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import * as DocumentPicker from "expo-document-picker";
 import * as ImagePicker from "expo-image-picker";
 import { Redirect, router } from "expo-router";
 import type { ComponentProps } from "react";
 import { ActivityIndicator, Alert, Image, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
-import { api } from "../src/api/client";
+import { ApiError, api } from "../src/api/client";
 import { useAuth } from "../src/auth/AuthProvider";
 import { BottomNav, bottomNavHeight } from "../src/components/BottomNav";
 import { BrandLockup } from "../src/components/BrandLockup";
@@ -25,6 +25,12 @@ export default function IndexScreen() {
   const { loading, token, user } = useAuth();
   const queryClient = useQueryClient();
 
+  const entitlementQuery = useQuery({
+    queryKey: ["entitlement", user?.id],
+    queryFn: () => api.entitlement(token!),
+    enabled: Boolean(token)
+  });
+
   const uploadMutation = useMutation({
     mutationFn: (file: UploadFile) => api.upload(token!, file),
     onSuccess: async ({ score }) => {
@@ -33,9 +39,20 @@ export default function IndexScreen() {
       router.push(`/score/${score.id}`);
     },
     onError: (error) => {
+      if (error instanceof ApiError && error.code === "FREE_SCAN_LIMIT_REACHED") {
+        openPaywall();
+        return;
+      }
       Alert.alert("Nao foi possivel enviar", error instanceof Error ? error.message : "Tente novamente.");
     }
   });
+
+  const entitlement = entitlementQuery.data?.entitlement;
+  const conversionAllowance = entitlement?.plan === "paid"
+    ? "Conversoes ilimitadas ativas"
+    : entitlement
+      ? `${entitlement.freeScansRemaining} de 2 conversoes gratis restantes`
+      : "2 conversoes gratis por conta";
 
   if (loading) {
     return (
@@ -56,6 +73,7 @@ export default function IndexScreen() {
   ];
 
   async function pickFile() {
+    if (!(await ensureUploadAllowed())) return;
     const result = await DocumentPicker.getDocumentAsync({
       copyToCacheDirectory: true,
       type: "application/pdf"
@@ -70,6 +88,7 @@ export default function IndexScreen() {
   }
 
   async function pickPhoto() {
+    if (!(await ensureUploadAllowed())) return;
     const result = await ImagePicker.launchImageLibraryAsync({
       allowsEditing: true,
       mediaTypes: ImagePicker.MediaTypeOptions.Images,
@@ -85,6 +104,7 @@ export default function IndexScreen() {
   }
 
   async function scanWithCamera() {
+    if (!(await ensureUploadAllowed())) return;
     const permission = await ImagePicker.requestCameraPermissionsAsync();
     if (!permission.granted) {
       Alert.alert("Camera indisponivel", "Autorize o uso da camera para fotografar partituras.");
@@ -104,11 +124,24 @@ export default function IndexScreen() {
     });
   }
 
+  async function ensureUploadAllowed() {
+    const entitlement = entitlementQuery.data?.entitlement;
+    if (entitlement?.plan === "paid" || (entitlement?.freeScansRemaining ?? 0) > 0) return true;
+    if (entitlementQuery.isLoading || entitlementQuery.isFetching) return false;
+    openPaywall();
+    return false;
+  }
+
+  function openPaywall() {
+    router.push({ pathname: "/scores", params: { upgrade: "1" } });
+  }
+
   return (
     <SafeAreaView style={styles.screen}>
       <ScrollView contentContainerStyle={styles.content} style={styles.scroller}>
         <BrandLockup />
         <View style={styles.uploadPanel}>
+          <Text style={styles.conversionAllowance}>{conversionAllowance}</Text>
           <Pressable disabled={uploadMutation.isPending} onPress={scanWithCamera} style={sharedStyles.button}>
             {uploadMutation.isPending ? <ActivityIndicator color={colors.onPrimary} /> : <Ionicons color={colors.onPrimary} name="camera-outline" size={22} />}
             <Text style={sharedStyles.buttonText}>{uploadMutation.isPending ? "Enviando..." : "Escanear partitura"}</Text>
@@ -144,6 +177,11 @@ export default function IndexScreen() {
 const styles = StyleSheet.create({
   choiceText: {
     fontSize: 18
+  },
+  conversionAllowance: {
+    color: colors.muted,
+    fontSize: 14,
+    fontWeight: "700"
   },
   content: {
     flexGrow: 1,

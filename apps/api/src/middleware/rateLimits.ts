@@ -29,6 +29,27 @@ export const downloadRateLimit = rateLimit({
   legacyHeaders: false
 });
 
+export const purchaseRateLimit = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  limit: 12,
+  skip: skipInTests,
+  keyGenerator: (req) => req.user?.id ?? "unauthenticated",
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: "Muitas validações de compra em pouco tempo. Aguarde alguns minutos e tente novamente.", code: "PURCHASE_RATE_LIMITED" }
+});
+
+// RTDN is authenticated separately by Google OIDC. This ceiling protects the
+// public endpoint from floods while allowing Pub/Sub redelivery bursts.
+export const googleRtdnRateLimit = rateLimit({
+  windowMs: 60 * 1000,
+  limit: 600,
+  skip: skipInTests,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: "Muitas notificações do Google Play.", code: "GOOGLE_RTDN_RATE_LIMITED" }
+});
+
 export function createMidiDownloadRateLimit(options: { limit?: number; skip?: () => boolean } = {}) {
   return rateLimit({
     windowMs: 5 * 60 * 1000,

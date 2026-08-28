@@ -9,6 +9,7 @@ export type ApplePurchaseValidationInput = {
   productId: string;
   purchaseToken?: string;
   transactionId?: string;
+  expectedAppAccountToken?: string;
 };
 
 export class ApplePurchaseValidationService {
@@ -43,6 +44,12 @@ export class ApplePurchaseValidationService {
     const decodedNotification = await verifier.verifyAndDecodeNotification(signedPayload);
     const signedTransactionInfo = decodedNotification.data?.signedTransactionInfo;
     const transaction = signedTransactionInfo ? await verifier.verifyAndDecodeTransaction(signedTransactionInfo) : undefined;
+
+    // Refund/revoke notifications must carry the transaction they are
+    // revoking.  Never act on an authenticated notification envelope alone.
+    if (this.isRevocationNotification(decodedNotification.notificationType) && !transaction) {
+      throw new AppError(400, "Notificação Apple sem transação assinada.", "APPLE_NOTIFICATION_TRANSACTION_MISSING");
+    }
 
     if (transaction?.bundleId && transaction.bundleId !== env.APPLE_BUNDLE_ID) {
       throw new AppError(400, "Bundle ID da notificação Apple inválido.", "APPLE_BUNDLE_MISMATCH");
@@ -101,8 +108,11 @@ export class ApplePurchaseValidationService {
     if (decoded.revocationDate) {
       throw new AppError(402, "Compra Apple revogada ou reembolsada.", "APPLE_PURCHASE_REVOKED");
     }
-    if (decoded.originalTransactionId && decoded.originalTransactionId !== input.originalTransactionId) {
+    if (!decoded.originalTransactionId || decoded.originalTransactionId !== input.originalTransactionId) {
       throw new AppError(400, "Transação original Apple não confere.", "APPLE_ORIGINAL_TRANSACTION_MISMATCH");
+    }
+    if (input.expectedAppAccountToken && decoded.appAccountToken !== input.expectedAppAccountToken) {
+      throw new AppError(400, "A compra Apple está vinculada a outra conta.", "APPLE_ACCOUNT_MISMATCH");
     }
   }
 

@@ -1,4 +1,5 @@
 ARG AUDIVERIS_VERSION=5.10.2
+ARG TESSDATA_VERSION=4.00
 
 FROM node:22-bookworm-slim AS deps
 WORKDIR /app
@@ -21,6 +22,10 @@ ENV NODE_ENV=production
 # its JRE); the remaining packages provide PDF rendering, OCR languages and
 # native libraries needed by Java/AWT in batch mode.
 ARG AUDIVERIS_VERSION=5.10.2
+ARG TESSDATA_VERSION=4.00
+# Audiveris uses legacy Tesseract 4.x language data. Debian's global tessdata
+# is not discovered automatically and can contain incompatible LSTM-only
+# models, so bundle the exact data in the image instead.
 RUN apt-get update \
   && apt-get install -y --no-install-recommends \
     ca-certificates \
@@ -40,9 +45,15 @@ RUN apt-get update \
   && mkdir -p /usr/share/applications \
   && curl -fsSL "https://github.com/Audiveris/audiveris/releases/download/${AUDIVERIS_VERSION}/Audiveris-${AUDIVERIS_VERSION}-ubuntu22.04-x86_64.deb" -o /tmp/audiveris.deb \
   && (apt-get install -y --no-install-recommends /tmp/audiveris.deb || test -x /opt/audiveris/bin/Audiveris) \
+  && install -d -m 0755 /opt/audiveris/tessdata \
+  && curl -fsSL --retry 3 "https://raw.githubusercontent.com/tesseract-ocr/tessdata/${TESSDATA_VERSION}/eng.traineddata" -o /opt/audiveris/tessdata/eng.traineddata \
+  && curl -fsSL --retry 3 "https://raw.githubusercontent.com/tesseract-ocr/tessdata/${TESSDATA_VERSION}/por.traineddata" -o /opt/audiveris/tessdata/por.traineddata \
+  && test -s /opt/audiveris/tessdata/eng.traineddata \
+  && test -s /opt/audiveris/tessdata/por.traineddata \
   && rm -f /tmp/audiveris.deb \
   && rm -rf /var/lib/apt/lists/*
 ENV AUDIVERIS_BIN=/opt/audiveris/bin/Audiveris \
+    TESSDATA_PREFIX=/opt/audiveris/tessdata \
     JAVA_TOOL_OPTIONS=-Djava.awt.headless=true
 COPY --from=build /app/node_modules ./node_modules
 COPY --from=build /app/apps/api/dist ./apps/api/dist

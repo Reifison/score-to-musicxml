@@ -1,3 +1,4 @@
+import { constants as fileSystemConstants } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { nanoid } from "nanoid";
@@ -35,6 +36,43 @@ export class FileStorageService {
 
   async readExport(storedFilename: string): Promise<string> {
     return fs.readFile(this.resolveExportPath(storedFilename), "utf8");
+  }
+
+  /**
+   * Reads an export from one already-open, non-symlinked regular file. This
+   * avoids exposing filesystem paths and prevents a file from being swapped
+   * between validation and the download response.
+   */
+  async readExportForDownload(storedFilename: string): Promise<Buffer> {
+    const exportPath = this.resolveExportPath(storedFilename);
+    const handle = await fs.open(exportPath, fileSystemConstants.O_RDONLY | fileSystemConstants.O_NOFOLLOW);
+    try {
+      const details = await handle.stat();
+      if (!details.isFile()) {
+        const error = new Error("MusicXML export is not a regular file.");
+        (error as NodeJS.ErrnoException).code = "EXPORT_NOT_A_FILE";
+        throw error;
+      }
+      return await handle.readFile();
+    } finally {
+      await handle.close();
+    }
+  }
+
+  /** Checks availability without reading the export into memory. */
+  async isReadableExport(storedFilename: string): Promise<boolean> {
+    const exportPath = this.resolveExportPath(storedFilename);
+    try {
+      const handle = await fs.open(exportPath, fileSystemConstants.O_RDONLY | fileSystemConstants.O_NOFOLLOW);
+      try {
+        const details = await handle.stat();
+        return details.isFile();
+      } finally {
+        await handle.close();
+      }
+    } catch {
+      return false;
+    }
   }
 
   async deleteUpload(storedFilename: string): Promise<void> {

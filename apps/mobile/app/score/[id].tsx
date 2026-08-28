@@ -15,7 +15,7 @@ import { colors, sharedStyles } from "../../src/theme/styles";
 
 export default function ScoreDetailsScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
-  const { token } = useAuth();
+  const { token, user } = useAuth();
   const queryClient = useQueryClient();
   const insets = useSafeAreaInsets();
   const rootRef = useRef<View>(null);
@@ -54,7 +54,7 @@ export default function ScoreDetailsScreen() {
   }, [immersive, schedulePlayerMeasurement]);
 
   const scoreQuery = useQuery({
-    queryKey: ["score", id],
+    queryKey: ["score", user?.id, id],
     queryFn: () => api.score(token!, id),
     enabled: Boolean(token && id),
     refetchInterval: (query) => {
@@ -72,7 +72,7 @@ export default function ScoreDetailsScreen() {
   const renameMutation = useMutation({
     mutationFn: (name: string) => api.renameScore(token!, id, `${name}${fileExtension(score?.originalFilename ?? "")}`),
     onSuccess: async ({ score: renamed }) => {
-      queryClient.setQueryData(["score", id], { score: renamed });
+      queryClient.setQueryData(["score", user?.id, id], { score: renamed });
       await queryClient.invalidateQueries({ queryKey: ["scores"] });
       setEditingName(false);
     },
@@ -82,7 +82,7 @@ export default function ScoreDetailsScreen() {
   const favoriteMutation = useMutation({
     mutationFn: (isFavorite: boolean) => api.setScoreFavorite(token!, id, isFavorite),
     onSuccess: ({ score: updated }) => {
-      queryClient.setQueryData(["score", id], { score: updated });
+      queryClient.setQueryData(["score", user?.id, id], { score: updated });
       queryClient.invalidateQueries({ queryKey: ["scores"] });
     },
     onError: (error) => Alert.alert("Não foi possível atualizar o favorito", error instanceof Error ? error.message : "Tente novamente.")
@@ -246,7 +246,20 @@ export default function ScoreDetailsScreen() {
             <View style={styles.sectionHeadingText}>
               <Text style={styles.sectionTitle}>Partitura digital</Text>
             </View>
+            <Pressable
+              accessibilityHint="Abre as opções para compartilhar ou salvar a partitura em MusicXML"
+              accessibilityRole="button"
+              disabled={!canDownload || musicXmlShareMutation.isPending}
+              onPress={() => musicXmlShareMutation.mutate()}
+              style={[styles.musicXmlButton, (!canDownload || musicXmlShareMutation.isPending) && styles.disabled]}
+            >
+              {musicXmlShareMutation.isPending
+                ? <ActivityIndicator color={colors.primary} size="small" />
+                : <Ionicons color={colors.primary} name="download-outline" size={18} />}
+              <Text style={styles.musicXmlButtonText}>{canDownload ? "Baixar MusicXML" : "MusicXML em preparo"}</Text>
+            </Pressable>
           </View>
+          {musicXmlShareMutation.error ? <Text style={styles.playerExportError}>{musicXmlShareMutation.error instanceof Error ? musicXmlShareMutation.error.message : "Não foi possível baixar o MusicXML."}</Text> : null}
           <View ref={playerFrameRef} onLayout={schedulePlayerMeasurement} style={styles.playerFrame}>
             <View style={styles.playerPlaceholder} />
           </View>
@@ -265,19 +278,6 @@ export default function ScoreDetailsScreen() {
         </View>
 
         <View style={styles.bottomActions}>
-          <Text style={styles.exportHint}>MusicXML preserva melhor a notação para continuar editando a partitura.</Text>
-          <Pressable
-            accessibilityHint="Abre as opções para compartilhar ou salvar a partitura em MusicXML"
-            accessibilityRole="button"
-            disabled={!canDownload || musicXmlShareMutation.isPending}
-            onPress={() => musicXmlShareMutation.mutate()}
-            style={[sharedStyles.button, styles.downloadButton, (!canDownload || musicXmlShareMutation.isPending) && styles.disabled]}
-          >
-            {musicXmlShareMutation.isPending ? <ActivityIndicator color={colors.onPrimary} /> : <Ionicons color={colors.onPrimary} name="download-outline" size={20} />}
-            <Text style={sharedStyles.buttonText}>{canDownload ? "Exportar MusicXML" : "MusicXML ainda não pronto"}</Text>
-          </Pressable>
-          {musicXmlShareMutation.error ? <Text style={sharedStyles.error}>{musicXmlShareMutation.error instanceof Error ? musicXmlShareMutation.error.message : "Não foi possível exportar o MusicXML."}</Text> : null}
-
           <Text style={[styles.exportHint, styles.midiHint]}>MIDI representa a execução e pode ser aberto no MuseScore ou em outro app compatível.</Text>
           <Pressable
             accessibilityHint="Abre as opções para compartilhar ou salvar a execução em MIDI"
@@ -400,7 +400,30 @@ const styles = StyleSheet.create({
     width: 46
   },
   midiHint: {
-    marginTop: 8
+    marginTop: 0
+  },
+  musicXmlButton: {
+    alignItems: "center",
+    borderColor: colors.lineStrong,
+    borderRadius: 12,
+    borderWidth: 1,
+    flexDirection: "row",
+    gap: 6,
+    justifyContent: "center",
+    minHeight: 44,
+    paddingHorizontal: 10
+  },
+  musicXmlButtonText: {
+    color: colors.primary,
+    fontSize: 13,
+    fontWeight: "800"
+  },
+  playerExportError: {
+    color: colors.danger,
+    fontSize: 13,
+    lineHeight: 18,
+    paddingBottom: 8,
+    paddingHorizontal: 16
   },
   preview: {
     backgroundColor: colors.surfaceSoft,

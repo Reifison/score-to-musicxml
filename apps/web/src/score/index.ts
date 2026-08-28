@@ -8,3 +8,9 @@ export {
   type VerovioRenderErrorCode,
   type VerovioTimeElements
 } from "./VerovioScoreRenderer.js";
+export {
+  MusicXmlParseError,
+  parseMusicXmlParts,
+  type MusicXmlParseErrorCode,
+  type MusicXmlPart
+} from "./parseMusicXmlParts.js";

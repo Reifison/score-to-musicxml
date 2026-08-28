@@ -27,7 +27,7 @@ const schema = z.object({
   SCORE_RETENTION_DAYS: z.coerce.number().int().positive().default(365),
   AUDIT_RETENTION_DAYS: z.coerce.number().int().positive().default(730),
   TEMP_FILE_RETENTION_HOURS: z.coerce.number().int().positive().default(24),
-  FREE_SCAN_LIMIT: z.coerce.number().int().positive().default(3),
+  FREE_SCAN_LIMIT: z.coerce.number().int().positive().default(2),
   APPLE_PREMIUM_PRODUCT_ID: z.string().default("premium_unlock"),
   APPLE_BUNDLE_ID: z.string().default("com.scoretomusicxml.app"),
   APPLE_APP_APPLE_ID: z.coerce.number().optional(),
@@ -45,6 +45,9 @@ const schema = z.object({
   GOOGLE_PLAY_RTDN_AUDIENCE: z.string().url().optional(),
   GOOGLE_PLAY_RTDN_SERVICE_ACCOUNT_EMAIL: z.string().email().optional(),
   GOOGLE_PLAY_RTDN_JWKS_URL: z.string().url().default("https://www.googleapis.com/oauth2/v3/certs"),
+  // Never expose this value to the mobile app. It produces the opaque account
+  // identifier that Google Play returns during server-side purchase validation.
+  PURCHASE_ACCOUNT_BINDING_SECRET: z.string().min(32).optional(),
   CLAMAV_BIN: z.string().optional(),
   REQUIRE_MALWARE_SCAN: booleanFromEnv.default(false),
   OMR_ENGINE: z.enum(["stub", "audiveris"]).default("stub"),

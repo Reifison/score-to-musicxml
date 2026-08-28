@@ -103,9 +103,8 @@ scoreRoutes.get("/:id/download", downloadRateLimit, async (req, res) => {
   const download = await req.services.scores.downloadFor(req.user!, String(req.params.id), req.ip);
   setPrivateDownloadHeaders(res);
   res.setHeader("Content-Type", "application/vnd.recordare.musicxml+xml; charset=utf-8");
-  res.download(download.path, download.filename, (error) => {
-    if (error && !res.headersSent) res.status(500).json({ error: "Falha ao baixar o arquivo.", code: "DOWNLOAD_FAILED" });
-  });
+  res.attachment(download.filename);
+  res.send(download.musicXml);
 });
 
 scoreRoutes.get("/:id/midi", midiDownloadRateLimit, async (req, res) => {

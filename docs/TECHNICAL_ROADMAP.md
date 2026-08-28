@@ -28,6 +28,7 @@ git diff -- docs/TECHNICAL_ROADMAP.md
 
 ## Validação Mais Recente
 
+- 2026-08-24: modelo comercial aprovado para 2 conversões gratuitas por conta e desbloqueio único `premium_unlock` por R$ 23,90 no Brasil. A compra libera conversões ilimitadas na conta, sem assinatura; a validação técnica local depende da criação dos produtos e de compras sandbox nas lojas.
 - 2026-05-09: `npm run db:generate` executado com sucesso após adicionar modelos de entitlement.
 - 2026-05-09: `npm run build` executado com sucesso para API, web e mobile.
 - 2026-05-09: `npm test -w apps/api` executado com sucesso: 21 testes passaram.
@@ -91,7 +92,7 @@ As lacunas importantes identificadas nesta revisão foram:
 - Segurança: o backend já usa UUID para usuários/scores, Prisma para acesso ao banco e validação básica de arquivo por assinatura, mas faltava transformar essas garantias em critérios obrigatórios e acrescentar varredura/sandbox contra arquivos maliciosos.
 - Privacidade e compliance: faltavam critérios explícitos para política de privacidade, retenção/exclusão de uploads, permissões de câmera/fotos/arquivos e dados coletados.
 
-Decisão recomendada para a primeira versão comercial: publicar um único app gratuito na App Store, permitir 3 scans gratuitos no total por conta, e vender um desbloqueio único via In-App Purchase não consumível por R$ 29,90 ou pelo ponto de preço equivalente configurado no App Store Connect.
+Decisão comercial atual: publicar um único app gratuito na App Store e Google Play, permitir 2 conversões gratuitas no total por conta, e vender o desbloqueio único e não consumível `premium_unlock` por R$ 23,90 na loja brasileira. O preço apresentado no app vem da loja e pode ser localizado em outros países.
 
 Referências Apple para manter atualizadas antes do envio:
 
@@ -113,8 +114,8 @@ Atividades:
 - [x] Definir se a primeira versão terá área admin ou se admin continua apenas no web. Decisão: admin continua apenas no web no MVP. Concluído em 2026-05-09. Commit/PR: pendente.
 - [x] Definir política de suporte: iOS mínimo, iPhone/iPad, orientação retrato/paisagem. Decisão: iOS 16+, iPhone primeiro, iPad compatível, orientação retrato no MVP. Concluído em 2026-05-09. Commit/PR: pendente.
 - [ ] Validar conta Apple Developer e acesso ao App Store Connect/TestFlight. Pendente: requer acesso à conta Apple Developer.
-- [x] Definir modelo comercial do MVP: app gratuito com 3 scans totais e desbloqueio pago por R$ 29,90. Concluído em 2026-05-09. Commit/PR: pendente.
-- [x] Definir se o limite de 3 scans conta por usuário autenticado, dispositivo ou ambos. Decisão: por usuário autenticado no backend. Concluído em 2026-05-09. Commit/PR: pendente.
+- [x] Definir modelo comercial do MVP: app gratuito com 2 conversões totais e desbloqueio pago único por R$ 23,90. Atualizado em 2026-08-24. Commit/PR: pendente.
+- [x] Definir se o limite de 2 conversões conta por usuário autenticado, dispositivo ou ambos. Decisão: por usuário autenticado no backend. Atualizado em 2026-08-24. Commit/PR: pendente.
 - [x] Definir o que conta como scan: cada upload aceito de PDF ou imagem, mesmo que a conversão falhe, ou apenas conversões concluídas. Decisão: contar upload aceito para evitar abuso de processamento. Concluído em 2026-05-09. Commit/PR: pendente.
 - [x] Definir política para reprocessamento, exclusão e reenvio dentro do limite gratuito. Decisão: exclusão não devolve crédito; reenvio conta como novo scan; reprocessamento interno do mesmo upload não debita novo scan. Concluído em 2026-05-09. Commit/PR: pendente.
 
@@ -123,7 +124,7 @@ Critérios de aceite:
 - Escopo MVP documentado.
 - Decisão explícita sobre admin no iOS.
 - Requisitos de distribuição definidos.
-- Regra comercial de 3 scans gratuitos e compra por R$ 29,90 documentada.
+- Regra comercial de 2 conversões gratuitas e compra única por R$ 23,90 documentada.
 - Decisão explícita sobre quando o contador de scans é debitado.
 
 ## Fase 1: Estrutura Mobile No Monorepo
@@ -331,7 +332,7 @@ Critérios de aceite:
 
 ## Fase 8: Plano Gratuito, Compra E Entitlements
 
-Objetivo: implementar o modelo comercial com 3 scans gratuitos e desbloqueio pago por R$ 29,90.
+Objetivo: implementar o modelo comercial com 2 conversões gratuitas e desbloqueio único por R$ 23,90.
 
 Dependências: Fases 2.5, 4 e conta App Store Connect validada.
 
@@ -344,8 +345,8 @@ Atividades:
 - [x] Garantir que o limite gratuito seja atômico no banco para evitar dois uploads simultâneos passarem como terceiro scan. Implementado com update condicional em transação no repositório Prisma. Concluído em 2026-05-09. Commit/PR: pendente.
 - [x] Criar endpoint para registrar/validar compra Apple no servidor. Endpoint criado com falha segura em produção até configurar validação Apple real. Concluído em 2026-05-09. Commit/PR: pendente.
 - [x] Integrar StoreKit no iOS com produto não consumível, por exemplo `premium_unlock`, usando biblioteca compatível com Expo Dev Client/EAS. Concluído em 2026-05-10. Commit/PR: pendente. Observação: implementado com `expo-iap`; requer produto real no App Store Connect para teste de compra sandbox.
-- [ ] Configurar In-App Purchase não consumível no App Store Connect com nome, descrição, screenshot de revisão e preço base de R$ 29,90 ou ponto de preço equivalente.
-- [x] Implementar paywall simples antes do quarto scan, mostrando preço vindo da App Store, não hardcoded. Concluído em 2026-05-10. Commit/PR: pendente. Observação: usa `displayPrice` de StoreKit quando o produto está disponível e fallback `R$ 29,90` apenas em desenvolvimento/local.
+- [ ] Configurar o produto não consumível `premium_unlock` no App Store Connect e no Google Play Console, com nome, descrição, screenshot de revisão e preço de R$ 23,90 na vitrine brasileira.
+- [x] Implementar paywall antes da terceira conversão, mostrando o preço vindo da loja e fallback de R$ 23,90 em desenvolvimento/local. Atualizado em 2026-08-24. Commit/PR: pendente.
 - [x] Implementar restauração de compra no app. Concluído em 2026-05-10. Commit/PR: pendente. Observação: usa `restorePurchases` e registra entitlement restaurado no backend antes de finalizar a transação.
 - [x] Validar recibo/transação no servidor ou usar verificação StoreKit adequada antes de liberar plano pago. Concluído em 2026-05-10. Commit/PR: pendente. Observação: backend valida JWS/API Apple quando `APPLE_ROOT_CERT_PATHS` e credenciais Apple estão configuradas; produção falha fechada se faltar configuração.
 - [x] Tratar compra pendente, cancelada, falha, reembolso/revogação e restauração em novo dispositivo. Concluído em 2026-05-10. Commit/PR: pendente. Observação: app trata cancelamento, falha, compra pendente e restauração; backend rejeita compra revogada na validação e processa `REFUND`/`REVOKE` por App Store Server Notifications V2.
@@ -354,8 +355,8 @@ Atividades:
 
 Critérios de aceite:
 
-- Usuário novo pode enviar até 3 PDFs/fotos sem pagar.
-- O quarto scan é bloqueado pelo backend e apresenta paywall no app.
+- Usuário novo pode enviar até 2 PDFs/fotos sem pagar.
+- A terceira conversão é bloqueada pelo backend e apresenta paywall no app.
 - Compra aprovada libera novos scans na conta do usuário.
 - Compra pode ser restaurada em outro iPhone.
 - Preço exibido no app vem da App Store.
@@ -366,7 +367,7 @@ Observações:
 
 - Como o desbloqueio libera funcionalidade digital dentro do app, a rota padrão de App Store é In-App Purchase.
 - Para um desbloqueio permanente, use produto não consumível. Assinatura só deve ser usada se houver valor recorrente claro.
-- O preço final pode variar por país e imposto conforme configuração do App Store Connect; usar R$ 29,90 como requisito comercial base para Brasil.
+- O preço final pode variar por país e imposto conforme configuração das lojas; usar R$ 23,90 como requisito comercial base para Brasil.
 
 ## Fase 9: Administração No iOS
 

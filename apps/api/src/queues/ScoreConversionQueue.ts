@@ -34,4 +34,9 @@ export class BullMqScoreConversionQueue implements ScoreConversionQueue {
       removeOnFail: 200
     });
   }
+
+  async close(): Promise<void> {
+    await this.queue.close();
+    await this.connection.quit();
+  }
 }

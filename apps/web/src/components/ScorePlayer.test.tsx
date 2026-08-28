@@ -50,10 +50,11 @@ class FakeAudioContext {
   }
 }
 
-function renderer(pageCount = 2) {
+function renderer(pageCount = 2, trackCount = 1) {
   const midi = new Midi();
   midi.header.setTempo(120);
   midi.addTrack().addNote({ midi: 60, time: 0, duration: 1 });
+  if (trackCount > 1) midi.addTrack().addNote({ midi: 67, time: 0, duration: 1 });
   return {
     pageCount,
     renderPage: vi.fn((page: number) => svg(page)),
@@ -139,6 +140,50 @@ describe("ScorePlayer", () => {
 
     expect(await screen.findByText("70 BPM · assumido")).toBeInTheDocument();
     expect(createVerovioScoreRenderer).toHaveBeenCalledWith(expect.stringContaining('<sound tempo="70"/>'));
+  });
+
+  it("publica o catálogo de vozes carregado e o limpa ao recarregar", async () => {
+    const engine = renderer(1);
+    const onVoicesChange = vi.fn();
+    vi.mocked(createVerovioScoreRenderer).mockResolvedValue(engine as never);
+
+    const view = render(
+      <ScorePlayer
+        musicXml={'<score-partwise><part><measure><note><pitch><step>C</step><octave>4</octave></pitch></note></measure></part></score-partwise>'}
+        scoreName="Estudo.musicxml"
+        onVoicesChange={onVoicesChange}
+      />
+    );
+
+    await screen.findByRole("button", { name: "Reproduzir partitura" });
+    expect(onVoicesChange).toHaveBeenCalledWith([
+      expect.objectContaining({ id: "track:0", label: "Faixa 1", trackIndexes: [0] })
+    ]);
+
+    view.rerender(
+      <ScorePlayer
+        musicXml=""
+        scoreName="Outro.musicxml"
+        onVoicesChange={onVoicesChange}
+      />
+    );
+    await screen.findByText("Partitura digital indisponível");
+    expect(onVoicesChange).toHaveBeenCalledWith([]);
+  });
+
+  it("oferece mute acessível somente quando há duas ou mais faixas tocáveis", async () => {
+    const engine = renderer(1, 2);
+    vi.mocked(createVerovioScoreRenderer).mockResolvedValue(engine as never);
+    render(<ScorePlayer musicXml="<score-partwise />" scoreName="Dueto.musicxml" />);
+
+    await screen.findByRole("button", { name: "Reproduzir partitura" });
+    fireEvent.click(screen.getByRole("button", { name: "Mostrar faixas e andamento" }));
+    const mute = screen.getByRole("button", { name: "Silenciar Faixa 1" });
+    expect(screen.getByRole("group", { name: "Faixas, toque para ativar ou silenciar" })).toBeInTheDocument();
+    expect(mute).toHaveAttribute("aria-pressed", "false");
+    fireEvent.click(mute);
+    expect(screen.getByRole("button", { name: "Ativar Faixa 1" })).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByText("Faixa 1 silenciada")).toBeInTheDocument();
   });
 
   it("amplia a partitura ao tocar e oferece uma saída acessível", async () => {

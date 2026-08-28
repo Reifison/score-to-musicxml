@@ -112,6 +112,14 @@ describe("player bridge", () => {
       {
         channel: PLAYER_BRIDGE_CHANNEL,
         version: 1,
+        type: "playback.state",
+        requestId: "score-1",
+        // Voice metadata stays inside the shared web player; bridge V1 remains stable.
+        payload: { state: "playing", positionMs: 1200, durationMs: 5000, tempo: 120, voices: [] }
+      },
+      {
+        channel: PLAYER_BRIDGE_CHANNEL,
+        version: 1,
         type: "viewport.state",
         requestId: "score-1",
         payload: { immersive: "sim" }

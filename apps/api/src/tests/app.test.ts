@@ -1,7 +1,8 @@
 import path from "node:path";
 import os from "node:os";
+import fs from "node:fs/promises";
 import request from "supertest";
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createApp } from "../app.js";
 import { createServices } from "../container.js";
 import { createInMemoryRepositories } from "../repositories/inMemoryRepositories.js";
@@ -196,35 +197,35 @@ describe("API", () => {
     await request(ctx.app).get(`/api/scores/${created.body.score.id}/midi`).set("Cookie", adminCookie).expect(200);
   });
 
-  it("aplica limite gratuito de 3 scans e libera após compra registrada", async () => {
+  it("aplica limite gratuito de 2 conversões e libera após compra registrada", async () => {
     const cookie = await login(ctx.app, "user@example.com");
 
     const initialEntitlement = await request(ctx.app).get("/api/me/entitlement").set("Cookie", cookie).expect(200);
-    expect(initialEntitlement.body.entitlement).toMatchObject({ plan: "free", freeScanLimit: 3, freeScansUsed: 0, freeScansRemaining: 3 });
+    expect(initialEntitlement.body.entitlement).toMatchObject({ plan: "free", freeScanLimit: 2, freeScansUsed: 0, freeScansRemaining: 2 });
 
-    for (const name of ["um.pdf", "dois.pdf", "tres.pdf"]) {
+    for (const name of ["um.pdf", "dois.pdf"]) {
       await request(ctx.app).post("/api/scores").set("Cookie", cookie).attach("file", pdf, name).expect(201);
     }
 
     const exhausted = await request(ctx.app).get("/api/me/entitlement").set("Cookie", cookie).expect(200);
-    expect(exhausted.body.entitlement).toMatchObject({ plan: "free", freeScansUsed: 3, freeScansRemaining: 0 });
-    await request(ctx.app).post("/api/scores").set("Cookie", cookie).attach("file", pdf, "quatro.pdf").expect(402);
+    expect(exhausted.body.entitlement).toMatchObject({ plan: "free", freeScansUsed: 2, freeScansRemaining: 0 });
+    await request(ctx.app).post("/api/scores").set("Cookie", cookie).attach("file", pdf, "tres.pdf").expect(402);
 
     const purchase = await request(ctx.app)
       .post("/api/me/entitlement/apple")
       .set("Cookie", cookie)
       .send({ productId: "premium_unlock", originalTransactionId: "test-original-transaction", purchasedAt: "2026-05-09T12:00:00.000Z" })
       .expect(200);
-    expect(purchase.body.entitlement).toMatchObject({ plan: "paid", freeScansUsed: 3, freeScansRemaining: null });
+    expect(purchase.body.entitlement).toMatchObject({ plan: "paid", freeScansUsed: 2, freeScansRemaining: null });
 
-    await request(ctx.app).post("/api/scores").set("Cookie", cookie).attach("file", pdf, "quatro.pdf").expect(201);
+    await request(ctx.app).post("/api/scores").set("Cookie", cookie).attach("file", pdf, "tres.pdf").expect(201);
   });
 
   it("admin concede e remove acesso completo para usuário de teste", async () => {
     const userCookie = await login(ctx.app, "user@example.com");
     const adminCookie = await login(ctx.app, "admin@example.com");
 
-    for (const name of ["um.pdf", "dois.pdf", "tres.pdf"]) {
+    for (const name of ["um.pdf", "dois.pdf"]) {
       await request(ctx.app).post("/api/scores").set("Cookie", userCookie).attach("file", pdf, name).expect(201);
     }
     await request(ctx.app).post("/api/scores").set("Cookie", userCookie).attach("file", pdf, "bloqueado.pdf").expect(402);
@@ -237,7 +238,7 @@ describe("API", () => {
     expect(grant.body.entitlement).toMatchObject({
       plan: "paid",
       source: "admin_grant",
-      freeScansUsed: 3,
+      freeScansUsed: 2,
       freeScansRemaining: null,
       grantedById: ctx.admin.id,
       grantReason: "Teste beta iOS"
@@ -252,7 +253,7 @@ describe("API", () => {
     expect(revoked.body.entitlement).toMatchObject({
       plan: "free",
       source: "free",
-      freeScansUsed: 3,
+      freeScansUsed: 2,
       freeScansRemaining: 0
     });
     await request(ctx.app).post("/api/scores").set("Cookie", userCookie).attach("file", pdf, "bloqueado-de-novo.pdf").expect(402);
@@ -274,6 +275,7 @@ describe("API", () => {
     expect(detail.body.score.musicxmlFilename).toMatch(/\.musicxml$/);
     const download = await request(ctx.app).get(`/api/scores/${created.body.score.id}/download`).set("Cookie", cookie).expect(200);
     expect(download.headers["content-disposition"]).toContain("minha_partitura.musicxml");
+    expect(download.text).toContain("<score-partwise");
     expect(download.headers["cache-control"]).toBe("private, no-store, max-age=0");
     expect(download.headers.pragma).toBe("no-cache");
     expect(download.headers.expires).toBe("0");
@@ -300,5 +302,54 @@ describe("API", () => {
       status: "failure",
       errorCode: "MIDI_NOT_READY"
     }));
+  });
+
+  it("retorna erro explícito sem auditar download quando o export convertido não existe", async () => {
+    const cookie = await login(ctx.app, "user@example.com");
+    const created = await request(ctx.app).post("/api/scores").set("Cookie", cookie).attach("file", pdf, "sem-export.pdf").expect(201);
+    const score = await ctx.repos.scores.findById(created.body.score.id);
+    expect(score?.musicxmlFilename).toMatch(/\.musicxml$/);
+    await ctx.services.storage.deleteExport(score!.musicxmlFilename);
+
+    const serverLog = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    try {
+      const download = await request(ctx.app)
+        .get(`/api/scores/${created.body.score.id}/download`)
+        .set("Cookie", cookie)
+        .expect(410);
+
+      expect(download.body).toEqual({
+        error: "O arquivo MusicXML desta partitura não está disponível. Converta o arquivo novamente.",
+        code: "MUSICXML_EXPORT_UNAVAILABLE"
+      });
+      expect(serverLog).toHaveBeenCalledWith(
+        "MusicXML export unavailable for download",
+        expect.objectContaining({ scoreId: created.body.score.id, error: expect.objectContaining({ code: "ENOENT" }) })
+      );
+    } finally {
+      serverLog.mockRestore();
+    }
+
+    const audits = await ctx.repos.audits.list();
+    expect(audits).not.toContainEqual(expect.objectContaining({ action: "score_downloaded", entityId: created.body.score.id }));
+  });
+
+  it("nunca segue link simbólico no download do MusicXML", async () => {
+    const cookie = await login(ctx.app, "user@example.com");
+    const created = await request(ctx.app).post("/api/scores").set("Cookie", cookie).attach("file", pdf, "export-link.pdf").expect(201);
+    const score = await ctx.repos.scores.findById(created.body.score.id);
+    expect(score?.musicxmlFilename).toMatch(/\.musicxml$/);
+    await ctx.services.storage.deleteExport(score!.musicxmlFilename);
+    await fs.symlink(
+      ctx.services.storage.resolveUploadPath(score!.storedFilename),
+      ctx.services.storage.resolveExportPath(score!.musicxmlFilename)
+    );
+
+    const serverLog = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    try {
+      await request(ctx.app).get(`/api/scores/${created.body.score.id}/download`).set("Cookie", cookie).expect(410);
+    } finally {
+      serverLog.mockRestore();
+    }
   });
 });

@@ -54,6 +54,31 @@ describe("PlaybackControls", () => {
     expect(screen.queryByRole("button", { name: "Violão" })).not.toBeInTheDocument();
   });
 
+  it("abre as faixas automaticamente quando a partitura tem mais de uma voz", () => {
+    render(
+      <PlaybackControls
+        state="stopped"
+        positionMs={0}
+        durationMs={4_000}
+        tempoBpm={70}
+        tempoAssumed
+        onPlayPause={vi.fn()}
+        onRestart={vi.fn()}
+        onSeek={vi.fn()}
+        onTempoChange={vi.fn()}
+        onVoiceToggle={vi.fn()}
+        voices={[
+          { id: "part:flute", label: "Flauta", muted: false, trackIndexes: [0], channels: [0], programs: [73], eventCount: 12, mappingConfidence: "exact" },
+          { id: "part:piano", label: "Piano", muted: false, trackIndexes: [1], channels: [1], programs: [0], eventCount: 18, mappingConfidence: "exact" }
+        ]}
+      />
+    );
+
+    expect(screen.getByRole("button", { name: "Ocultar ajustes e faixas" })).toHaveAttribute("aria-expanded", "true");
+    expect(screen.getByRole("button", { name: "Silenciar Flauta" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Silenciar Piano" })).toBeInTheDocument();
+  });
+
   it("oferece saída clara na barra do modo imersivo", () => {
     const onExitImmersive = vi.fn();
     render(

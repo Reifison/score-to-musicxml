@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<score-partwise version="4.0">
+  <work><work-title>Fase 0 — instrumentos, vozes e repetição</work-title></work>
+  <part-list>
+    <score-part id="P1">
+      <part-name>Dueto na mesma parte</part-name>
+      <score-instrument id="P1-I1"><instrument-name>Acoustic Grand Piano</instrument-name></score-instrument>
+      <score-instrument id="P1-I2"><instrument-name>Flute</instrument-name></score-instrument>
+      <midi-instrument id="P1-I1"><midi-channel>1</midi-channel><midi-program>1</midi-program></midi-instrument>
+      <midi-instrument id="P1-I2"><midi-channel>2</midi-channel><midi-program>74</midi-program></midi-instrument>
+    </score-part>
+  </part-list>
+  <part id="P1">
+    <measure number="1">
+      <attributes>
+        <divisions>1</divisions><key><fifths>0</fifths></key>
+        <time><beats>4</beats><beat-type>4</beat-type></time>
+        <clef><sign>G</sign><line>2</line></clef>
+      </attributes>
+      <note><pitch><step>C</step><octave>4</octave></pitch><duration>4</duration><type>whole</type><voice>1</voice><staff>1</staff></note>
+      <backup><duration>4</duration></backup>
+      <note><pitch><step>G</step><octave>4</octave></pitch><duration>4</duration><type>whole</type><voice>2</voice><staff>1</staff></note>
+      <barline location="left"><repeat direction="forward"/></barline>
+    </measure>
+    <measure number="2">
+      <note><pitch><step>D</step><octave>4</octave></pitch><duration>4</duration><type>whole</type><voice>1</voice><staff>1</staff></note>
+      <backup><duration>4</duration></backup>
+      <note><pitch><step>A</step><octave>4</octave></pitch><duration>4</duration><type>whole</type><voice>2</voice><staff>1</staff></note>
+      <barline location="right"><repeat direction="backward" times="2"/></barline>
+    </measure>
+  </part>
+</score-partwise>

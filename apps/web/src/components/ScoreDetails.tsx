@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { AlertTriangle, Download, FileImage, Music2, X } from "lucide-react";
+import { Download, FileImage, Music2, X } from "lucide-react";
 import { previewUrl } from "../api/client.js";
 import type { Score } from "../types/domain.js";
 import { ScorePlayer } from "./ScorePlayer.js";
@@ -21,9 +21,6 @@ export function ScoreDetails({
   const extension = score.originalFilename.includes(".") ? `.${score.originalFilename.split(".").pop()}` : "";
   const baseName = extension ? score.originalFilename.slice(0, -extension.length) : score.originalFilename;
   const canShowNotation = score.conversionStatus === "converted";
-  const warnings = score.warnings ?? [];
-  const confidencePercent = score.confidence == null ? null : Math.round(score.confidence * 100);
-  const needsReview = confidencePercent != null && confidencePercent < 75;
   const [name, setName] = useState(baseName);
   const [saving, setSaving] = useState(false);
   const [previewMode, setPreviewMode] = useState<"notation" | "original">(canShowNotation ? "notation" : "original");
@@ -78,22 +75,6 @@ export function ScoreDetails({
           <button type="submit" disabled={saving || !name.trim() || name.trim() === baseName}>{saving ? "Salvando..." : "Salvar nome"}</button>
         </form>
         {score.errorMessage && <p className="error-text">{score.errorMessage}</p>}
-        {(confidencePercent != null || warnings.length > 0) && (
-          <section className={`recognition-summary ${needsReview || warnings.length ? "recognition-summary-warning" : ""}`} aria-label="Qualidade do reconhecimento">
-            <AlertTriangle aria-hidden="true" size={20} />
-            <div>
-              <strong>{needsReview ? "Revise esta conversão" : "Resultado do reconhecimento"}</strong>
-              {confidencePercent != null && (
-                <p>Confiança estimada: {confidencePercent}%.{needsReview ? " Compare cuidadosamente com o arquivo original." : ""}</p>
-              )}
-              {warnings.length > 0 && (
-                <ul>
-                  {warnings.map((warning, index) => <li key={`${index}-${warning}`}>{warning}</li>)}
-                </ul>
-              )}
-            </div>
-          </section>
-        )}
         <div className="score-view-tabs" role="tablist" aria-label="Visualização da partitura">
           <button
             id={`notation-tab-${score.id}`}

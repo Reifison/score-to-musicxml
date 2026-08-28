@@ -1,5 +1,6 @@
 import { Minimize2, Pause, Play, RotateCcw, SlidersHorizontal } from "lucide-react";
-import { type Ref, useId, useState } from "react";
+import { type Ref, useEffect, useId, useState } from "react";
+import type { PlaybackVoice } from "../audio/mapMidiTracksToParts.js";
 
 export type PlaybackState = "stopped" | "playing" | "paused";
 
@@ -18,6 +19,9 @@ type PlaybackControlsProps = {
   onRestart: () => void;
   onSeek: (positionMs: number) => void;
   onTempoChange: (tempoBpm: number) => void;
+  voices?: PlaybackVoice[];
+  onVoiceToggle?: (voiceId: string) => void;
+  voiceAnnouncement?: string;
   onExitImmersive?: () => void;
   exitButtonRef?: Ref<HTMLButtonElement>;
 };
@@ -37,6 +41,9 @@ export function PlaybackControls({
   onRestart,
   onSeek,
   onTempoChange,
+  voices = [],
+  onVoiceToggle,
+  voiceAnnouncement,
   onExitImmersive,
   exitButtonRef
 }: PlaybackControlsProps) {
@@ -45,6 +52,14 @@ export function PlaybackControls({
   const safePosition = Math.min(Math.max(0, positionMs), safeDuration);
   const [detailsOpen, setDetailsOpen] = useState(false);
   const detailsId = useId();
+  const hasTrackControls = voices.length >= 2 && Boolean(onVoiceToggle);
+
+  // A multi-part score should not make the most useful study controls depend
+  // on users guessing that "Ajustes" contains them. Keep the compact player
+  // for single voices, but reveal the track mixer as soon as it is available.
+  useEffect(() => {
+    if (hasTrackControls) setDetailsOpen(true);
+  }, [hasTrackControls]);
 
   return (
     <div className={`playback-controls${immersive ? " playback-controls-immersive" : ""}`} aria-label="Controles de reprodução">
@@ -59,12 +74,12 @@ export function PlaybackControls({
         <button
           className="secondary-button playback-details-toggle"
           type="button"
-          aria-label={detailsOpen ? "Ocultar ajustes" : "Ajustes"}
+          aria-label={detailsOpen ? "Ocultar ajustes e faixas" : hasTrackControls ? "Mostrar faixas e andamento" : "Ajustes"}
           aria-expanded={detailsOpen}
           aria-controls={detailsId}
           onClick={() => setDetailsOpen((open) => !open)}
         >
-          <SlidersHorizontal aria-hidden="true" size={18} /> <span>{detailsOpen ? "Ocultar ajustes" : "Ajustes"}</span>
+          <SlidersHorizontal aria-hidden="true" size={18} /> <span>{detailsOpen ? "Ocultar ajustes" : hasTrackControls ? "Faixas e andamento" : "Ajustes"}</span>
         </button>
       </div>
       {immersive && onExitImmersive && (
@@ -107,6 +122,26 @@ export function PlaybackControls({
         <p className="sample-credit" aria-live="polite">
           {sampleStatus ?? "Piano digital ativo."}
         </p>
+        {hasTrackControls && (
+          <fieldset className="playback-voices">
+            <legend>Faixas, toque para ativar ou silenciar</legend>
+            <div className="playback-voices-list">
+              {voices.map((voice) => (
+                <button
+                  className="secondary-button playback-voice-toggle"
+                  key={voice.id}
+                  type="button"
+                  aria-label={`${voice.muted ? "Ativar" : "Silenciar"} ${voice.label}`}
+                  aria-pressed={voice.muted}
+                  onClick={() => onVoiceToggle?.(voice.id)}
+                >
+                  <span>{voice.muted ? "Ativar" : "Silenciar"}</span> {voice.label}
+                </button>
+              ))}
+            </div>
+            <span className="sr-only" aria-live="polite">{voiceAnnouncement}</span>
+          </fieldset>
+        )}
       </div>
     </div>
   );

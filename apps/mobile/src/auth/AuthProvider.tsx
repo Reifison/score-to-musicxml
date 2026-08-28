@@ -1,4 +1,5 @@
 import * as SecureStore from "expo-secure-store";
+import { useQueryClient } from "@tanstack/react-query";
 import { createContext, useCallback, useContext, useEffect, useMemo, useState, type PropsWithChildren } from "react";
 import { api } from "../api/client";
 import type { PublicUser } from "../api/types";
@@ -16,6 +17,7 @@ type AuthContextValue = {
 const AuthContext = createContext<AuthContextValue | null>(null);
 
 export function AuthProvider({ children }: PropsWithChildren) {
+  const queryClient = useQueryClient();
   const [user, setUser] = useState<PublicUser | null>(null);
   const [token, setToken] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
@@ -41,18 +43,27 @@ export function AuthProvider({ children }: PropsWithChildren) {
 
   const login = useCallback(async (email: string, password: string) => {
     const response = await api.login(email.trim(), password);
+    // Cached score data belongs to the previous account. Clear it before this
+    // token becomes available so no screen can render another user's content.
+    await queryClient.cancelQueries();
+    queryClient.clear();
     await SecureStore.setItemAsync(tokenKey, response.token);
     setToken(response.token);
     setUser(response.user);
-  }, []);
+  }, [queryClient]);
 
   const logout = useCallback(async () => {
     const currentToken = token;
+    // Clear all account-scoped queries before changing auth state. This is
+    // intentionally broader than invalidation because score details and player
+    // data must never survive a user switch in memory.
+    await queryClient.cancelQueries();
+    queryClient.clear();
     setToken(null);
     setUser(null);
     await SecureStore.deleteItemAsync(tokenKey);
     if (currentToken) await api.logout(currentToken).catch(() => undefined);
-  }, [token]);
+  }, [queryClient, token]);
 
   const value = useMemo(() => ({ user, token, loading, login, logout }), [user, token, loading, login, logout]);
 

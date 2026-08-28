@@ -130,7 +130,8 @@ export class SampleBank {
     midi: number,
     velocity: number,
     startsAt: number,
-    durationSeconds: number
+    durationSeconds: number,
+    output: AudioNodeLike = this.output
   ): boolean {
     if (!this.isReady(instrument) || !this.context.createBufferSource) return false;
     const samples = this.loaded.get(instrument) ?? [];
@@ -172,7 +173,7 @@ export class SampleBank {
     gain.gain.setValueAtTime(Math.max(0.0001, safeVelocity), releaseStart);
     gain.gain.exponentialRampToValueAtTime(0.0001, Math.max(attackEnd + 0.001, releaseEnd));
     source.connect(gain);
-    gain.connect(this.output);
+    gain.connect(output);
     const voice = { source, gain };
     source.onended = () => {
       source.disconnect();

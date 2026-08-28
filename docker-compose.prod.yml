@@ -32,6 +32,8 @@ services:
       dockerfile: apps/api/Dockerfile
     restart: unless-stopped
     env_file: .env.production
+    environment:
+      STORAGE_DIR: /app/storage
     depends_on:
       postgres:
         condition: service_healthy
@@ -41,6 +43,12 @@ services:
       - storage_data:/app/storage
     expose:
       - "4000"
+    healthcheck:
+      test: ["CMD", "node", "-e", "const fs=require('node:fs/promises'); const path=require('node:path'); const root=process.env.STORAGE_DIR||'/app/storage'; const mode=require('node:fs').constants.R_OK|require('node:fs').constants.W_OK|require('node:fs').constants.X_OK; Promise.all(['uploads','exports'].map((name)=>fs.access(path.join(root,name),mode))).catch((error)=>{console.error(error.message); process.exitCode=1;});"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 20s
 
   worker:
     build:
@@ -48,6 +56,8 @@ services:
       dockerfile: apps/api/Dockerfile
     restart: unless-stopped
     env_file: .env.production
+    environment:
+      STORAGE_DIR: /app/storage
     depends_on:
       postgres:
         condition: service_healthy
@@ -58,6 +68,12 @@ services:
     command: ["node", "apps/api/dist/workers/conversionWorker.js"]
     volumes:
       - storage_data:/app/storage
+    healthcheck:
+      test: ["CMD", "node", "-e", "const fs=require('node:fs/promises'); const path=require('node:path'); const root=process.env.STORAGE_DIR||'/app/storage'; const mode=require('node:fs').constants.R_OK|require('node:fs').constants.W_OK|require('node:fs').constants.X_OK; Promise.all(['uploads','exports'].map((name)=>fs.access(path.join(root,name),mode))).catch((error)=>{console.error(error.message); process.exitCode=1;});"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 20s
 
   web:
     build:

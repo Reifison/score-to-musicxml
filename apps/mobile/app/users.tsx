@@ -13,7 +13,7 @@ export default function UsersScreen() {
   const isAdmin = user?.role === "admin";
 
   const usersQuery = useQuery({
-    queryKey: ["admin-users"],
+    queryKey: ["admin-users", user?.id],
     queryFn: () => api.users(token!),
     enabled: Boolean(token && isAdmin)
   });

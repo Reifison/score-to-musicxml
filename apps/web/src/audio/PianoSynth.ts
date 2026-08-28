@@ -3,7 +3,14 @@ import type { AudioContextLike, AudioNodeLike, Instrument } from "./types";
 export type SampleVoiceBackend = {
   preload(instrument: Instrument): Promise<boolean>;
   isReady(instrument: Instrument): boolean;
-  schedule(instrument: Instrument, midi: number, velocity: number, startsAt: number, durationSeconds: number): boolean;
+  schedule(
+    instrument: Instrument,
+    midi: number,
+    velocity: number,
+    startsAt: number,
+    durationSeconds: number,
+    output?: AudioNodeLike
+  ): boolean;
   stopAll(atTime?: number): void;
   getActiveVoiceCount(): number;
 };
@@ -88,11 +95,11 @@ export class PianoSynth {
     return this.voices.size + (this.sampleBackend?.getActiveVoiceCount() ?? 0);
   }
 
-  schedule(note: SynthNote, startsAt: number, durationSeconds: number): void {
+  schedule(note: SynthNote, startsAt: number, durationSeconds: number, output: AudioNodeLike = this.output): void {
     const requestedVelocity = note.velocity ?? 0.72;
     const velocity = Number.isFinite(requestedVelocity) ? Math.min(1, Math.max(0, requestedVelocity)) : 0.72;
     const safeDuration = Number.isFinite(durationSeconds) ? Math.max(0.01, durationSeconds) : 0.01;
-    if (this.sampleBackend?.schedule(this.instrument, note.midi, velocity, startsAt, safeDuration)) return;
+    if (this.sampleBackend?.schedule(this.instrument, note.midi, velocity, startsAt, safeDuration, output)) return;
     const oscillator = this.context.createOscillator();
     const gain = this.context.createGain();
     const voice = { oscillator, gain };
@@ -110,7 +117,7 @@ export class PianoSynth {
     gain.gain.exponentialRampToValueAtTime(0.0001, endsAt);
 
     oscillator.connect(gain);
-    gain.connect(this.output);
+    gain.connect(output);
     oscillator.onended = () => this.releaseVoice(voice);
     this.voices.add(voice);
     oscillator.start(startsAt);

@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE score-partwise PUBLIC "-//Recordare//DTD MusicXML 4.0 Partwise//EN" "http://www.musicxml.org/dtds/partwise.dtd">
+<score-partwise version="4.0">
+  <part-list>
+    <score-part id="P1">
+      <part-name>Canal repetido A</part-name>
+      <score-instrument id="P1-I1"><instrument-name>Acoustic Grand Piano</instrument-name></score-instrument>
+      <midi-instrument id="P1-I1"><midi-channel>1</midi-channel><midi-program>1</midi-program></midi-instrument>
+    </score-part>
+    <score-part id="P2">
+      <part-name>Canal repetido B</part-name>
+      <score-instrument id="P2-I1"><instrument-name>Flute</instrument-name></score-instrument>
+      <midi-instrument id="P2-I1"><midi-channel>1</midi-channel><midi-program>74</midi-program></midi-instrument>
+    </score-part>
+    <score-part id="P3"><part-name>Parte sem notas</part-name><midi-instrument id="P3-I1"><midi-channel>3</midi-channel><midi-program>1</midi-program></midi-instrument></score-part>
+    <score-part id="P4"><score-instrument id="P4-I1"><instrument-name>Oboe</instrument-name></score-instrument><midi-instrument id="P4-I1"><midi-channel>4</midi-channel><midi-program>69</midi-program></midi-instrument></score-part>
+    <score-part id="P5"><part-name>Nome duplicado</part-name><midi-instrument id="P5-I1"><midi-channel>5</midi-channel><midi-program>41</midi-program></midi-instrument></score-part>
+    <score-part id="P6"><part-name>Nome duplicado</part-name><midi-instrument id="P6-I1"><midi-channel>6</midi-channel><midi-program>41</midi-program></midi-instrument></score-part>
+  </part-list>
+  <part id="P1"><measure number="1"><attributes><divisions>1</divisions><time><beats>4</beats><beat-type>4</beat-type></time><clef><sign>G</sign><line>2</line></clef></attributes><note><pitch><step>C</step><octave>4</octave></pitch><duration>4</duration><type>whole</type></note></measure></part>
+  <part id="P2"><measure number="1"><attributes><divisions>1</divisions><time><beats>4</beats><beat-type>4</beat-type></time><clef><sign>G</sign><line>2</line></clef></attributes><note><pitch><step>G</step><octave>4</octave></pitch><duration>4</duration><type>whole</type></note></measure></part>
+  <part id="P3"><measure number="1"><attributes><divisions>1</divisions><time><beats>4</beats><beat-type>4</beat-type></time><clef><sign>G</sign><line>2</line></clef></attributes><note><rest/><duration>4</duration><type>whole</type></note></measure></part>
+  <part id="P4"><measure number="1"><attributes><divisions>1</divisions><time><beats>4</beats><beat-type>4</beat-type></time><clef><sign>G</sign><line>2</line></clef></attributes><note><pitch><step>E</step><octave>4</octave></pitch><duration>4</duration><type>whole</type></note></measure></part>
+  <part id="P5"><measure number="1"><attributes><divisions>1</divisions><time><beats>4</beats><beat-type>4</beat-type></time><clef><sign>G</sign><line>2</line></clef></attributes><note><pitch><step>D</step><octave>4</octave></pitch><duration>4</duration><type>whole</type></note></measure></part>
+  <part id="P6"><measure number="1"><attributes><divisions>1</divisions><time><beats>4</beats><beat-type>4</beat-type></time><clef><sign>G</sign><line>2</line></clef></attributes><note><pitch><step>F</step><octave>4</octave></pitch><duration>4</duration><type>whole</type></note></measure></part>
+</score-partwise>

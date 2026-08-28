@@ -4,6 +4,48 @@ apply plugin: "com.facebook.react"
 
 def projectRoot = rootDir.getAbsoluteFile().getParentFile().getAbsolutePath()
 
+// The score player is a shared web bundle used by the Android WebView. Keep
+// the release asset in sync at build time so an AAB/APK cannot accidentally
+// ship a stale player after a web change.
+def webPlayerRoot = file("${projectRoot}/../web")
+def bundledPlayerAssets = file("${projectDir}/src/main/assets/player")
+
+tasks.register("syncBundledWebPlayer") {
+    inputs.dir(file("${webPlayerRoot}/src"))
+    inputs.dir(file("${webPlayerRoot}/public"))
+    inputs.files(
+        file("${webPlayerRoot}/package.json"),
+        file("${webPlayerRoot}/tsconfig.json"),
+        file("${webPlayerRoot}/vite.config.ts")
+    )
+    outputs.dir(bundledPlayerAssets)
+    doFirst {
+        exec {
+            workingDir(webPlayerRoot)
+            commandLine("npm", "run", "build")
+        }
+    }
+    doLast {
+        def builtPlayer = file("${webPlayerRoot}/dist")
+        if (!file("${builtPlayer}/index.html").exists()) {
+            throw new GradleException("O player web não foi gerado em ${builtPlayer}.")
+        }
+        delete(bundledPlayerAssets)
+        copy {
+            from(builtPlayer)
+            into(bundledPlayerAssets)
+        }
+    }
+}
+
+// The Android plugin creates variant tasks lazily, so configure this hook
+// without assuming `preReleaseBuild` already exists during script evaluation.
+tasks.configureEach { task ->
+    if (task.name == "preReleaseBuild") {
+        task.dependsOn("syncBundledWebPlayer")
+    }
+}
+
 /**
  * This is the configuration block to customize your React Native Android app.
  * By default you don't need to apply any configuration, just uncomment the lines you need.
@@ -92,8 +134,8 @@ android {
         applicationId 'com.scoretomusicxml.app'
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
-        versionCode 1
-        versionName "0.1.0"
+        versionCode 4
+        versionName "1.0"
 
         buildConfigField "String", "REACT_NATIVE_RELEASE_LEVEL", "\"${findProperty('reactNativeReleaseLevel') ?: 'stable'}\""
     }

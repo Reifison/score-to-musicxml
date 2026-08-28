@@ -224,6 +224,62 @@ describe("WebAudioMidiEngine", () => {
     expect(engine.getTelemetrySnapshot()).not.toHaveProperty("voiceId");
   });
 
+  it("expõe vozes e alterna o mute por barramento sem reiniciar a reprodução", async () => {
+    const context = new FakeAudioContext();
+    const engine = new WebAudioMidiEngine({ contextFactory: () => context });
+    engine.load([
+      { pitch: 60, startMs: 0, durationMs: 500, voiceId: "voice-a" },
+      { pitch: 67, startMs: 0, durationMs: 500, voiceId: "voice-b" }
+    ]);
+
+    expect(engine.getVoices()).toEqual([
+      { id: "voice-a", label: "voice-a", muted: false },
+      { id: "voice-b", label: "voice-b", muted: false }
+    ]);
+    engine.setVoiceMuted("voice-b", true);
+    engine.setVoiceMuted("voice-b", true); // idempotent
+    expect(engine.isVoiceMuted("voice-b")).toBe(true);
+
+    await engine.playFromUserGesture();
+    expect(context.gains[1].gain.value).toBe(0);
+    expect(context.resume).toHaveBeenCalledTimes(1);
+
+    engine.setVoiceMuted("voice-b", false);
+    expect(engine.isVoiceMuted("voice-b")).toBe(false);
+    expect(context.gains[1].gain.linearRampToValueAtTime).toHaveBeenLastCalledWith(1, 0.015);
+    expect(engine.getSnapshot().state).toBe("playing");
+  });
+
+  it("continua avançando quando todas as vozes estão silenciadas", async () => {
+    const context = new FakeAudioContext();
+    const engine = new WebAudioMidiEngine({ contextFactory: () => context });
+    engine.load([
+      { pitch: 60, startMs: 0, durationMs: 500, voiceId: "voice-a" },
+      { pitch: 67, startMs: 0, durationMs: 500, voiceId: "voice-b" }
+    ]);
+
+    engine.setVoiceMuted("voice-a", true);
+    engine.setVoiceMuted("voice-b", true);
+    await engine.playFromUserGesture();
+
+    expect(context.gains.slice(0, 2).map((gain) => gain.gain.value)).toEqual([0, 0]);
+    expect(engine.getTelemetrySnapshot()).toMatchObject({ scheduledEvents: 2, activeVoices: 2 });
+    expect(engine.getSnapshot().state).toBe("playing");
+  });
+
+  it("desconecta e libera os barramentos ao descartar o motor", async () => {
+    const context = new FakeAudioContext();
+    const engine = new WebAudioMidiEngine({ contextFactory: () => context });
+    engine.load([{ pitch: 60, startMs: 0, durationMs: 100, voiceId: "voice-a" }]);
+    await engine.playFromUserGesture();
+    const bus = context.gains[0];
+
+    await engine.dispose();
+
+    expect(bus.disconnect).toHaveBeenCalledTimes(1);
+    expect(engine.getVoices()).toEqual([]);
+  });
+
   it("mede jitter do agendador e identifica uma nota atrasada", async () => {
     const context = new FakeAudioContext();
     const timer = createScheduler();

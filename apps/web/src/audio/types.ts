@@ -22,6 +22,31 @@ export type MidiPlaybackEvent = {
   voiceId?: string;
 };
 
+/** A selectable audio voice exposed by the playback engine. */
+export type PlaybackEngineVoice = {
+  id: string;
+  label: string;
+  muted: boolean;
+};
+
+/** Metadata for one sounding voice in a parsed Standard MIDI File. */
+export type MidiPlaybackTrack = {
+  /** Index after @tonejs/midi has normalized/split source tracks. */
+  trackIndex: number;
+  /** SMF track-name meta event, when one was present. */
+  name?: string;
+  channel?: number;
+  program?: number;
+  /** Whether a channel-bearing MIDI event was observed in the source track. */
+  channelObserved?: boolean;
+  /** Whether a program-change event was explicitly present in the source track. */
+  programExplicit?: boolean;
+  noteCount: number;
+  durationMs: number;
+  events: MidiPlaybackEvent[];
+  voiceId: string;
+};
+
 /** Operational playback counters. No score, file name, pitch or note data is included. */
 export type PlaybackTelemetrySnapshot = {
   expectedEvents: number;

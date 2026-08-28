@@ -135,9 +135,26 @@ export class ScoreService {
     if (score.conversionStatus !== "converted" || !score.musicxmlFilename) {
       throw new AppError(409, "MusicXML ainda não disponível para download.", "DOWNLOAD_NOT_READY");
     }
+
+    let musicXml: Buffer;
+    try {
+      musicXml = await this.storage.readExportForDownload(score.musicxmlFilename);
+    } catch (error) {
+      console.error("MusicXML export unavailable for download", {
+        scoreId: score.id,
+        exportFilename: score.musicxmlFilename,
+        error: fileErrorDetails(error)
+      });
+      throw new AppError(
+        410,
+        "O arquivo MusicXML desta partitura não está disponível. Converta o arquivo novamente.",
+        "MUSICXML_EXPORT_UNAVAILABLE"
+      );
+    }
+
     await this.audits.create({ actorId: user.id, action: "score_downloaded", entity: "score", entityId: score.id, ipAddress });
     return {
-      path: this.storage.resolveExportPath(score.musicxmlFilename),
+      musicXml,
       filename: safeMusicXmlFilename(score.originalFilename)
     };
   }
@@ -171,4 +188,10 @@ export class ScoreService {
     if (["uploaded", "queued", "processing", "converted", "failed"].includes(status)) return status as never;
     throw new AppError(400, "Status inválido.", "INVALID_STATUS");
   }
+}
+
+function fileErrorDetails(error: unknown): Record<string, string | undefined> {
+  if (!(error instanceof Error)) return { message: String(error) };
+  const errno = error as NodeJS.ErrnoException;
+  return { name: error.name, code: errno.code, message: error.message };
 }

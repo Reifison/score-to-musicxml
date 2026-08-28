@@ -5,12 +5,15 @@ import type { SampleBankSnapshot, SampleManifest } from "./SampleBank";
 import type {
   AudioContextFactory,
   AudioContextLike,
+  AudioNodeLike,
+  GainNodeLike,
   IntervalScheduler,
   MidiNoteEvent,
   MidiPlaybackEvent,
   Instrument,
   PlaybackSnapshot,
   PlaybackTelemetrySnapshot,
+  PlaybackEngineVoice,
   PlaybackState
 } from "./types";
 
@@ -85,6 +88,9 @@ export class WebAudioMidiEngine {
   private rate: number;
   private readonly baseTempoBpm: number;
   private disposed = false;
+  private readonly mutedVoiceIds = new Set<string>();
+  private readonly voiceBuses = new Map<string, GainNodeLike>();
+  private voiceOrder: string[] = [];
 
   private readonly contextFactory: AudioContextFactory;
   private readonly scheduler: IntervalScheduler;
@@ -112,10 +118,12 @@ export class WebAudioMidiEngine {
 
   load(events: MidiPlaybackEvent[], durationMs?: number): void {
     this.stop();
+    this.clearVoiceBuses();
     this.events = events
       .filter((event) => Number.isFinite(event.pitch) && event.durationMs > 0 && event.startMs >= 0)
       .map((event) => ({ ...event }))
       .sort((a, b) => a.startMs - b.startMs);
+    this.voiceOrder = [...new Set(this.events.map((event) => this.voiceIdFor(event)))];
     this.resetTelemetry(this.events.length);
     this.nextEventIndex = 0;
     const eventDurationMs = this.events.reduce(
@@ -265,6 +273,29 @@ export class WebAudioMidiEngine {
     return this.instrument;
   }
 
+  /** Lists the voices currently present in the loaded playback. */
+  getVoices(): PlaybackEngineVoice[] {
+    return this.voiceOrder.map((id) => ({ id, label: id, muted: this.isVoiceMuted(id) }));
+  }
+
+  isVoiceMuted(voiceId: string): boolean {
+    return this.mutedVoiceIds.has(voiceId);
+  }
+
+  /** Mutes/unmutes one voice without interrupting or rebuilding playback. */
+  setVoiceMuted(voiceId: string, muted: boolean): void {
+    if (!voiceId || this.isVoiceMuted(voiceId) === muted) return;
+    if (muted) this.mutedVoiceIds.add(voiceId);
+    else this.mutedVoiceIds.delete(voiceId);
+    const bus = this.voiceBuses.get(voiceId);
+    if (bus && this.context) {
+      const now = this.context.currentTime;
+      bus.gain.cancelScheduledValues(now);
+      bus.gain.setValueAtTime(bus.gain.value, now);
+      bus.gain.linearRampToValueAtTime(muted ? 0 : 1, now + 0.015);
+    }
+  }
+
   getSampleBankSnapshot(instrument = this.instrument): SampleBankSnapshot {
     return this.sampleBank?.getSnapshot(instrument) ?? {
       instrument,
@@ -333,6 +364,9 @@ export class WebAudioMidiEngine {
     this.context = null;
     this.synth = null;
     this.sampleBank = null;
+    this.clearVoiceBuses();
+    this.voiceOrder = [];
+    this.mutedVoiceIds.clear();
   }
 
   /** Compatibility helper for beat-based sources using the 70 BPM fallback. */
@@ -355,6 +389,13 @@ export class WebAudioMidiEngine {
         fetcher: this.sampleFetcher
       });
       this.synth = new PianoSynth(this.context, this.context.destination, this.instrument, this.sampleBank);
+      for (const voiceId of this.voiceOrder) {
+        // Keep the legacy single-voice path free of an extra node. Parsed MIDI
+        // voices always carry an id and therefore use an individual bus.
+        if (this.events.some((event) => event.voiceId === voiceId) || this.isVoiceMuted(voiceId)) {
+          this.createVoiceBus(voiceId);
+        }
+      }
     }
     if (this.context.state === "suspended") await this.context.resume();
     // Loading and decoding two complete banks at once can starve a WKWebView.
@@ -425,7 +466,12 @@ export class WebAudioMidiEngine {
       }
       const startsAt = now + (effectiveStart - this.currentPositionMs) / 1000 / this.rate;
       const durationSeconds = (eventEnd - effectiveStart) / 1000 / this.rate;
-      this.synth!.schedule({ midi: event.pitch, velocity: event.velocity }, startsAt, durationSeconds);
+      this.synth!.schedule(
+        { midi: event.pitch, velocity: event.velocity },
+        startsAt,
+        durationSeconds,
+        this.outputForEvent(event)
+      );
       this.telemetry.scheduledEvents += 1;
     }
     if (reachedEnd) {
@@ -538,6 +584,32 @@ export class WebAudioMidiEngine {
     this.stopScheduler();
     this.emit();
     this.emitTelemetry();
+  }
+
+  private voiceIdFor(event: MidiPlaybackEvent): string {
+    return event.voiceId ?? (event.trackIndex === undefined ? "default" : `track:${event.trackIndex}`);
+  }
+
+  private createVoiceBus(voiceId: string): GainNodeLike {
+    const existing = this.voiceBuses.get(voiceId);
+    if (existing) return existing;
+    if (!this.context) throw new Error("O contexto de áudio ainda não foi ativado.");
+    const bus = this.context.createGain();
+    bus.gain.value = this.isVoiceMuted(voiceId) ? 0 : 1;
+    bus.connect(this.context.destination);
+    this.voiceBuses.set(voiceId, bus);
+    return bus;
+  }
+
+  private clearVoiceBuses(): void {
+    for (const bus of this.voiceBuses.values()) bus.disconnect();
+    this.voiceBuses.clear();
+  }
+
+  private outputForEvent(event: MidiPlaybackEvent): AudioNodeLike {
+    const voiceId = this.voiceIdFor(event);
+    if (event.voiceId === undefined && !this.isVoiceMuted(voiceId)) return this.context!.destination;
+    return this.createVoiceBus(voiceId);
   }
 
   private validateRate(rate: number): number {

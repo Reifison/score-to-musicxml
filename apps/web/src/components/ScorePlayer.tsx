@@ -2,9 +2,11 @@ import { ChevronLeft, ChevronRight, FileWarning, RefreshCw } from "lucide-react"
 import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState } from "react";
 import { fetchMusicXml } from "../api/client.js";
 import type { PlaybackSnapshot, WebAudioMidiEngine } from "../audio/index.js";
+import { mapMidiTracksToParts, type PlaybackVoice } from "../audio/index.js";
 import { SAMPLE_BANK_RELEASE } from "../audio/index.js";
 import { sanitizeScoreSvg } from "../score/sanitizeScoreSvg.js";
 import { applyDefaultTempo, DEFAULT_TEMPO_BPM, hasExplicitTempo } from "../score/musicXmlTempo.js";
+import { parseMusicXmlParts } from "../score/parseMusicXmlParts.js";
 import type { VerovioScoreRenderer } from "../score/VerovioScoreRenderer.js";
 import { PlaybackControls, type PlaybackState } from "./PlaybackControls.js";
 
@@ -23,6 +25,8 @@ type ScorePlayerProps = {
   initialImmersive?: boolean;
   onStatusChange?: (state: ScorePlayerState, message?: string) => void;
   onPlaybackChange?: (snapshot: PlaybackSnapshot) => void;
+  /** Catalog of the currently loaded sounding voices, for the track controls. */
+  onVoicesChange?: (voices: PlaybackVoice[]) => void;
   onImmersiveChange?: (immersive: boolean) => void;
 };
 
@@ -56,6 +60,7 @@ export function ScorePlayer({
   initialImmersive = false,
   onStatusChange,
   onPlaybackChange,
+  onVoicesChange,
   onImmersiveChange
 }: ScorePlayerProps) {
   const rendererRef = useRef<VerovioScoreRenderer | null>(null);
@@ -85,6 +90,8 @@ export function ScorePlayer({
   const [page, setPage] = useState(1);
   const [pageCount, setPageCount] = useState(0);
   const [svg, setSvg] = useState("");
+  const [voices, setVoices] = useState<PlaybackVoice[]>([]);
+  const [voiceAnnouncement, setVoiceAnnouncement] = useState("");
   const [reloadKey, setReloadKey] = useState(0);
 
   useEffect(() => {
@@ -233,6 +240,9 @@ export function ScorePlayer({
     setAudioError("");
     setSampleStatus(`${SAMPLE_BANK_RELEASE} · o primeiro play prepara o piano.`);
     setAudioAvailable(false);
+    setVoices([]);
+    setVoiceAnnouncement("");
+    onVoicesChange?.([]);
     playbackStateRef.current = "idle";
     pageSvgCacheRef.current.clear();
     lastPlaybackUiUpdateRef.current = null;
@@ -266,10 +276,21 @@ export function ScorePlayer({
           ? await scoreModule.createVerovioScoreRenderer(playableMusicXml, narrowScoreLayout)
           : await scoreModule.createVerovioScoreRenderer(playableMusicXml);
         const midi = audioModule.parseMidiPlayback(pendingRenderer.renderMidiBytes());
+        const mapping = mapMidiTracksToParts(parseMusicXmlParts(musicXml), midi.tracks);
+        const voiceByTrack = new Map<number, PlaybackVoice>();
+        for (const voice of mapping.voices) {
+          for (const trackIndex of voice.trackIndexes) voiceByTrack.set(trackIndex, voice);
+        }
+        // The parser's track ids are useful diagnostics, but the mapping's
+        // ids are stable across reloads and are the ids the mute engine owns.
+        const mappedEvents = midi.events.map((event) => {
+          const voice = event.trackIndex === undefined ? undefined : voiceByTrack.get(event.trackIndex);
+          return voice ? { ...event, voiceId: voice.id } : event;
+        });
         const renderedDurationMs = pendingRenderer.getDurationMs();
         const initialTempo = tempoAssumedForScore ? DEFAULT_TEMPO_BPM : midi.initialTempoBpm || DEFAULT_TEMPO_BPM;
         pendingAudio = new audioModule.WebAudioMidiEngine({ baseTempoBpm: initialTempo });
-        pendingAudio.load(midi.events, Math.max(midi.durationMs, renderedDurationMs));
+        pendingAudio.load(mappedEvents, Math.max(midi.durationMs, renderedDurationMs));
 
         if (cancelled) {
           pendingRenderer.destroy();
@@ -281,7 +302,9 @@ export function ScorePlayer({
         audioRef.current = pendingAudio;
         setBaseTempoBpm(initialTempo);
         setTempoAssumed(tempoAssumedForScore);
-        setAudioAvailable(midi.events.length > 0);
+        setAudioAvailable(mappedEvents.length > 0);
+        setVoices(mapping.voices);
+        onVoicesChange?.(mapping.voices);
         const initialSvg = sanitizeScoreSvg(pendingRenderer.renderPage(1), scoreName);
         pageSvgCacheRef.current.set(1, initialSvg);
         setPageCount(pendingRenderer.pageCount);
@@ -323,7 +346,7 @@ export function ScorePlayer({
       audioRef.current = null;
       applyHighlights([]);
     };
-  }, [applyHighlights, providedMusicXml, reloadKey, scoreId, scoreName, syncVisualAtTime]);
+  }, [applyHighlights, onVoicesChange, providedMusicXml, reloadKey, scoreId, scoreName, syncVisualAtTime]);
 
   async function togglePlayback() {
     const audio = audioRef.current;
@@ -342,6 +365,20 @@ export function ScorePlayer({
     } catch (playError) {
       setAudioError(playError instanceof Error ? playError.message : "Não foi possível iniciar o áudio.");
     }
+  }
+
+  function toggleVoice(voiceId: string) {
+    const audio = audioRef.current;
+    if (!audio) return;
+    const nextMuted = !audio.isVoiceMuted(voiceId);
+    audio.setVoiceMuted(voiceId, nextMuted);
+    // The engine owns the effective state; React only mirrors it for rendering.
+    const effectiveMuted = audio.isVoiceMuted(voiceId);
+    setVoices((current) => current.map((voice) => voice.id === voiceId
+      ? { ...voice, muted: effectiveMuted }
+      : voice));
+    const label = voices.find((voice) => voice.id === voiceId)?.label ?? "faixa";
+    setVoiceAnnouncement(effectiveMuted ? `${label} silenciada` : `${label} ativada`);
   }
 
   function restartPlayback() {
@@ -386,6 +423,7 @@ export function ScorePlayer({
           onRestart={() => undefined}
           onSeek={() => undefined}
           onTempoChange={() => undefined}
+          voices={[]}
         />
         <div className="score-player-state score-player-loading" role="status" aria-live="polite">
         <span className="score-skeleton score-skeleton-heading" />
@@ -454,6 +492,9 @@ export function ScorePlayer({
         onRestart={restartPlayback}
         onSeek={seekPlayback}
         onTempoChange={changeTempo}
+        voices={voices}
+        onVoiceToggle={toggleVoice}
+        voiceAnnouncement={voiceAnnouncement}
         onExitImmersive={() => setIsImmersive(false)}
         exitButtonRef={immersiveExitRef}
       />

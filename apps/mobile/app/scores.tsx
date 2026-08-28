@@ -4,7 +4,7 @@ import * as DocumentPicker from "expo-document-picker";
 import * as ImagePicker from "expo-image-picker";
 import { useIAP } from "expo-iap";
 import type { Purchase } from "expo-iap";
-import { router } from "expo-router";
+import { router, useLocalSearchParams } from "expo-router";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { ActivityIndicator, Alert, Animated, FlatList, Image, Modal, PanResponder, Platform, Pressable, RefreshControl, StyleSheet, Text, View } from "react-native";
 import { ApiError, api } from "../src/api/client";
@@ -30,6 +30,7 @@ type PurchaseRegistration = {
 
 export default function ScoresScreen() {
   const { token, user } = useAuth();
+  const { upgrade } = useLocalSearchParams<{ upgrade?: string }>();
   const queryClient = useQueryClient();
   const [paywallVisible, setPaywallVisible] = useState(false);
   const [pendingImage, setPendingImage] = useState<{ uri: string; name: string; type: string; width?: number; height?: number } | null>(null);
@@ -38,6 +39,7 @@ export default function ScoresScreen() {
   const [selectionMode, setSelectionMode] = useState(false);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const processedPurchases = useRef(new Set<string>());
+  const paywallRequestHandled = useRef(false);
 
   const isAndroid = Platform.OS === "android";
   const storeName = isAndroid ? "Google Play" : "App Store";
@@ -59,13 +61,13 @@ export default function ScoresScreen() {
   });
 
   const entitlementQuery = useQuery({
-    queryKey: ["entitlement"],
+    queryKey: ["entitlement", user?.id],
     queryFn: () => api.entitlement(token!),
     enabled: Boolean(token)
   });
 
   const scoresQuery = useQuery({
-    queryKey: ["scores"],
+    queryKey: ["scores", user?.id],
     queryFn: () => api.scores(token!),
     enabled: Boolean(token),
     refetchInterval: (query) => {
@@ -151,7 +153,7 @@ export default function ScoresScreen() {
   });
 
   const premiumProduct = products.find((product) => product.id === premiumProductId);
-  const premiumPrice = premiumProduct?.displayPrice ?? "R$ 29,90";
+  const premiumPrice = premiumProduct?.displayPrice ?? "R$ 23,90";
   const canUseStore = connected;
 
   useEffect(() => {
@@ -165,10 +167,18 @@ export default function ScoresScreen() {
     if (restored) void completeStorePurchase(restored, true);
   }, [availablePurchases]);
 
+  useEffect(() => {
+    if (upgrade !== "1" || paywallRequestHandled.current || entitlementQuery.data?.entitlement.plan === "paid") return;
+    paywallRequestHandled.current = true;
+    setPaywallVisible(true);
+  }, [entitlementQuery.data?.entitlement.plan, upgrade]);
+
   const subtitle = useMemo(() => {
     if (!entitlement) return "Carregando limite de uso...";
     if (entitlement.plan === "paid") return "Versao paga ativa";
-    return `${entitlement.freeScansRemaining} de ${entitlement.freeScanLimit} scans gratis restantes`;
+    const remaining = Math.min(entitlement.freeScansRemaining ?? 0, 2);
+    const used = Math.max(0, 2 - remaining);
+    return `${used} de 2 conversoes gratis usadas`;
   }, [entitlement]);
 
   async function ensureUploadAllowed() {
@@ -211,11 +221,13 @@ export default function ScoresScreen() {
       return;
     }
     setPurchaseStatus(`Abrindo ${storeName}...`);
+    if (!token) return;
+    const { binding } = await api.purchaseBinding(token);
     await requestPurchase({
       type: "in-app",
       request: isAndroid
-        ? { google: { skus: premiumProductIds } }
-        : { apple: { sku: premiumProductId } }
+        ? { google: { skus: premiumProductIds, obfuscatedAccountId: binding.googleObfuscatedAccountId } }
+        : { apple: { sku: premiumProductId, appAccountToken: binding.appleAppAccountToken } }
     });
   }
 
@@ -425,21 +437,45 @@ export default function ScoresScreen() {
         </View>
       ) : null}
 
-      <Modal animationType="slide" transparent visible={paywallVisible}>
+      <Modal animationType="slide" onRequestClose={() => setPaywallVisible(false)} transparent visible={paywallVisible}>
         <View style={{ backgroundColor: "rgba(0,0,0,0.35)", flex: 1, justifyContent: "flex-end" }}>
-          <View style={{ backgroundColor: colors.panel, borderTopLeftRadius: 16, borderTopRightRadius: 16, gap: 14, padding: 20 }}>
-            <Text style={{ color: colors.ink, fontSize: 22, fontWeight: "700" }}>Desbloquear scans</Text>
-            <Text style={sharedStyles.subtitle}>Voce usou os 3 scans gratis. A versao paga libera novos envios nesta conta.</Text>
+          <View accessibilityViewIsModal style={styles.paywallSheet}>
+            <View style={styles.paywallHeader}>
+              <View style={styles.paywallIcon}>
+                <Ionicons color={colors.primary} name="musical-notes-outline" size={25} />
+              </View>
+              <Pressable accessibilityLabel="Fechar oferta" accessibilityRole="button" hitSlop={10} onPress={() => setPaywallVisible(false)} style={styles.paywallClose}>
+                <Ionicons color={colors.muted} name="close" size={22} />
+              </Pressable>
+            </View>
+            <Text accessibilityRole="header" style={styles.paywallTitle}>Continue convertendo partituras</Text>
+            <Text style={styles.paywallBody}>Suas 2 conversoes gratis foram usadas. Desbloqueie conversoes ilimitadas para esta conta.</Text>
+            <View accessibilityLabel="2 de 2 conversoes gratis usadas" style={styles.trialProgress}>
+              <View style={styles.trialProgressHeader}>
+                <Text style={styles.trialProgressLabel}>Teste gratuito</Text>
+                <Text style={styles.trialProgressValue}>2 de 2 usadas</Text>
+              </View>
+              <View style={styles.trialProgressTrack}>
+                <View style={styles.trialProgressFill} />
+              </View>
+            </View>
+            <View style={styles.paywallBenefit}>
+              <Ionicons color={colors.primary} name="checkmark-circle" size={20} />
+              <Text style={styles.paywallBenefitText}>Pagamento unico, sem assinatura</Text>
+            </View>
+            <Text style={styles.accountNote}>A compra ficara vinculada a {user?.email ?? "sua conta"}.</Text>
             {!connected ? <Text style={{ color: colors.warning }}>Conectando com a {storeName}...</Text> : null}
-            {purchaseStatus ? <Text style={sharedStyles.subtitle}>{purchaseStatus}</Text> : null}
-            <Pressable disabled={purchaseMutation.isPending} onPress={buyPremium} style={sharedStyles.button}>
-              {purchaseMutation.isPending ? <ActivityIndicator color={colors.onPrimary} /> : <Text style={sharedStyles.buttonText}>Desbloquear {premiumPrice}</Text>}
+            {purchaseStatus ? <Text accessibilityLiveRegion="polite" style={sharedStyles.subtitle}>{purchaseStatus}</Text> : null}
+            <Pressable accessibilityHint={`Abre o pagamento unico de ${premiumPrice} na ${storeName}`} accessibilityLabel={`Desbloquear conversoes ilimitadas por ${premiumPrice}`} accessibilityRole="button" disabled={purchaseMutation.isPending} onPress={buyPremium} style={[sharedStyles.button, styles.paywallCta]}>
+              {purchaseMutation.isPending ? <ActivityIndicator color={colors.onPrimary} /> : <Text style={sharedStyles.buttonText}>Desbloquear por {premiumPrice}</Text>}
             </Pressable>
-            <Pressable disabled={purchaseMutation.isPending} onPress={restorePremium} style={[sharedStyles.button, sharedStyles.buttonSecondary]}>
-              <Text style={[sharedStyles.buttonText, sharedStyles.buttonTextSecondary]}>Restaurar compra</Text>
+            <Text style={styles.paywallFinePrint}>Compra unica processada pela {storeName}.</Text>
+            <Pressable accessibilityHint="Recupera uma compra ja feita nesta loja" accessibilityLabel="Restaurar compra anterior" accessibilityRole="button" disabled={purchaseMutation.isPending} onPress={restorePremium} style={styles.restoreButton}>
+              <Ionicons color={colors.primary} name="refresh-outline" size={18} />
+              <Text style={styles.restoreButtonText}>Ja comprou? Restaurar compra</Text>
             </Pressable>
-            <Pressable onPress={() => setPaywallVisible(false)} style={[sharedStyles.button, sharedStyles.buttonSecondary]}>
-              <Text style={[sharedStyles.buttonText, sharedStyles.buttonTextSecondary]}>Agora nao</Text>
+            <Pressable accessibilityLabel="Continuar com a versao gratuita" accessibilityRole="button" onPress={() => setPaywallVisible(false)} style={styles.notNowButton}>
+              <Text style={styles.notNowButtonText}>Agora nao</Text>
             </Pressable>
           </View>
         </View>
@@ -562,6 +598,21 @@ const styles = StyleSheet.create({
   checkboxSelected: { backgroundColor: colors.primary, borderColor: colors.primary },
   deleteActionText: { color: colors.danger },
   heartButton: { alignItems: "center", justifyContent: "center", minHeight: 44, minWidth: 44 },
+  accountNote: { color: colors.muted, fontSize: 13, lineHeight: 18 },
+  notNowButton: { alignItems: "center", minHeight: 44, justifyContent: "center" },
+  notNowButtonText: { color: colors.muted, fontSize: 14, fontWeight: "700" },
+  paywallBenefit: { alignItems: "center", backgroundColor: colors.primarySoft, borderRadius: 12, flexDirection: "row", gap: 9, padding: 12 },
+  paywallBenefitText: { color: colors.ink, flex: 1, fontSize: 14, fontWeight: "800" },
+  paywallBody: { color: colors.muted, fontSize: 15, lineHeight: 22 },
+  paywallClose: { alignItems: "center", justifyContent: "center", minHeight: 44, minWidth: 44 },
+  paywallCta: { minHeight: 52 },
+  paywallFinePrint: { color: colors.muted, fontSize: 12, textAlign: "center" },
+  paywallHeader: { alignItems: "center", flexDirection: "row", justifyContent: "space-between" },
+  paywallIcon: { alignItems: "center", backgroundColor: colors.primarySoft, borderRadius: 14, height: 48, justifyContent: "center", width: 48 },
+  paywallSheet: { backgroundColor: colors.panel, borderTopLeftRadius: 22, borderTopRightRadius: 22, gap: 14, padding: 20, paddingBottom: 28 },
+  paywallTitle: { color: colors.ink, fontSize: 24, fontWeight: "800", letterSpacing: -0.3 },
+  restoreButton: { alignItems: "center", alignSelf: "center", flexDirection: "row", gap: 7, justifyContent: "center", minHeight: 44, paddingHorizontal: 10 },
+  restoreButtonText: { color: colors.primary, fontSize: 14, fontWeight: "800" },
   scoreRow: { minHeight: 106, padding: 14 },
   scoreRowContent: { alignItems: "center", flexDirection: "row", gap: 10 },
   scoreRowSelected: { backgroundColor: colors.primarySoft, borderColor: colors.primary },
@@ -583,7 +634,13 @@ const styles = StyleSheet.create({
   swipeActionLabel: { color: colors.primary, fontSize: 11, fontWeight: "800" },
   swipeActions: { alignItems: "stretch", borderRadius: 18, flexDirection: "row", height: "100%", justifyContent: "flex-end", overflow: "hidden", position: "absolute", right: 0, top: 0, width: 154 },
   swipeDeleteButton: { backgroundColor: "#fbecea" },
-  swipeShell: { overflow: "hidden" }
+  swipeShell: { overflow: "hidden" },
+  trialProgress: { backgroundColor: "#f6f2ee", borderRadius: 12, gap: 8, padding: 12 },
+  trialProgressFill: { backgroundColor: colors.primary, borderRadius: 4, height: "100%", width: "100%" },
+  trialProgressHeader: { flexDirection: "row", justifyContent: "space-between" },
+  trialProgressLabel: { color: colors.ink, fontSize: 13, fontWeight: "800" },
+  trialProgressTrack: { backgroundColor: colors.line, borderRadius: 4, height: 7, overflow: "hidden" },
+  trialProgressValue: { color: colors.muted, fontSize: 13, fontWeight: "700" }
 });
 
 function formatBytes(bytes: number) {

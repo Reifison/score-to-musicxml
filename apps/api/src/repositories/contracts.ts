@@ -57,6 +57,8 @@ export interface ScoreRepository {
   listOlderThan(date: Date): Promise<Score[]>;
   listExpiredTrash(now: Date): Promise<Score[]>;
   update(id: string, input: UpdateScoreInput): Promise<Score>;
+  /** Atomically claims a converted score for repair, or returns null if claimed by another worker. */
+  claimRepair(id: string): Promise<Score | null>;
   softDelete(id: string, input: { deletedAt: Date; purgeAt: Date }): Promise<Score>;
   restore(id: string): Promise<Score>;
   delete(id: string): Promise<void>;

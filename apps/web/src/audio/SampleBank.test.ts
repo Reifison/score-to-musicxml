@@ -12,7 +12,7 @@ const param = (): AudioParamLike => ({
 
 function createContext() {
   const destination: AudioNodeLike = { connect: (node) => node, disconnect: vi.fn() };
-  const gains: Array<{ gain: AudioParamLike }> = [];
+  const gains: Array<{ gain: AudioParamLike; connect: ReturnType<typeof vi.fn> }> = [];
   const source = {
     buffer: null,
     playbackRate: param(),
@@ -86,6 +86,23 @@ describe("SampleBank", () => {
     expect(gains[0].gain.setValueAtTime).toHaveBeenCalledWith(0.0001, 1);
     expect(source.playbackRate.setValueAtTime).toHaveBeenCalledWith(1, 1);
     expect(source.start).toHaveBeenCalledWith(1, 0, 0.015);
+  });
+
+  it("permite encaminhar uma voz para um barramento por chamada", async () => {
+    const { context, source, gains } = createContext();
+    const output: AudioNodeLike = { connect: (node) => node, disconnect: vi.fn() };
+    const fetcher = vi.fn(async () => ({ ok: true, status: 200, arrayBuffer: async () => new ArrayBuffer(4) } as Response));
+    const bank = new SampleBank(context, context.destination, {
+      fetcher,
+      manifests: { piano: { instrument: "piano", samples: [{ url: "/audio/piano-c4.wav", midi: 60 }] } }
+    });
+
+    await bank.preload("piano");
+    bank.schedule("piano", 60, 0.8, 1, 0.5, output);
+
+    expect(gains[0].gain).toBeDefined();
+    expect(gains[0].connect).toHaveBeenCalledWith(output);
+    expect(source.connect).toHaveBeenCalledWith(gains[0]);
   });
 
   it("recusa URLs remotas para impedir dependência de CDN", async () => {

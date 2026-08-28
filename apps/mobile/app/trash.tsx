@@ -16,10 +16,10 @@ type TrashScore = Score & {
 };
 
 export default function TrashScreen() {
-  const { token } = useAuth();
+  const { token, user } = useAuth();
   const queryClient = useQueryClient();
   const trashQuery = useQuery({
-    queryKey: ["trash-scores"],
+    queryKey: ["trash-scores", user?.id],
     queryFn: () => api.trashScores(token!),
     enabled: Boolean(token)
   });

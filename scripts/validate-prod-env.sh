@@ -39,41 +39,46 @@ if grep -Eq '\$\(|`|^[[:space:]]*(source|export)[[:space:]]' "$ENV_FILE"; then
   exit 1
 fi
 
-set -a
-# shellcheck disable=SC1090
-source "$ENV_FILE"
-set +a
+env_value() {
+  awk -v key="$1" 'index($0, key "=") == 1 { print substr($0, length(key) + 2); exit }' "$ENV_FILE"
+}
 
-required_vars=(API_DOMAIN WEB_DOMAIN VITE_API_URL WEB_ORIGIN POSTGRES_PASSWORD DATABASE_URL REDIS_URL SESSION_SECRET ADMIN_EMAIL ADMIN_PASSWORD)
+required_vars=(API_DOMAIN WEB_DOMAIN VITE_API_URL WEB_ORIGIN STORAGE_DIR POSTGRES_PASSWORD DATABASE_URL REDIS_URL SESSION_SECRET ADMIN_EMAIL ADMIN_PASSWORD)
 for name in "${required_vars[@]}"; do
-  if [[ -z "${!name:-}" ]]; then
+  value="$(env_value "$name")"
+  if [[ -z "$value" ]]; then
     echo "Variável obrigatória ausente: $name" >&2
     exit 1
   fi
 done
 
 for name in API_DOMAIN WEB_DOMAIN VITE_API_URL WEB_ORIGIN; do
-  value="${!name:-}"
+  value="$(env_value "$name")"
   if [[ "$value" == *"localhost"* || "$value" == *"seudominio"* || "$value" == *"example.com"* || "$value" == *"troque"* ]]; then
     echo "Valor de produção não substituído em $name." >&2
     exit 1
   fi
 done
 
-if [[ "${VITE_API_URL}" != https://* || "${WEB_ORIGIN}" != https://* ]]; then
+if [[ "$(env_value VITE_API_URL)" != https://* || "$(env_value WEB_ORIGIN)" != https://* ]]; then
   echo "VITE_API_URL e WEB_ORIGIN precisam usar HTTPS." >&2
   exit 1
 fi
 
+if [[ "$(env_value STORAGE_DIR)" != "/app/storage" ]]; then
+  echo "STORAGE_DIR precisa ser /app/storage para usar o volume persistente compartilhado." >&2
+  exit 1
+fi
+
 for name in POSTGRES_PASSWORD SESSION_SECRET ADMIN_PASSWORD; do
-  value="${!name}"
+  value="$(env_value "$name")"
   if (( ${#value} < 16 )) || [[ "$value" == *"ChangeMe"* || "$value" == *"troque"* || "$value" == *"replace-with"* ]]; then
     echo "Segredo fraco ou de exemplo em $name." >&2
     exit 1
   fi
 done
 
-if [[ "${EXPO_PUBLIC_ALLOW_HTTP_API:-0}" == "1" || "${EXPO_PUBLIC_ALLOW_HTTP_PLAYER:-0}" == "1" ]]; then
+if [[ "$(env_value EXPO_PUBLIC_ALLOW_HTTP_API)" == "1" || "$(env_value EXPO_PUBLIC_ALLOW_HTTP_PLAYER)" == "1" ]]; then
   echo "HTTP inseguro habilitado em produção." >&2
   exit 1
 fi

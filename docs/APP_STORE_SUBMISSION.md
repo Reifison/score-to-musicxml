@@ -10,7 +10,7 @@ Conversor de Partituras ajuda musicistas, professores e estudantes a transformar
 
 MusicXML e recomendado para revisar e editar a notacao. MIDI representa principalmente a execucao e pode perder detalhes de diagramacao ao ser importado. Quando a partitura nao informa andamento, a reproducao e a exportacao MIDI usam 70 BPM como valor padrao.
 
-A versao gratuita permite 3 scans totais por conta. Depois disso, o desbloqueio pago libera novos envios na mesma conta.
+A versao gratuita permite 2 conversoes totais por conta. Depois disso, a compra unica libera conversoes ilimitadas na mesma conta.
 
 O resultado de OMR pode exigir revisao. O app mostra status, confianca e alertas quando a conversao precisa ser conferida em um editor como MuseScore.
 
@@ -22,12 +22,13 @@ partitura, musicxml, MIDI, OMR, musica, MuseScore, PDF, scanner, player
 
 - Produto: `premium_unlock`
 - Tipo: In-App Purchase nao consumivel
-- Oferta: desbloqueio pago para novos envios apos os 3 scans gratuitos
-- Preco planejado: R$ 29,90 ou ponto de preco equivalente no App Store Connect
+- Oferta: desbloqueio permanente de conversoes ilimitadas apos as 2 conversoes gratuitas
+- Preco planejado: R$ 23,90 ou ponto de preco equivalente no App Store Connect
+- Restauracao: compras anteriores podem ser restauradas pelo usuario para recuperar o desbloqueio na conta
 
 ## Notas Para Revisao Da Apple
 
-O app cria conta e permite testar 3 scans gratuitos totais por conta. Apos o terceiro scan, o quarto envio abre o paywall com In-App Purchase nao consumivel `premium_unlock`.
+O app cria conta e permite testar 2 conversoes gratuitas totais por conta. Apos a segunda conversao, a proxima tentativa de envio abre o paywall com o In-App Purchase nao consumivel `premium_unlock`, uma compra unica de R$ 23,90 que libera conversoes ilimitadas.
 
 Para revisar:
 
@@ -35,7 +36,7 @@ Para revisar:
 2. Enviar uma foto, imagem ou PDF de partitura.
 3. Abrir a tela de detalhes para ver status, confianca e alertas, reproduzir a partitura e acompanhar o destaque das notas.
 4. Exportar MusicXML e MIDI e conferir a folha nativa de compartilhamento.
-5. Repetir ate atingir o limite de 3 scans gratuitos.
+5. Repetir ate atingir o limite de 2 conversoes gratuitas.
 6. Validar o paywall, compra sandbox e restauracao de compra.
 
 O app usa camera para escanear partituras, biblioteca de fotos para selecionar imagens e seletor de arquivos para PDFs. Os arquivos enviados sao usados para conversao, exportacao e reproducao e podem ser excluidos pelo usuario. O MIDI e gerado sob demanda e o MusicXML usado pelo player passa por cache temporario no aparelho.
