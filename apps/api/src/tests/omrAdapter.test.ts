@@ -131,7 +131,7 @@ describe("AudiverisOmrAdapter", () => {
     expect(result.warnings.join("\n")).toContain("MusicXML parcial");
   });
 
-  it("prefere a preparacao com mais compassos quando a pagina inteira sai parcial", async () => {
+  it("prefere a página inteira quando recortes por sistema produzem mais compassos", async () => {
     const adapter = new AudiverisOmrAdapter() as unknown as {
       convert(inputPath: string, originalFilename: string, outputDir: string): Promise<{
         musicXml: string;
@@ -185,10 +185,55 @@ describe("AudiverisOmrAdapter", () => {
     const outputDir = await fs.mkdtemp(path.join(os.tmpdir(), "omr-best-attempt-"));
     const result = await adapter.convert("/tmp/input.pdf", "input.pdf", outputDir);
 
-    expect([...result.musicXml.matchAll(/<measure\b/g)]).toHaveLength(5);
-    expect(result.musicXml).toContain("<step>B</step>");
-    expect(result.warnings.join("\n")).toContain("preparação alternativa");
-    expect(result.warnings.join("\n")).toContain("dividida em 2 recortes");
+    expect([...result.musicXml.matchAll(/<measure\b/g)]).toHaveLength(2);
+    expect(result.musicXml).toContain("<step>C</step>");
+    expect(result.musicXml).not.toContain("<step>B</step>");
+    expect(result.warnings.join("\n")).toContain("Recortes por sistema foram descartados");
+  });
+
+  it("marca recortes por sistema como inseguros quando nenhuma página completa é reconhecida", async () => {
+    const adapter = new AudiverisOmrAdapter() as unknown as {
+      convert(inputPath: string, originalFilename: string, outputDir: string): Promise<{
+        musicXml: string;
+        confidence: number;
+        warnings: string[];
+      }>;
+      resolveAudiverisBin(): Promise<string>;
+      preprocessInput(inputPath: string, outputDir: string): Promise<{ pages: Array<{ attempts: Array<{ paths: string[]; description: string; combineSegments?: boolean }> }>; warnings: string[] }>;
+      convertPage(pagePath: string, originalFilename: string, pageOutputDir: string): Promise<{ musicXml: string; confidence: number; warnings: string[] }>;
+    };
+
+    const segment1 = score(
+      ['<measure number="1"><note><pitch><step>E</step><octave>5</octave></pitch></note></measure>'],
+      []
+    );
+    const segment2 = score(
+      ['<measure number="1"><note><pitch><step>F</step><octave>5</octave></pitch></note></measure>'],
+      []
+    );
+
+    adapter.resolveAudiverisBin = async () => "/tmp/Audiveris";
+    adapter.preprocessInput = async () => ({
+      pages: [{
+        attempts: [
+          { paths: ["/tmp/full-page.png"], description: "pagina inteira" },
+          { paths: ["/tmp/system-1.png", "/tmp/system-2.png"], description: "2 recortes por sistema", combineSegments: true }
+        ]
+      }],
+      warnings: []
+    });
+    adapter.convertPage = async (pagePath) => {
+      if (pagePath.endsWith("full-page.png")) throw new AppError(422, "Error in reaching step PAGE", "AUDIVERIS_FAILED");
+      return pagePath.endsWith("system-1.png")
+        ? { musicXml: segment1, confidence: 0.75, warnings: [] }
+        : { musicXml: segment2, confidence: 0.75, warnings: [] };
+    };
+
+    const outputDir = await fs.mkdtemp(path.join(os.tmpdir(), "omr-segment-fallback-"));
+    const result = await adapter.convert("/tmp/input.pdf", "input.pdf", outputDir);
+
+    expect(result.confidence).toBe(0.55);
+    expect(result.warnings.join("\n")).toContain("exige revisão manual");
   });
 
   it("resume falta de idioma OCR sem expor o comando bruto do Audiveris", () => {

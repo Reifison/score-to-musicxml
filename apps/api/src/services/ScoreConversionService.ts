@@ -9,6 +9,8 @@ import { basenameWithoutExtension } from "../utils/filenames.js";
 import { FileStorageService } from "./FileStorageService.js";
 import type { OmrAdapter } from "./OmrAdapter.js";
 
+const minimumAutomaticConversionConfidence = 0.7;
+
 export class ScoreConversionService {
   constructor(
     private scores: ScoreRepository,
@@ -31,6 +33,17 @@ export class ScoreConversionService {
         this.omr.convert(inputPath, score.originalFilename, tempDir, { preprocessingProfile: score.preprocessingProfile }),
         env.OMR_CONVERSION_TIMEOUT_MS
       );
+      if (result.confidence < minimumAutomaticConversionConfidence) {
+        throw new AppError(
+          422,
+          [
+            "A leitura automática não atingiu a qualidade mínima para ser liberada como partitura digital.",
+            "O arquivo original foi preservado, mas o MusicXML não foi publicado para evitar notas ou compassos incorretos.",
+            "Tente uma fonte com MusicXML original ou uma digitalização mais nítida; esta partitura também pode precisar de revisão manual."
+          ].join("\n"),
+          "OMR_LOW_CONFIDENCE_OUTPUT"
+        );
+      }
       const exportStoredFilename = this.storage.generateExportStoredFilename(score.id);
       await this.storage.saveExport(exportStoredFilename, result.musicXml);
       const updated = await this.scores.update(scoreId, {

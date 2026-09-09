@@ -38,6 +38,12 @@ type PreparedAttempt = {
   combineSegments?: boolean;
 };
 
+type CompletedAttempt = {
+  attempt: PreparedAttempt;
+  index: number;
+  result: OmrResult;
+};
+
 type CropBand = {
   top: number;
   height: number;
@@ -117,7 +123,7 @@ export class AudiverisOmrAdapter implements OmrAdapter {
 
   private async convertPreparedPage(page: PreparedPage, originalFilename: string, pageOutputDir: string): Promise<OmrResult> {
     const failures: string[] = [];
-    const successes: OmrResult[] = [];
+    const successes: CompletedAttempt[] = [];
 
     for (const [index, attempt] of page.attempts.entries()) {
       const attemptOutputDir = path.join(pageOutputDir, `attempt-${String(index + 1).padStart(2, "0")}`);
@@ -126,23 +132,50 @@ export class AudiverisOmrAdapter implements OmrAdapter {
         const result = attempt.combineSegments
           ? await this.convertSegmentedPage(attempt, originalFilename, attemptOutputDir)
           : await this.convertPage(attempt.paths[0], originalFilename, attemptOutputDir);
-        successes.push(index === 0
-          ? result
-          : {
-              ...result,
-              confidence: Math.min(result.confidence, attempt.combineSegments ? 0.68 : 0.65),
-              warnings: [
-                `A leitura usou uma preparação alternativa da página: ${attempt.description}.`,
-                ...result.warnings
-              ]
-            });
+        successes.push({
+          attempt,
+          index,
+          result: index === 0
+            ? result
+            : {
+                ...result,
+                confidence: Math.min(result.confidence, attempt.combineSegments ? 0.55 : 0.65),
+                warnings: [
+                  `A leitura usou uma preparação alternativa da página: ${attempt.description}.`,
+                  ...result.warnings
+                ]
+              }
+        });
       } catch (error) {
         failures.push(this.summarizePageFailure(error));
       }
     }
 
+    const wholePageAttempts = successes.filter(({ attempt }) => !attempt.combineSegments);
+    if (wholePageAttempts.length) {
+      const selected = this.selectPreferredAttempt(wholePageAttempts);
+      const discardedSystemCrop = successes.some(({ attempt }) => attempt.combineSegments);
+      return discardedSystemCrop
+        ? {
+            ...selected.result,
+            warnings: [
+              ...selected.result.warnings,
+              "Recortes por sistema foram descartados: uma página completa reconhecida é mais segura do que montar resultados independentes, que podem duplicar ou sobrepor notas."
+            ]
+          }
+        : selected.result;
+    }
+
     if (successes.length) {
-      return successes.sort((a, b) => this.measureCount(b.musicXml) - this.measureCount(a.musicXml))[0];
+      const selected = this.selectPreferredAttempt(successes);
+      return {
+        ...selected.result,
+        confidence: Math.min(selected.result.confidence, 0.55),
+        warnings: [
+          ...selected.result.warnings,
+          "Não foi possível reconhecer uma página completa. O resultado por recortes exige revisão manual e não será liberado automaticamente."
+        ]
+      };
     }
 
     throw new AppError(
@@ -153,6 +186,18 @@ export class AudiverisOmrAdapter implements OmrAdapter {
       ].filter(Boolean).join("\n"),
       "AUDIVERIS_FAILED"
     );
+  }
+
+  private selectPreferredAttempt(attempts: CompletedAttempt[]): CompletedAttempt {
+    return [...attempts].sort((a, b) => {
+      const confidenceDifference = b.result.confidence - a.result.confidence;
+      if (confidenceDifference !== 0) return confidenceDifference;
+
+      const warningDifference = a.result.warnings.length - b.result.warnings.length;
+      if (warningDifference !== 0) return warningDifference;
+
+      return a.index - b.index;
+    })[0];
   }
 
   private async convertSegmentedPage(attempt: PreparedAttempt, originalFilename: string, attemptOutputDir: string): Promise<OmrResult> {
@@ -608,10 +653,6 @@ export class AudiverisOmrAdapter implements OmrAdapter {
       const attributesWithoutNumber = attributes.replace(/\snumber=(["'])[^"']*\1/, "");
       return `<measure number="${number}"${attributesWithoutNumber}>`;
     });
-  }
-
-  private measureCount(musicXml: string): number {
-    return (musicXml.match(/<measure\b/g) ?? []).length;
   }
 
   private cleanAudiverisText(musicXml: string, originalFilename: string): string {
