@@ -2,6 +2,8 @@
 
 Este pacote preserva o PDF original legível, a conversão recebida, a cópia revisada e uma referência de eventos conferida na imagem. A revisão assistida incluiu cotejo independente; **não há homologação editorial humana nem elegibilidade para treinamento**.
 
+Fonte pública: [IMSLP — Adelita, Francisco Tárrega](https://imslp.org/wiki/Adelita_(T%C3%A1rrega%2C_Francisco)), arquivo **#44649**, edição Antich y Tena, chapa A.y.T. 361, coleção Boije. O catálogo identifica esse fac-símile como **Public Domain**. Os MusicXML deste pacote e das fixtures Adelita derivam dessa mesma edição, sem dados de conta ou credenciais. Os registros operacionais privados permanecem fora do repositório.
+
 O relatório e os achados estruturados estão em [docs/validation/adelita-2026-10-10](../../docs/validation/adelita-2026-10-10/REPORT.md). O vídeo auxilia a navegação; o PDF determina notas e ritmos.
 
 | Arquivo | Função |
