@@ -1,72 +1,208 @@
-import { FileMusic, Home, KeyRound, LogOut, Shield, UserRound, Users } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
-import { api, bulkScoreAction, deleteScore as deleteScoreRequest, downloadMidi, downloadMusicXml, listTrashScores, restoreScore } from "../api/client.js";
+import { FileMusic, Heart, Home, KeyRound, LogOut, Shield, UserRound, Users } from "lucide-react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { ApiError, api, bulkScoreAction, deleteScore as deleteScoreRequest, downloadMidi, downloadMusicXml, listTrashScores, restoreScore } from "../api/client.js";
 import type { TrashScore } from "../api/client.js";
 import { HomeMenuGrid } from "../components/HomeMenuGrid.js";
 import { ScoreCard } from "../components/ScoreCard.js";
 import { ScoreDetails } from "../components/ScoreDetails.js";
 import { UploadPanel } from "../components/UploadPanel.js";
-import type { AuditLog, Score, ScoreStatus, User } from "../types/domain.js";
+import { canDownloadScoreMusicXml, canExportScoreMidi } from "../score/availability.js";
+import type { AuditLog, Score, ScoreStatus, ScoreType, User } from "../types/domain.js";
 
-type View = "home" | "scores" | "favorites" | "trash" | "settings" | "profile" | "admin-users" | "admin-scores" | "audits";
+type View = "home" | "scores" | "favorites" | "trash" | "settings" | "profile" | "admin" | "admin-users" | "admin-scores" | "audits";
+type SessionState = "checking" | "signed-out" | "authenticated" | "error";
 
 export function App() {
   const [user, setUser] = useState<User | null>(null);
   const [scores, setScores] = useState<Score[]>([]);
+  const [recentUpload, setRecentUpload] = useState<Score | null>(null);
   const [trashScores, setTrashScores] = useState<TrashScore[]>([]);
   const [users, setUsers] = useState<User[]>([]);
   const [audits, setAudits] = useState<AuditLog[]>([]);
-  const [selected, setSelected] = useState<Score | null>(null);
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [selectedDetail, setSelectedDetail] = useState<Score | null>(null);
+  const [detailError, setDetailError] = useState("");
+  const [detailPollingPaused, setDetailPollingPaused] = useState(false);
   const [view, setView] = useState<View>("home");
-  const [loading, setLoading] = useState(true);
+  const [sessionState, setSessionState] = useState<SessionState>("checking");
+  const [sessionNotice, setSessionNotice] = useState("");
+  const [sessionError, setSessionError] = useState("");
+  const [scoresLoading, setScoresLoading] = useState(false);
+  const [scoresError, setScoresError] = useState("");
+  const [pollingPaused, setPollingPaused] = useState(false);
+  const [adminError, setAdminError] = useState("");
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
+  const scoresRequestInFlight = useRef(false);
+  const selectedIdRef = useRef<string | null>(null);
+  const detailRequestSequence = useRef(new Map<string, number>());
 
   const isAdmin = normalizeRole(user?.role) === "admin";
+  const selected = useMemo(
+    () => {
+      if (!selectedId) return null;
+      const current = scores.find((score) => score.id === selectedId);
+      if (!current) return null;
+      return selectedDetail?.id === selectedId ? mergeScoreSnapshot(current, selectedDetail) : current;
+    },
+    [scores, selectedDetail, selectedId]
+  );
 
-  async function refreshScores() {
-    const response = await api<{ scores: Score[] }>("/api/scores");
-    setScores(response.scores);
-    if (selected) {
-      setSelected(response.scores.find((score) => score.id === selected.id) ?? null);
+  const refreshScores = useCallback(async ({ silent = false }: { silent?: boolean } = {}) => {
+    if (silent && document.visibilityState === "hidden") return;
+    if (scoresRequestInFlight.current) return;
+    scoresRequestInFlight.current = true;
+    if (!silent) {
+      setScoresLoading(true);
+      setPollingPaused(false);
     }
-  }
+    try {
+      const response = await api<{ scores: Score[] }>("/api/scores");
+      setScores((current) => mergeScoreList(current, response.scores));
+      setRecentUpload((current) => {
+        if (!current) return null;
+        const latest = response.scores.find((score) => score.id === current.id);
+        return latest ? mergeScoreSnapshot(current, latest) : current;
+      });
+      setScoresError("");
+      setPollingPaused(false);
+    } catch (err) {
+      if (!expireSessionOnUnauthorized(err)) {
+        setScoresError(errorMessage(err, "Não foi possível atualizar suas partituras."));
+        setPollingPaused(true);
+      }
+    } finally {
+      scoresRequestInFlight.current = false;
+      setScoresLoading(false);
+    }
+  }, []);
 
-  async function refreshAdmin() {
-    if (!isAdmin) return;
+  const refreshAdmin = useCallback(async () => {
+    if (normalizeRole(user?.role) !== "admin") return;
+    setAdminError("");
     const [userResponse, auditResponse] = await Promise.all([
       api<{ users: User[] }>("/api/users"),
       api<{ audits: AuditLog[] }>("/api/admin/audits")
     ]);
     setUsers(userResponse.users);
     setAudits(auditResponse.audits);
-  }
+  }, [user?.role]);
+
+  const loadScoreDetail = useCallback(async (scoreId: string) => {
+    const requestSequence = (detailRequestSequence.current.get(scoreId) ?? 0) + 1;
+    detailRequestSequence.current.set(scoreId, requestSequence);
+    try {
+      const response = await api<{ score: Score }>(`/api/scores/${scoreId}`);
+      if (detailRequestSequence.current.get(scoreId) !== requestSequence) return response.score;
+      setScores((current) => current.map((score) => score.id === scoreId ? mergeScoreSnapshot(score, response.score) : score));
+      setRecentUpload((current) => current?.id === scoreId ? mergeScoreSnapshot(current, response.score) : current);
+      if (selectedIdRef.current === scoreId) {
+        setSelectedDetail((current) => current?.id === scoreId ? mergeScoreSnapshot(current, response.score) : response.score);
+        setDetailError("");
+      }
+      return response.score;
+    } catch (err) {
+      if (detailRequestSequence.current.get(scoreId) !== requestSequence) return null;
+      if (!expireSessionOnUnauthorized(err) && selectedIdRef.current === scoreId) {
+        setDetailError(errorMessage(err, "Não foi possível atualizar os detalhes da partitura."));
+        setDetailPollingPaused(true);
+      }
+      return null;
+    }
+  }, []);
+
+  const refreshScoreDetail = useCallback(async (scoreId: string) => {
+    setDetailPollingPaused(false);
+    return loadScoreDetail(scoreId);
+  }, [loadScoreDetail]);
 
   async function refreshTrash() {
     setTrashScores(await listTrashScores());
   }
 
   useEffect(() => {
-    api<{ user: User }>("/api/auth/me")
-      .then((response) => setUser(response.user))
-      .catch(() => setUser(null))
-      .finally(() => setLoading(false));
+    void checkSession();
+  }, []);
+
+  useEffect(() => {
+    const expireSession = () => {
+      setSessionNotice("Sua sessão expirou. Entre novamente para continuar.");
+      setSessionState("signed-out");
+      setUser(null);
+      setSelectedId(null);
+      selectedIdRef.current = null;
+      setSelectedDetail(null);
+    };
+    window.addEventListener("score-to-musicxml:session-expired", expireSession);
+    return () => window.removeEventListener("score-to-musicxml:session-expired", expireSession);
   }, []);
 
   useEffect(() => {
     if (!user) return;
     void refreshScores();
-    void refreshAdmin();
-    const timer = window.setInterval(refreshScores, 5000);
-    return () => window.clearInterval(timer);
-  }, [user?.id]);
+    void refreshAdmin().catch((err) => {
+      if (!expireSessionOnUnauthorized(err)) setAdminError(errorMessage(err, "Não foi possível carregar os dados administrativos."));
+    });
+  }, [user?.id, refreshScores, refreshAdmin]);
+
+  const hasActiveScoreConversion = scores.some((score) => ["uploaded", "queued", "processing"].includes(score.conversionStatus));
+  const hasActiveSelectedAttempt = selectedDetail?.attempts?.some((attempt) => attempt.status === "queued" || attempt.status === "processing") ?? false;
+  const hasPendingAutomatedDelivery = scores.some((score) => score.reviewStatus === "needs_review") || selectedDetail?.reviewStatus === "needs_review";
+  const hasActiveConversions = hasActiveScoreConversion || hasActiveSelectedAttempt || hasPendingAutomatedDelivery;
+  useEffect(() => {
+    if (!user || !hasActiveConversions || pollingPaused) return;
+    const poll = () => {
+      if (document.visibilityState !== "visible") return;
+      if (hasActiveScoreConversion || hasPendingAutomatedDelivery) void refreshScores({ silent: true });
+      if ((hasActiveSelectedAttempt || selectedDetail?.reviewStatus === "needs_review") && selectedId && !detailPollingPaused) void loadScoreDetail(selectedId);
+    };
+    const timer = window.setInterval(poll, 5000);
+    document.addEventListener("visibilitychange", poll);
+    return () => {
+      window.clearInterval(timer);
+      document.removeEventListener("visibilitychange", poll);
+    };
+  }, [user?.id, hasActiveConversions, hasActiveScoreConversion, hasActiveSelectedAttempt, hasPendingAutomatedDelivery, selectedDetail?.reviewStatus, selectedId, pollingPaused, detailPollingPaused, refreshScores, loadScoreDetail]);
 
   useEffect(() => {
     if (!user || view !== "trash") return;
-    void refreshTrash().catch((err) => setError(err instanceof Error ? err.message : "Não foi possível carregar a lixeira."));
+    void refreshTrash().catch((err) => {
+      if (!expireSessionOnUnauthorized(err)) setError(errorMessage(err, "Não foi possível carregar a lixeira."));
+    });
   }, [user?.id, view]);
 
-  if (loading) {
+  async function checkSession() {
+    setSessionState("checking");
+    setSessionError("");
+    try {
+      const response = await api<{ user: User }>("/api/auth/me");
+      setUser(response.user);
+      setSessionNotice("");
+      setSessionState("authenticated");
+    } catch (err) {
+      setUser(null);
+      if (err instanceof ApiError && err.status === 401) {
+        setSessionNotice("");
+        setSessionState("signed-out");
+      } else {
+        setSessionError(errorMessage(err, "Não foi possível verificar sua sessão."));
+        setSessionState("error");
+      }
+    }
+  }
+
+  function expireSessionOnUnauthorized(err: unknown) {
+    if (!(err instanceof ApiError) || err.status !== 401) return false;
+    setSessionNotice("Sua sessão expirou. Entre novamente para continuar.");
+    setSessionState("signed-out");
+    setUser(null);
+    setSelectedId(null);
+    selectedIdRef.current = null;
+    setSelectedDetail(null);
+    return true;
+  }
+
+  if (sessionState === "checking") {
     return (
       <main className="launch-screen" aria-live="polite">
         <img src="/brand-icon.png" alt="" />
@@ -75,19 +211,73 @@ export function App() {
       </main>
     );
   }
-  if (!user) return <Login onLogged={(loggedUser) => setUser(loggedUser)} />;
+  if (sessionState === "error") {
+    return (
+      <main className="login-screen">
+        <section className="login-card session-error" role="alert">
+          <div className="login-brand">
+            <img src="/brand-icon.png" alt="" />
+            <div>
+              <h1>Não foi possível conectar</h1>
+              <p>{sessionError}</p>
+            </div>
+          </div>
+          <button type="button" onClick={() => void checkSession()}>Tentar novamente</button>
+        </section>
+      </main>
+    );
+  }
+  if (!user) return <Login onLogged={(loggedUser) => { setUser(loggedUser); setSessionNotice(""); setSessionState("authenticated"); }} notice={sessionNotice} />;
 
   async function logout() {
-    await api("/api/auth/logout", { method: "POST" });
-    setUser(null);
+    setError("");
+    try {
+      await api("/api/auth/logout", { method: "POST" });
+      setUser(null);
+      selectedIdRef.current = null;
+      setSelectedId(null);
+      setSelectedDetail(null);
+      setSessionState("signed-out");
+    } catch (err) {
+      if (!expireSessionOnUnauthorized(err)) setError(errorMessage(err, "Não foi possível sair agora."));
+    }
   }
 
-  async function upload(file: File) {
+  async function upload(file: File, scoreType: ScoreType) {
     setNotice("");
+    setError("");
     const formData = new FormData();
     formData.append("file", file);
-    await api<{ score: Score }>("/api/scores", { method: "POST", body: formData });
-    await refreshScores();
+    formData.append("scoreType", scoreType);
+    const response = await api<{ score: Score }>("/api/scores", { method: "POST", body: formData });
+    setRecentUpload(response.score);
+    setScores((current) => [response.score, ...current.filter((score) => score.id !== response.score.id)]);
+    void refreshScores({ silent: true });
+    return response.score;
+  }
+
+  function openScore(score: Score) {
+    selectedIdRef.current = score.id;
+    setSelectedId(score.id);
+    setSelectedDetail(null);
+    setDetailError("");
+    setDetailPollingPaused(false);
+    void loadScoreDetail(score.id);
+  }
+
+  async function retryScore(scoreId: string, scoreType?: ScoreType) {
+    setDetailPollingPaused(false);
+    const response = await api<{ score: Score }>(`/api/scores/${scoreId}/retry`, {
+      method: "POST",
+      ...(scoreType ? { body: JSON.stringify({ scoreType }) } : {})
+    });
+    setScores((current) => current.map((score) => score.id === scoreId ? mergeScoreSnapshot(score, response.score) : score));
+    setRecentUpload((current) => current?.id === scoreId ? mergeScoreSnapshot(current, response.score) : current);
+    if (selectedIdRef.current === scoreId) {
+      setSelectedDetail((current) => current?.id === scoreId ? mergeScoreSnapshot(current, response.score) : response.score);
+      setDetailError("");
+    }
+    return response.score;
   }
 
   async function deleteScore(score: Score) {
@@ -95,6 +285,7 @@ export function App() {
     setError("");
     try {
       await deleteScoreRequest(score.id);
+      setRecentUpload((current) => current?.id === score.id ? null : current);
       setNotice("Partitura movida para a lixeira por 7 dias.");
       await refreshScores();
     } catch (err) {
@@ -122,7 +313,6 @@ export function App() {
         body: JSON.stringify({ isFavorite: !score.isFavorite })
       });
       setScores((current) => current.map((item) => (item.id === score.id ? response.score : item)));
-      if (selected?.id === score.id) setSelected(response.score);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Não foi possível atualizar os favoritos.");
     }
@@ -160,13 +350,16 @@ export function App() {
       body: JSON.stringify({ originalFilename })
     });
     setScores((current) => current.map((item) => (item.id === score.id ? response.score : item)));
-    if (selected?.id === score.id) setSelected(response.score);
     setNotice("Nome da partitura atualizado.");
   }
 
   async function downloadScore(score: Score) {
     setError("");
     setNotice("");
+    if (!canDownloadScoreMusicXml(score)) {
+      setError("O MusicXML ainda não está disponível para download.");
+      return;
+    }
     try {
       await downloadMusicXml(score.id, musicXmlName(score.originalFilename));
       setNotice(`Download iniciado: ${musicXmlName(score.originalFilename)}`);
@@ -178,6 +371,14 @@ export function App() {
   async function downloadScoreMidi(score: Score) {
     setError("");
     setNotice("");
+    if (score.resultStatus === "partial") {
+      setError("O MIDI fica indisponível quando faltam páginas na conversão.");
+      return;
+    }
+    if (!canExportScoreMidi(score)) {
+      setError("O MIDI ainda não está disponível para este resultado.");
+      return;
+    }
     try {
       await downloadMidi(score.id, midiName(score.originalFilename));
       setNotice(`Download iniciado: ${midiName(score.originalFilename)}`);
@@ -193,15 +394,21 @@ export function App() {
           <img src="/brand-icon.png" alt="" />
           <strong>Conversor de<br />Partituras</strong>
         </div>
-        <button className={view === "home" ? "active" : ""} onClick={() => setView("home")}><Home size={18} /> Início</button>
-        <button className={view === "scores" ? "active" : ""} onClick={() => setView("scores")}><FileMusic size={18} /> Partituras</button>
-        <button className={view === "profile" ? "active" : ""} onClick={() => setView("profile")}><UserRound size={18} /> Perfil</button>
-        {isAdmin && <button className={view === "admin-users" ? "active" : ""} onClick={() => setView("admin-users")}><Users size={18} /> Usuários</button>}
-        {isAdmin && <button className={view === "audits" ? "active" : ""} onClick={() => setView("audits")}><Shield size={18} /> Logs</button>}
-        <button onClick={logout}><LogOut size={18} /> Sair</button>
+        <button className={`nav-home${view === "home" ? " active" : ""}`} aria-current={view === "home" ? "page" : undefined} onClick={() => setView("home")}><Home size={18} /> Início</button>
+        <button className={`nav-scores${view === "scores" ? " active" : ""}`} aria-current={view === "scores" ? "page" : undefined} onClick={() => setView("scores")}><FileMusic size={18} /> Partituras</button>
+        <button className={`nav-favorites${view === "favorites" ? " active" : ""}`} aria-current={view === "favorites" ? "page" : undefined} onClick={() => setView("favorites")}><Heart size={18} /> Favoritas</button>
+        <button className={`nav-profile${view === "profile" ? " active" : ""}`} aria-current={view === "profile" ? "page" : undefined} onClick={() => setView("profile")}><UserRound size={18} /> Perfil</button>
+        {isAdmin && <button className={`desktop-admin-nav${view === "admin-users" ? " active" : ""}`} aria-current={view === "admin-users" ? "page" : undefined} onClick={() => setView("admin-users")}><Users size={18} /> Usuários</button>}
+        {isAdmin && <button className={`desktop-admin-nav${view === "audits" ? " active" : ""}`} aria-current={view === "audits" ? "page" : undefined} onClick={() => setView("audits")}><Shield size={18} /> Logs</button>}
+        {isAdmin && <button className={`mobile-admin-nav${view === "admin" ? " active" : ""}`} aria-current={view === "admin" ? "page" : undefined} onClick={() => setView("admin")}><Shield size={18} /> Admin</button>}
+        <button className="desktop-logout" onClick={logout}><LogOut size={18} /> Sair</button>
       </aside>
 
       <section className="content">
+        <div className="mobile-account-action">
+          <span>{user.name}</span>
+          <button className="secondary-button" type="button" onClick={() => void logout()}><LogOut aria-hidden="true" size={16} /> Sair</button>
+        </div>
         {view !== "home" && (
           <header className="topbar">
             <div>
@@ -213,28 +420,31 @@ export function App() {
 
         {view === "home" && (
           <>
-            <UploadPanel onUpload={upload} />
+            <UploadPanel onUpload={upload} recentUpload={recentUpload} onOpenScore={openScore} />
             <HomeMenuGrid onNavigate={setView} />
           </>
         )}
 
-        {view === "scores" && <ScoreList scores={scores} onOpen={setSelected} onDelete={deleteScore} onBulkDelete={bulkDeleteScores} onBulkFavorite={bulkFavoriteScores} onDownload={downloadScore} onToggleFavorite={toggleFavorite} />}
-        {view === "favorites" && <Favorites scores={scores} onOpen={setSelected} onDelete={deleteScore} onDownload={downloadScore} onToggleFavorite={toggleFavorite} />}
+        {scoresError && view !== "scores" && view !== "favorites" && <div className="refresh-error" role="alert"><span>{scoresError}</span><button className="secondary-button" type="button" disabled={scoresLoading} onClick={() => void refreshScores()}>{scoresLoading ? "Atualizando..." : "Atualizar partituras"}</button></div>}
+        {adminError && <div className="refresh-error" role="alert"><span>{adminError}</span><button className="secondary-button" type="button" onClick={() => void refreshAdmin().catch((err) => { if (!expireSessionOnUnauthorized(err)) setAdminError(errorMessage(err, "Não foi possível carregar os dados administrativos.")); })}>Tentar novamente</button></div>}
+        {view === "scores" && <ScoreList scores={scores} loading={scoresLoading} error={scoresError} onRefresh={() => refreshScores()} onOpen={openScore} onDelete={deleteScore} onBulkDelete={bulkDeleteScores} onBulkFavorite={bulkFavoriteScores} onDownload={downloadScore} onToggleFavorite={toggleFavorite} />}
+        {view === "favorites" && <Favorites scores={scores} loading={scoresLoading} error={scoresError} onRefresh={() => refreshScores()} onOpen={openScore} onDelete={deleteScore} onDownload={downloadScore} onToggleFavorite={toggleFavorite} />}
         {view === "trash" && <TrashList scores={trashScores} onRestore={restoreTrashScore} />}
-        {view === "settings" && <SettingsPanel />}
+        {view === "settings" && <SettingsPanel onProfile={() => setView("profile")} />}
         {view === "profile" && <Profile user={user} onUpdated={setUser} />}
-        {view === "admin-users" && <AdminUsers currentUser={user} users={users} onRefresh={refreshAdmin} />}
-        {view === "admin-scores" && <ScoreList scores={scores} onOpen={setSelected} onDelete={deleteScore} onBulkDelete={bulkDeleteScores} onBulkFavorite={bulkFavoriteScores} onDownload={downloadScore} onToggleFavorite={toggleFavorite} />}
+        {view === "admin" && isAdmin && <AdminHub onNavigate={setView} />}
+        {view === "admin-users" && isAdmin && <AdminUsers currentUser={user} users={users} onRefresh={refreshAdmin} />}
+        {view === "admin-scores" && <ScoreList scores={scores} loading={scoresLoading} error={scoresError} onRefresh={() => refreshScores()} onOpen={openScore} onDelete={deleteScore} onBulkDelete={bulkDeleteScores} onBulkFavorite={bulkFavoriteScores} onDownload={downloadScore} onToggleFavorite={toggleFavorite} />}
         {view === "audits" && <AuditPanel audits={audits} scores={scores} users={users} />}
-        {notice && <p className="success-text">{notice}</p>}
-        {error && <p className="error-text">{error}</p>}
+        {notice && <p className="success-text" role="status" aria-live="polite">{notice}</p>}
+        {error && <p className="error-text" role="alert">{error}</p>}
       </section>
-      {selected && <ScoreDetails score={selected} onClose={() => setSelected(null)} onDownload={downloadScore} onDownloadMidi={downloadScoreMidi} onRename={renameScore} />}
+      {selected && <ScoreDetails key={selected.id} score={selected} detailError={detailError} onClose={() => { selectedIdRef.current = null; setSelectedId(null); setSelectedDetail(null); setDetailError(""); }} onDownload={downloadScore} onDownloadMidi={downloadScoreMidi} onRename={renameScore} onRetry={retryScore} onRefreshDetail={refreshScoreDetail} />}
     </main>
   );
 }
 
-function Login({ onLogged }: { onLogged: (user: User) => void }) {
+function Login({ onLogged, notice }: { onLogged: (user: User) => void; notice?: string }) {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
@@ -264,6 +474,7 @@ function Login({ onLogged }: { onLogged: (user: User) => void }) {
             <p>Entre para converter e acompanhar suas partituras.</p>
           </div>
         </div>
+        {notice && <p className="session-notice" role="status">{notice}</p>}
         <label>E-mail<input value={email} onChange={(event) => setEmail(event.target.value)} type="email" required /></label>
         <label>Senha<input value={password} onChange={(event) => setPassword(event.target.value)} type="password" required /></label>
         {error && <p className="error-text">{error}</p>}
@@ -273,8 +484,11 @@ function Login({ onLogged }: { onLogged: (user: User) => void }) {
   );
 }
 
-function ScoreList({ scores, onOpen, onDelete, onBulkDelete, onBulkFavorite, onDownload, onToggleFavorite }: {
+function ScoreList({ scores, loading, error, onRefresh, onOpen, onDelete, onBulkDelete, onBulkFavorite, onDownload, onToggleFavorite }: {
   scores: Score[];
+  loading: boolean;
+  error: string;
+  onRefresh: () => Promise<void>;
   onOpen: (score: Score) => void;
   onDelete: (score: Score) => void;
   onBulkDelete: (scores: Score[]) => Promise<void>;
@@ -320,6 +534,12 @@ function ScoreList({ scores, onOpen, onDelete, onBulkDelete, onBulkFavorite, onD
 
   return (
     <section className="scores-section" aria-label="Minhas partituras">
+      {error && scores.length > 0 && (
+        <div className="refresh-error" role="alert">
+          <span>Não foi possível atualizar a lista. {error}</span>
+          <button className="secondary-button" type="button" disabled={loading} onClick={() => void onRefresh()}>{loading ? "Atualizando..." : "Tentar novamente"}</button>
+        </div>
+      )}
       <div className="score-list-toolbar">
         <div>
           <strong>{scores.length} {scores.length === 1 ? "partitura" : "partituras"}</strong>
@@ -342,7 +562,14 @@ function ScoreList({ scores, onOpen, onDelete, onBulkDelete, onBulkFavorite, onD
           <button className="danger-button" type="button" disabled={!selectedScores.length} onClick={bulkDelete}>Excluir</button>
         </div>
       )}
-      {!scores.length ? (
+      {!scores.length && error ? (
+        <div className="empty-state refresh-empty" role="alert">
+          <p>Suas partituras não foram carregadas. Confira a conexão e tente novamente.</p>
+          <button className="secondary-button" type="button" disabled={loading} onClick={() => void onRefresh()}>{loading ? "Atualizando..." : "Tentar novamente"}</button>
+        </div>
+      ) : !scores.length && loading ? (
+        <section className="empty-state" role="status" aria-live="polite">Carregando partituras...</section>
+      ) : !scores.length ? (
         <section className="empty-state">Nenhuma partitura enviada ainda.</section>
       ) : (
         <section className="score-grid">
@@ -406,8 +633,15 @@ function TrashRow({ score, onRestore }: { score: TrashScore; onRestore: (score: 
   );
 }
 
-function Favorites({ scores, onOpen, onDelete, onDownload, onToggleFavorite }: { scores: Score[]; onOpen: (score: Score) => void; onDelete: (score: Score) => void; onDownload: (score: Score) => void; onToggleFavorite: (score: Score) => void }) {
+function Favorites({ scores, loading, error, onRefresh, onOpen, onDelete, onDownload, onToggleFavorite }: { scores: Score[]; loading: boolean; error: string; onRefresh: () => Promise<void>; onOpen: (score: Score) => void; onDelete: (score: Score) => void; onDownload: (score: Score) => void; onToggleFavorite: (score: Score) => void }) {
   const favorites = scores.filter((score) => score.isFavorite);
+  if (!scores.length && error) {
+    return <div className="empty-state refresh-empty" role="alert"><p>Não foi possível carregar as partituras favoritas.</p><button className="secondary-button" type="button" disabled={loading} onClick={() => void onRefresh()}>{loading ? "Atualizando..." : "Tentar novamente"}</button></div>;
+  }
+  if (!scores.length && loading) return <section className="empty-state" role="status" aria-live="polite">Carregando partituras...</section>;
+  if (error) {
+    return <section className="scores-section" aria-label="Partituras favoritas"><div className="refresh-error" role="alert"><span>Não foi possível atualizar a lista. {error}</span><button className="secondary-button" type="button" disabled={loading} onClick={() => void onRefresh()}>{loading ? "Atualizando..." : "Tentar novamente"}</button></div>{favorites.length ? <section className="score-grid">{favorites.map((score) => <ScoreCard key={score.id} score={score} onOpen={onOpen} onDelete={onDelete} onDownload={onDownload} onToggleFavorite={onToggleFavorite} />)}</section> : <section className="empty-state">Nenhuma partitura favorita ainda.</section>}</section>;
+  }
   if (!favorites.length) {
     return (
       <section className="empty-state">
@@ -418,25 +652,28 @@ function Favorites({ scores, onOpen, onDelete, onDownload, onToggleFavorite }: {
   return <section className="score-grid">{favorites.map((score) => <ScoreCard key={score.id} score={score} onOpen={onOpen} onDelete={onDelete} onDownload={onDownload} onToggleFavorite={onToggleFavorite} />)}</section>;
 }
 
-function SettingsPanel() {
+function SettingsPanel({ onProfile }: { onProfile: () => void }) {
   return (
     <section className="form-panel settings-panel">
-      <h2>Configurações</h2>
-      <p className="field-hint">Preferências do app e notificações estarão disponíveis em breve.</p>
-      <div className="settings-list">
+      <h2>Configurações e ajuda</h2>
+      <dl className="settings-list">
         <div className="settings-row">
-          <strong>Conversão automática</strong>
-          <span>Ativa após cada envio</span>
+          <dt>Conversão</dt>
+          <dd>Começa automaticamente depois que o arquivo é enviado.</dd>
         </div>
         <div className="settings-row">
-          <strong>Formatos aceitos</strong>
-          <span>PNG, JPG, JPEG, WEBP e PDF até 10 MB</span>
+          <dt>Arquivos aceitos</dt>
+          <dd>PNG, JPG, JPEG, WEBP e PDF, até 10 MB por arquivo.</dd>
         </div>
-        <div className="settings-row">
-          <strong>Suporte</strong>
-          <span>Use boa iluminação e bordas completas ao escanear partituras.</span>
+      </dl>
+      <div className="settings-support">
+        <div>
+          <strong>Precisa de ajuda?</strong>
+          <p>Envie uma dúvida ou relate um problema. Inclua o nome do arquivo e o que aconteceu.</p>
+          <a className="secondary-button" href="mailto:reifison@hotmail.com?subject=Ajuda%20com%20o%20Conversor%20de%20Partituras">Enviar e-mail para reifison@hotmail.com</a>
         </div>
       </div>
+      <button className="secondary-button settings-profile-link" type="button" onClick={onProfile}>Gerenciar dados da conta e senha</button>
     </section>
   );
 }
@@ -570,27 +807,31 @@ function AdminUsers({ currentUser, users, onRefresh }: { currentUser: User; user
 
   return (
     <section className="admin-layout">
-      <form className="form-panel" onSubmit={createUser}>
+      <form className="form-panel admin-user-create" onSubmit={createUser}>
         <h2>Novo usuário</h2>
-        <input placeholder="Nome" value={form.name} onChange={(event) => setForm({ ...form, name: event.target.value })} required />
-        <input placeholder="E-mail" type="email" value={form.email} onChange={(event) => setForm({ ...form, email: event.target.value })} required />
+        <label htmlFor="new-user-name">Nome</label>
+        <input id="new-user-name" value={form.name} onChange={(event) => setForm({ ...form, name: event.target.value })} aria-describedby={error ? "create-user-error" : undefined} required />
+        <label htmlFor="new-user-email">E-mail</label>
+        <input id="new-user-email" type="email" value={form.email} onChange={(event) => setForm({ ...form, email: event.target.value })} aria-describedby={error ? "create-user-error" : undefined} required />
+        <label htmlFor="new-user-password">Senha inicial</label>
         <input
-          placeholder="Senha inicial"
+          id="new-user-password"
           type="password"
           value={form.password}
           onChange={(event) => setForm({ ...form, password: event.target.value })}
           minLength={8}
-          aria-describedby="initial-password-help"
+          aria-describedby={error ? "initial-password-help create-user-error" : "initial-password-help"}
           required
         />
         <p id="initial-password-help" className="field-hint">Mínimo de 8 caracteres.</p>
-        <select value={form.role} onChange={(event) => setForm({ ...form, role: event.target.value })}>
+        <label htmlFor="new-user-role">Perfil</label>
+        <select id="new-user-role" value={form.role} onChange={(event) => setForm({ ...form, role: event.target.value })} aria-describedby={error ? "create-user-error" : undefined}>
           <option value="user">Usuário</option>
           <option value="admin">Admin</option>
         </select>
         <button>Criar</button>
         {message && <p className="success-text">{message}</p>}
-        {error && <p className="error-text">{error}</p>}
+        {error && <p id="create-user-error" className="error-text" role="alert">{error}</p>}
       </form>
       <div className="table-wrap">
         <table>
@@ -603,6 +844,7 @@ function AdminUsers({ currentUser, users, onRefresh }: { currentUser: User; user
                 <td data-label="Perfil">
                   <select
                     value={item.role}
+                    aria-label={`Perfil de ${item.name}`}
                     disabled={item.id === currentUser.id || busyId === item.id}
                     onChange={(event) => updateUser(item.id, { role: event.target.value as User["role"] })}
                   >
@@ -613,6 +855,7 @@ function AdminUsers({ currentUser, users, onRefresh }: { currentUser: User; user
                 <td data-label="Status">
                   <button
                     type="button"
+                    aria-label={item.isActive ? `Desativar ${item.name}` : `Ativar ${item.name}`}
                     disabled={item.id === currentUser.id || busyId === item.id}
                     onClick={() => updateUser(item.id, { isActive: !item.isActive })}
                   >
@@ -622,6 +865,7 @@ function AdminUsers({ currentUser, users, onRefresh }: { currentUser: User; user
                 <td data-label="Ações">
                   <button
                     type="button"
+                    aria-label={`Resetar senha de ${item.name}`}
                     disabled={busyId === item.id}
                     onClick={() => resetPassword(item)}
                   >
@@ -631,6 +875,7 @@ function AdminUsers({ currentUser, users, onRefresh }: { currentUser: User; user
                   <button
                     className="danger-button"
                     type="button"
+                    aria-label={`Excluir ${item.name}`}
                     disabled={item.id === currentUser.id || busyId === item.id}
                     onClick={() => deleteUser(item)}
                   >
@@ -648,6 +893,19 @@ function AdminUsers({ currentUser, users, onRefresh }: { currentUser: User; user
 
 type AuditTab = "events" | "score-counts";
 type ScoreQuantityFilter = "all" | "with-scores" | "without-scores" | "converted" | "failed";
+
+function AdminHub({ onNavigate }: { onNavigate: (view: View) => void }) {
+  return (
+    <section className="admin-hub" aria-labelledby="admin-hub-title">
+      <h2 id="admin-hub-title">Área administrativa</h2>
+      <p>Escolha uma área para continuar.</p>
+      <div className="admin-hub-actions">
+        <button className="secondary-button" type="button" onClick={() => onNavigate("admin-users")}><Users aria-hidden="true" size={18} /> Usuários</button>
+        <button className="secondary-button" type="button" onClick={() => onNavigate("audits")}><Shield aria-hidden="true" size={18} /> Auditoria</button>
+      </div>
+    </section>
+  );
+}
 
 function AuditPanel({ audits, scores, users }: { audits: AuditLog[]; scores: Score[]; users: User[] }) {
   const [tab, setTab] = useState<AuditTab>("events");
@@ -796,6 +1054,7 @@ function viewTitle(view: View) {
     trash: "Lixeira",
     settings: "Configurações",
     profile: "Perfil",
+    admin: "Administração",
     "admin-users": "Usuários",
     "admin-scores": "Partituras",
     audits: "Auditoria"
@@ -804,4 +1063,80 @@ function viewTitle(view: View) {
 
 function normalizeRole(role: User["role"] | string | undefined) {
   return String(role ?? "").toLowerCase();
+}
+
+function errorMessage(error: unknown, fallback: string) {
+  return error instanceof Error ? error.message : fallback;
+}
+
+function mergeScoreSnapshot(current: Score, incoming: Score): Score {
+  if (current.id !== incoming.id) return incoming;
+  const incomingIsNewer = compareScoreSnapshots(incoming, current) > 0;
+  const newest = incomingIsNewer ? incoming : current;
+  const older = incomingIsNewer ? current : incoming;
+  return {
+    ...older,
+    ...newest,
+    attempts: newest.attempts ?? older.attempts
+  };
+}
+
+function mergeScoreList(current: Score[], incoming: Score[]): Score[] {
+  const currentById = new Map(current.map((score) => [score.id, score]));
+  return incoming.map((score) => {
+    const existing = currentById.get(score.id);
+    return existing ? mergeScoreSnapshot(existing, score) : score;
+  });
+}
+
+function compareScoreSnapshots(left: Score, right: Score): number {
+  const updatedAtOrder = compareDates(left.updatedAt, right.updatedAt);
+  if (updatedAtOrder !== 0) return updatedAtOrder;
+
+  const resultOrder = resultStatusRank(left.resultStatus) - resultStatusRank(right.resultStatus);
+  if (resultOrder !== 0) return resultOrder;
+
+  const reviewOrder = reviewStatusRank(left.reviewStatus) - reviewStatusRank(right.reviewStatus);
+  if (reviewOrder !== 0) return reviewOrder;
+
+  const leftAttempt = latestAttempt(left);
+  const rightAttempt = latestAttempt(right);
+  if (!leftAttempt || !rightAttempt) return leftAttempt ? 1 : rightAttempt ? -1 : 0;
+
+  const attemptDateOrder = compareDates(leftAttempt.createdAt, rightAttempt.createdAt);
+  if (attemptDateOrder !== 0) return attemptDateOrder;
+  return attemptStatusRank(leftAttempt.status) - attemptStatusRank(rightAttempt.status);
+}
+
+function reviewStatusRank(status: Score["reviewStatus"]): number {
+  if (status === "approved") return 2;
+  if (status === "needs_review") return 1;
+  return 0;
+}
+
+function compareDates(left: string, right: string): number {
+  const leftTime = Date.parse(left);
+  const rightTime = Date.parse(right);
+  if (!Number.isFinite(leftTime) || !Number.isFinite(rightTime)) return 0;
+  return Math.sign(leftTime - rightTime);
+}
+
+function resultStatusRank(status: Score["resultStatus"]): number {
+  if (status === "complete") return 2;
+  if (status === "partial") return 1;
+  return 0;
+}
+
+function latestAttempt(score: Score) {
+  return [...(score.attempts ?? [])].sort((left, right) => compareDates(right.createdAt, left.createdAt))[0];
+}
+
+function attemptStatusRank(status: NonNullable<Score["attempts"]>[number]["status"]): number {
+  return {
+    queued: 0,
+    processing: 1,
+    failed: 2,
+    partial: 3,
+    complete: 4
+  }[status];
 }

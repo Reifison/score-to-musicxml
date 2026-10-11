@@ -77,6 +77,25 @@ describe("NativePlayerPage", () => {
     });
   });
 
+  it("desativa reprodução somente quando a sessão parcial inclui a extensão", async () => {
+    render(<NativePlayerPage />);
+    dispatchHostMessage({
+      channel: PLAYER_BRIDGE_CHANNEL,
+      version: PLAYER_BRIDGE_VERSION,
+      type: "score.load",
+      requestId: "load-partial",
+      payload: {
+        musicXml: "<score-partwise />",
+        scoreName: "Estudo parcial.musicxml",
+        allowPlayback: false
+      }
+    });
+
+    await screen.findByLabelText("Player reutilizado");
+    expect(scorePlayerSpy).toHaveBeenLastCalledWith(expect.objectContaining({ allowPlayback: false }));
+    expect(messages(postMessage)[0]).toMatchObject({ type: "bridge.ready", payload: { commands: ["pause", "stop", "dispose"] } });
+  });
+
   it("encaminha comandos limitados e desmonta o player ao descartar", async () => {
     render(<NativePlayerPage />);
     dispatchHostMessage({

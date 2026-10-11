@@ -8,7 +8,7 @@ import { ScorePlayer } from "./ScorePlayer.js";
 vi.mock("../api/client.js", () => ({ fetchMusicXml: vi.fn() }));
 vi.mock("../score/index.js", () => ({ createVerovioScoreRenderer: vi.fn() }));
 
-const svg = (page: number) => `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 140"><g id="measure-${page}" class="measure"><g id="note-${page}" class="note"><path d="M0 0h10v10z" /></g></g></svg>`;
+const svg = (page: number) => `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 140"><g id="measure-${page}" class="measure"><g id="note-${page}" class="note"><path d="M0 0h10v10z" /></g><g id="rest-${page}" class="rest"><path d="M20 0h10v10z" /></g></g></svg>`;
 
 class FakeAudioParam {
   value = 0;
@@ -87,6 +87,14 @@ describe("ScorePlayer", () => {
     expect(screen.getByRole("status")).toHaveTextContent("Preparando a partitura digital");
   });
 
+  it("busca MusicXML em modo de prévia enquanto a revisão não foi aprovada", () => {
+    vi.mocked(fetchMusicXml).mockReturnValue(new Promise(() => undefined));
+
+    render(<ScorePlayer scoreId="score-review" scoreName="Estudo.musicxml" previewOnly />);
+
+    expect(fetchMusicXml).toHaveBeenCalledWith("score-review", true);
+  });
+
   it("mostra erro recuperável sem derrubar a interface", async () => {
     vi.mocked(fetchMusicXml).mockRejectedValue(new Error("MusicXML indisponível."));
 
@@ -130,6 +138,21 @@ describe("ScorePlayer", () => {
     expect(engine.renderPage).toHaveBeenCalledTimes(2);
   });
 
+  it("renderiza MusicXML parcial sem importar MIDI, criar áudio ou mostrar controles", async () => {
+    const engine = renderer(1);
+    vi.mocked(fetchMusicXml).mockResolvedValue("<score-partwise />");
+    vi.mocked(createVerovioScoreRenderer).mockResolvedValue(engine as never);
+
+    const view = render(<ScorePlayer scoreId="partial-score" scoreName="Estudo parcial.musicxml" allowPlayback={false} />);
+
+    expect(await screen.findByRole("region", { name: "Partitura rolável" })).toBeInTheDocument();
+    expect(view.container.querySelector("svg")).not.toBeNull();
+    expect(screen.getByText(/A reprodução não está disponível para este resultado/)).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /reproduzir partitura/i })).not.toBeInTheDocument();
+    expect(engine.renderMidiBytes).not.toHaveBeenCalled();
+    expect(FakeAudioContext.instances).toHaveLength(0);
+  });
+
   it("assume 70 BPM quando o MusicXML não informa andamento", async () => {
     const engine = renderer(1);
     vi.mocked(fetchMusicXml).mockResolvedValue('<score-partwise><part><measure number="1"><note/></measure></part></score-partwise>');
@@ -151,6 +174,67 @@ describe("ScorePlayer", () => {
     view.unmount();
 
     expect(engine.destroy).toHaveBeenCalledOnce();
+  });
+
+  it("mantém a notação disponível quando a preparação MIDI falha", async () => {
+    const engine = renderer(2);
+    engine.renderMidiBytes.mockImplementation(() => { throw new Error("Andamento não sincronizado."); });
+    vi.mocked(createVerovioScoreRenderer).mockResolvedValue(engine as never);
+    render(<ScorePlayer musicXml="<score-partwise />" scoreName="Prévia.musicxml" previewOnly />);
+
+    expect(await screen.findByRole("region", { name: "Partitura rolável" })).toBeInTheDocument();
+    expect(screen.getByRole("alert")).toHaveTextContent("Andamento não sincronizado.");
+    expect(screen.getByRole("button", { name: "Reproduzir partitura" })).toBeDisabled();
+    fireEvent.click(screen.getByRole("button", { name: "Próxima página" }));
+    expect(await screen.findByText("Página 2 de 2")).toBeInTheDocument();
+    expect(FakeAudioContext.instances).toHaveLength(0);
+  });
+
+  it("acompanha página, notas e pausas ao tocar, pausar, avançar e reiniciar", async () => {
+    const engine = renderer(2);
+    engine.getElementsAtTime.mockImplementation((...args: unknown[]) => Number(args[0]) >= 500
+      ? { notes: [], chords: [], rests: ["rest-2"], page: 2, measure: "measure-2" }
+      : { notes: ["note-1"], chords: [], rests: [], page: 1, measure: "measure-1" });
+    vi.mocked(createVerovioScoreRenderer).mockResolvedValue(engine as never);
+    const view = render(<ScorePlayer musicXml='<score-partwise><sound tempo="120"/></score-partwise>' scoreName="Prévia.musicxml" previewOnly />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "Reproduzir partitura" }));
+    await screen.findByRole("button", { name: "Pausar partitura" });
+    expect(view.container.querySelector("#note-1")).toHaveClass("is-playing");
+    expect(view.container.querySelector("#measure-1")).toHaveAttribute("aria-current", "true");
+    expect(screen.getByRole("button", { name: "Próxima página" })).toBeDisabled();
+
+    FakeAudioContext.instances[0].currentTime = 0.6;
+    await waitFor(() => expect(screen.getByText("Página 2 de 2")).toBeInTheDocument());
+    expect(view.container.querySelector("#rest-2")).toHaveClass("is-playing");
+    expect(view.container.querySelector("#measure-2")).toHaveClass("is-current-measure");
+
+    fireEvent.click(screen.getByRole("button", { name: "Pausar partitura" }));
+    await screen.findByRole("button", { name: "Continuar partitura" });
+    fireEvent.change(screen.getByRole("slider", { name: "Posição da reprodução" }), { target: { value: "0" } });
+    await waitFor(() => expect(view.container.querySelector("#note-1")).toHaveClass("is-playing"));
+    fireEvent.click(screen.getByRole("button", { name: "Continuar partitura" }));
+    await screen.findByRole("button", { name: "Pausar partitura" });
+    fireEvent.click(screen.getByRole("button", { name: "Reiniciar partitura" }));
+    await screen.findByRole("button", { name: "Reproduzir partitura" });
+    expect(screen.getByText("Página 1 de 2")).toBeInTheDocument();
+    expect(view.container.querySelector("#note-1")).toHaveClass("is-playing");
+    view.unmount();
+  });
+
+  it("limpa a indicação visual quando a reprodução termina", async () => {
+    const engine = renderer(1);
+    engine.getElementsAtTime.mockReturnValue({ notes: ["note-1"], chords: [], rests: [], page: 1, measure: "measure-1" });
+    vi.mocked(createVerovioScoreRenderer).mockResolvedValue(engine as never);
+    const view = render(<ScorePlayer musicXml="<score-partwise />" scoreName="Prévia.musicxml" />);
+    fireEvent.click(await screen.findByRole("button", { name: "Reproduzir partitura" }));
+    await screen.findByRole("button", { name: "Pausar partitura" });
+    expect(view.container.querySelector("#note-1")).toHaveClass("is-playing");
+    FakeAudioContext.instances[0].currentTime = 2;
+    await screen.findByRole("button", { name: "Reproduzir partitura" });
+    expect(view.container.querySelector(".is-playing")).toBeNull();
+    expect(view.container.querySelector("[aria-current]")).toBeNull();
+    view.unmount();
   });
 
   it("reutiliza o player com MusicXML fornecido pela WebView e aceita parada externa", async () => {

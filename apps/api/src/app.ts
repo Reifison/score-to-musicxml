@@ -5,6 +5,8 @@ import express from "express";
 import helmet from "helmet";
 import { env } from "./config/env.js";
 import { createServices, type AppServices } from "./container.js";
+import { prisma } from "./db/prisma.js";
+import { checkReadiness } from "./services/ReadinessService.js";
 import { errorHandler } from "./middleware/errorHandler.js";
 import { attachServices } from "./middleware/services.js";
 import { adminRoutes } from "./routes/adminRoutes.js";
@@ -27,6 +29,19 @@ export function createApp(services: AppServices = createServices()) {
   app.use(attachServices(services));
 
   app.get("/health", (_req, res) => res.json({ ok: true }));
+  app.get("/ready", async (_req, res) => {
+    const inline = env.NODE_ENV !== "production" && !env.REDIS_URL;
+    const { ok, checks } = await checkReadiness({
+      database: async () => {
+        await prisma.$queryRaw`SELECT "scoreType", "scoreTypeSelected", "resultStatus", "coverage" FROM "Score" LIMIT 0`;
+        await prisma.$queryRaw`SELECT "claimToken" FROM "ConversionAttempt" LIMIT 0`;
+        return true;
+      },
+      redis: inline ? async () => true : async () => { if (!services.queue.ping) return false; await services.queue.ping(); return true; },
+      worker: inline ? async () => true : async () => Boolean(await services.queue.workerReady?.())
+    });
+    res.status(ok ? 200 : 503).json({ ok, checks });
+  });
   app.use("/debug", debugRoutes);
   app.use("/api/apple", appleRoutes);
   app.use("/api/google", googleRoutes);

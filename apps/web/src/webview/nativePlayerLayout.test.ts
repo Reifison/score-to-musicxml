@@ -25,6 +25,8 @@ describe("layout do player dedicado", () => {
   it("define composições específicas para retrato, paisagem e movimento reduzido", () => {
     expect(globalCss).toContain("@media (orientation: portrait) and (max-width: 600px)");
     expect(globalCss).toContain("@media (orientation: landscape) and (max-height: 520px)");
-    expect(globalCss).toMatch(/@media \(prefers-reduced-motion: reduce\)[\s\S]*?\.native-player-page \*/);
+    expect(globalCss).toMatch(/@media \(prefers-reduced-motion: reduce\)[\s\S]*?\.score-skeleton\s*\{[^}]*animation:\s*none;/);
+    expect(globalCss).toMatch(/@media \(prefers-reduced-motion: reduce\)[\s\S]*?\.native-player-page \.score-sheet\s*\{[^}]*scroll-behavior:\s*auto;/);
+    expect(globalCss).not.toMatch(/transition-duration:\s*\.01ms/i);
   });
 });

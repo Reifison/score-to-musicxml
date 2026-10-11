@@ -19,30 +19,8 @@ if [[ "$env_mode" != "600" ]]; then
   exit 1
 fi
 
-# The deployment script sources this file. Accept only KEY=value lines and
-# reject command substitutions so a malformed/hostile file cannot execute
-# arbitrary commands.
-if ! bash -n "$ENV_FILE"; then
-  echo "Sintaxe inválida em $ENV_FILE." >&2
-  exit 1
-fi
-if ! awk '
-  /^[[:space:]]*($|#)/ { next }
-  $0 !~ /^[A-Za-z_][A-Za-z0-9_]*=/ { invalid = 1 }
-  END { exit invalid }
-' "$ENV_FILE"; then
-  echo "Arquivo $ENV_FILE contém linhas que não são KEY=value." >&2
-  exit 1
-fi
-if grep -Eq '\$\(|`|^[[:space:]]*(source|export)[[:space:]]' "$ENV_FILE"; then
-  echo "Arquivo $ENV_FILE contém sintaxe executável." >&2
-  exit 1
-fi
-
-set -a
-# shellcheck disable=SC1090
-source "$ENV_FILE"
-set +a
+source "$ROOT_DIR/scripts/lib/production-env.sh"
+load_production_env "$ENV_FILE"
 
 required_vars=(API_DOMAIN WEB_DOMAIN VITE_API_URL WEB_ORIGIN POSTGRES_PASSWORD DATABASE_URL REDIS_URL SESSION_SECRET ADMIN_EMAIL ADMIN_PASSWORD)
 for name in "${required_vars[@]}"; do
@@ -62,6 +40,22 @@ done
 
 if [[ "${VITE_API_URL}" != https://* || "${WEB_ORIGIN}" != https://* ]]; then
   echo "VITE_API_URL e WEB_ORIGIN precisam usar HTTPS." >&2
+  exit 1
+fi
+
+for name in API_DOMAIN WEB_DOMAIN; do
+  value="${!name}"
+  if [[ ! "$value" =~ ^[a-zA-Z0-9]([a-zA-Z0-9.-]*[a-zA-Z0-9])?$ ]] || [[ "$value" != *.* ]]; then
+    echo "$name deve conter somente um domínio público, sem esquema, porta ou caminho." >&2
+    exit 1
+  fi
+done
+if [[ "${VITE_API_URL%/}" != "https://$API_DOMAIN" || "${WEB_ORIGIN%/}" != "https://$WEB_DOMAIN" ]]; then
+  echo "VITE_API_URL e WEB_ORIGIN devem corresponder exatamente aos domínios configurados." >&2
+  exit 1
+fi
+if (( ${#SESSION_SECRET} < 32 )); then
+  echo "SESSION_SECRET deve ter pelo menos 32 caracteres." >&2
   exit 1
 fi
 

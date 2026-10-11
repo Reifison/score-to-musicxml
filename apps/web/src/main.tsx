@@ -1,9 +1,5 @@
 import { createRoot } from "react-dom/client";
-import { App } from "./pages/App.js";
 import "./styles/global.css";
-import { NativePlayerPage } from "./webview/NativePlayerPage.js";
-import { isPlayerWebViewPath } from "./webview/playerBridgeContract.js";
+import { RoutePage } from "./pages/RoutePage.js";
 
-createRoot(document.getElementById("root")!).render(
-  isPlayerWebViewPath(window.location.pathname) ? <NativePlayerPage /> : <App />
-);
+createRoot(document.getElementById("root")!).render(<RoutePage />);

@@ -1,3 +1,4 @@
+import { createHmac } from "node:crypto";
 import { z } from "zod";
 import { env } from "../config/env.js";
 import type { EntitlementSummary, User } from "../domain.js";
@@ -33,6 +34,26 @@ export class EntitlementService {
     return this.entitlements.getSummary(user.id, env.FREE_SCAN_LIMIT);
   }
 
+  purchaseBindingFor(user: User): { googleObfuscatedAccountId: string; appleAppAccountToken: string } {
+    if (!env.PURCHASE_ACCOUNT_BINDING_SECRET) {
+      throw new AppError(501, "A vinculação segura de compras ainda não está configurada.", "PURCHASE_BINDING_NOT_CONFIGURED");
+    }
+    // Production user IDs are UUIDs and may already be bound to store purchases.
+    // The in-memory repository uses nanoids, so derive a stable UUID for those.
+    let appleAppAccountToken = user.id;
+    if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(user.id)) {
+      const bytes = createHmac("sha256", env.PURCHASE_ACCOUNT_BINDING_SECRET).update(`app-store:${user.id}`).digest().subarray(0, 16);
+      bytes[6] = (bytes[6] & 0x0f) | 0x40;
+      bytes[8] = (bytes[8] & 0x3f) | 0x80;
+      const hex = bytes.toString("hex");
+      appleAppAccountToken = `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
+    }
+    return {
+      googleObfuscatedAccountId: createHmac("sha256", env.PURCHASE_ACCOUNT_BINDING_SECRET).update(`google-play:${user.id}`).digest("base64url"),
+      appleAppAccountToken
+    };
+  }
+
   async assertCanUpload(user: User): Promise<void> {
     const summary = await this.getFor(user);
     if (summary.plan === "free" && (summary.freeScansRemaining ?? 0) <= 0) {
@@ -50,7 +71,7 @@ export class EntitlementService {
         entityId: result.score.id,
         ipAddress,
         metadata: { freeScanLimit: env.FREE_SCAN_LIMIT }
-      });
+      }).catch(() => undefined);
     }
     return result.score;
   }
@@ -105,7 +126,7 @@ export class EntitlementService {
 
     if (env.NODE_ENV === "production" || this.appleValidator.isConfigured()) {
       try {
-        purchase = await this.appleValidator.validate(input);
+        purchase = await this.appleValidator.validate({ ...input, expectedAppAccountToken: this.purchaseBindingFor(user).appleAppAccountToken });
       } catch (error) {
         await this.audits.create({ actorId: user.id, action: "purchase_failed", ipAddress, metadata: { reason: "apple_validation_failed", productId: input.productId } });
         throw error;
@@ -179,7 +200,9 @@ export class EntitlementService {
     if (input.productId !== env.GOOGLE_PLAY_PRODUCT_ID) throw new AppError(400, "Produto de compra inválido.", "INVALID_PURCHASE_PRODUCT");
     let purchase = { productId: input.productId, purchaseToken: input.purchaseToken, purchasedAt: new Date() };
     if (env.NODE_ENV === "production" && !this.googleValidator.isConfigured()) throw new AppError(501, "Validação server-side do Google Play ainda não está configurada.", "GOOGLE_VALIDATION_NOT_CONFIGURED");
-    if (env.NODE_ENV === "production" || this.googleValidator.isConfigured()) purchase = await this.googleValidator.validate(input);
+    if (env.NODE_ENV === "production" || this.googleValidator.isConfigured()) {
+      purchase = await this.googleValidator.validate({ ...input, expectedAccountId: this.purchaseBindingFor(user).googleObfuscatedAccountId });
+    }
     const currentOwnerId = await this.entitlements.findUserByGooglePurchaseToken(purchase.purchaseToken);
     if (currentOwnerId && currentOwnerId !== user.id) {
       throw new AppError(409, "Esta compra Google Play já está vinculada a outra conta.", "GOOGLE_PURCHASE_ALREADY_CLAIMED");
@@ -208,15 +231,16 @@ export class EntitlementService {
         ? `one_time:${oneTime.notificationType ?? "unknown"}`
         : undefined;
     if (!purchaseToken || !eventType) return { handled: false };
-    if (!(await this.entitlements.claimGoogleNotification({ messageId: input.message.messageId, eventType, purchaseToken }))) return { handled: false, eventType };
-
-    // A cancellation only applies to a pending transaction, which has never
-    // granted entitlement. A voided one-time product is the refund/revocation
-    // signal that removes access for this permanent unlock.
-    if (!voided || voided.productType !== 2 || voided.refundType !== 1) return { handled: true, eventType };
-    const revoked = await this.entitlements.revokeGooglePurchase(purchaseToken, env.FREE_SCAN_LIMIT);
-    if (!revoked) return { handled: false, eventType };
-    await this.audits.create({ actorId: revoked.userId, action: "purchase_revoked", entity: "entitlement", entityId: revoked.userId, ipAddress, metadata: { source: "google_play", eventType } });
-    return { handled: true, eventType };
+    // A signed notification triggers reconciliation; the store API determines
+    // whether the purchase is still active, including refunds and chargebacks.
+    const status = await this.googleValidator.inspect({ productId: env.GOOGLE_PLAY_PRODUCT_ID, purchaseToken });
+    if (!status.active) {
+      const revoked = await this.entitlements.revokeGooglePurchase(purchaseToken, env.FREE_SCAN_LIMIT);
+      if (revoked) {
+        await this.audits.create({ actorId: revoked.userId, action: "purchase_revoked", entity: "entitlement", entityId: revoked.userId, ipAddress, metadata: { source: "google_play", eventType } });
+      }
+    }
+    const claimed = await this.entitlements.claimGoogleNotification({ messageId: input.message.messageId, eventType, purchaseToken });
+    return { handled: claimed, eventType };
   }
 }

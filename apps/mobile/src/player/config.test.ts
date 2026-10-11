@@ -31,6 +31,7 @@ describe("resolvePlayerWebViewConfig", () => {
     for (const value of invalid) {
       expect(() => resolvePlayerWebViewConfig(value, false)).toThrow();
     }
+    expect(() => resolvePlayerWebViewConfig("file:///app/player/index.html", false)).toThrow(/HTTPS/);
   });
 });
 

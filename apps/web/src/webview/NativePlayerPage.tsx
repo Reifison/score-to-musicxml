@@ -24,6 +24,7 @@ type ScoreSession = {
   requestId: string;
   musicXml: string;
   scoreName: string;
+  allowPlayback?: boolean;
 };
 
 const BRIDGE_READY_MESSAGE: PlayerToHostMessage = {
@@ -85,7 +86,8 @@ export function NativePlayerPage() {
         const nextSession = {
           requestId: message.requestId,
           musicXml: message.payload.musicXml,
-          scoreName: message.payload.scoreName
+          scoreName: message.payload.scoreName,
+          ...(typeof message.payload.allowPlayback === "boolean" ? { allowPlayback: message.payload.allowPlayback } : {})
         };
         sessionRef.current = nextSession;
         setSession(nextSession);
@@ -176,6 +178,7 @@ export function NativePlayerPage() {
           key={session.requestId}
           musicXml={session.musicXml}
           scoreName={session.scoreName}
+          allowPlayback={session.allowPlayback}
           command={command}
           onStatusChange={reportStatus}
           onPlaybackChange={reportPlayback}

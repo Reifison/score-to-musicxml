@@ -45,16 +45,25 @@ const schema = z.object({
   GOOGLE_PLAY_RTDN_AUDIENCE: z.string().url().optional(),
   GOOGLE_PLAY_RTDN_SERVICE_ACCOUNT_EMAIL: z.string().email().optional(),
   GOOGLE_PLAY_RTDN_JWKS_URL: z.string().url().default("https://www.googleapis.com/oauth2/v3/certs"),
+  // Server-only secret used to bind store purchases to the authenticated account.
+  PURCHASE_ACCOUNT_BINDING_SECRET: z.string().min(32).optional(),
   CLAMAV_BIN: z.string().optional(),
   REQUIRE_MALWARE_SCAN: booleanFromEnv.default(false),
   OMR_ENGINE: z.enum(["stub", "audiveris"]).default("stub"),
   AUDIVERIS_BIN: z.string().optional(),
   OMR_CONVERSION_TIMEOUT_MS: z.coerce.number().int().positive().default(900_000),
   OMR_AUDIVERIS_TIMEOUT_MS: z.coerce.number().int().positive().default(600_000),
+  OMR_MAX_PAGES: z.coerce.number().int().positive().max(100).default(20),
   OMR_WORKER_CONCURRENCY: z.coerce.number().int().positive().default(1),
+  SOURCE_VISUAL_READER_BIN: z.string().min(1).optional(),
+  SOURCE_VISUAL_MAX_PAGES: z.coerce.number().int().positive().max(3).default(3),
+  SOURCE_VISUAL_MAX_MEASURES: z.coerce.number().int().positive().max(200).default(200),
+  SOURCE_VISUAL_TIMEOUT_MS: z.coerce.number().int().positive().max(60_000).default(60_000),
   BCRYPT_ROUNDS: z.coerce.number().default(12),
   ADMIN_EMAIL: z.string().email().default("admin@example.com"),
-  ADMIN_PASSWORD: z.string().min(8).default("ChangeMe123!")
+  ADMIN_PASSWORD: z.string().min(8).default("ChangeMe123!"),
+  PLAY_REVIEWER_EMAIL: z.string().email().optional(),
+  PLAY_REVIEWER_PASSWORD: z.string().min(8).optional()
 });
 
 export const env = schema.parse(process.env);

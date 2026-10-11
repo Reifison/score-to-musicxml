@@ -1,5 +1,14 @@
 # Technical Roadmap: iOS App
 
+## Reconciliação em 2026-10-06
+
+O [roadmap central](PROJECT_ROADMAP.md) controla a ordem e o estado atual. **Feita?** é indicada por cada checkbox. Marcações antigas preservam a evidência datada daquela entrega; não comprovam homologação do candidato atual. Implementação, validação local e liberação em aparelhos/produção são registradas separadamente no roadmap central.
+
+A cobertura agora substitui porcentagens de confiança: parcial somente por página inteira ausente, prévia/MusicXML disponíveis com aviso, áudio/MIDI bloqueados; falta de parte ou pauta obrigatória falha. Exercícios curtos são aceitos. A nova persistência de tentativas exige migration. O player mobile depende de internet para abrir; samples locais no bundle e cache de sessão não garantem abertura offline.
+
+Apple consultada em 2026-10-06: versão 1.0 REJECTED, build 6 VALID e IAP premium_unlock READY_TO_SUBMIT. Esse registro substitui expectativas antigas de aprovação; compra/restauração reais e nova submissão continuam pendentes. O contato definitivo é reifison@hotmail.com.
+
+
 Este roadmap descreve a criação da versão iOS do Conversor de Partituras. A ideia é manter o backend atual como fonte de verdade e criar um app mobile em React Native/Expo, com foco especial em capturar fotos de partitura com qualidade próxima de scan antes do upload.
 
 ## Como Executar Este Roadmap
@@ -429,7 +438,7 @@ Atividades:
 - [ ] Garantir que o In-App Purchase esteja completo, visível e enviado para revisão junto com o app.
 - [x] Incluir notas de revisão explicando que o app gratuito permite 3 scans totais e que o desbloqueio pago libera uso adicional. Concluído em 2026-05-10. Commit/PR: pendente. Observação: texto registrado em `docs/APP_STORE_SUBMISSION.md`.
 - [ ] Conferir se o Paid Apps Agreement está aceito no App Store Connect antes do envio.
-- [x] Definir suporte/contato. Concluído em 2026-05-10. Commit/PR: pendente. Observação: texto base registrado em `docs/SUPPORT.md`; falta substituir pelo e-mail/domínio definitivo antes da submissão.
+- [x] Definir suporte/contato. Concluído em 2026-05-10. Commit/PR: pendente. Observação: texto base registrado em `docs/SUPPORT.md`; contato definitivo confirmado em 2026-10-06: reifison@hotmail.com; publicação das páginas permanece pendente.
 - [ ] Enviar para revisão.
 
 Critérios de aceite:
@@ -440,13 +449,13 @@ Critérios de aceite:
 
 ## Melhorias Futuras
 
-- Captura com correção automática de perspectiva.
-- Recorte manual da folha antes de enviar.
-- Upload de múltiplas páginas.
-- Push notification quando conversão terminar.
-- Comparação lado a lado entre foto original e MusicXML gerado.
-- Histórico de tentativas de conversão por arquivo.
-- Integração com motor OMR alternativo além do Audiveris.
+- [ ] Captura com correção automática de perspectiva.
+- [ ] Recorte manual da folha antes de enviar.
+- [ ] Upload de múltiplas páginas.
+- [ ] Push notification quando conversão terminar.
+- [ ] Comparação lado a lado entre foto original e MusicXML gerado.
+- [ ] Histórico de tentativas de conversão por arquivo.
+- [ ] Integração com motor OMR alternativo além do Audiveris.
 
 ## Motores OMR Alternativos Para Avaliação
 

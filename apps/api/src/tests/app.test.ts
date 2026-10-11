@@ -1,8 +1,10 @@
 import path from "node:path";
 import os from "node:os";
+import fs from "node:fs/promises";
 import request from "supertest";
 import { beforeEach, describe, expect, it } from "vitest";
 import { createApp } from "../app.js";
+import { env } from "../config/env.js";
 import { createServices } from "../container.js";
 import { createInMemoryRepositories } from "../repositories/inMemoryRepositories.js";
 import { FileStorageService } from "../services/FileStorageService.js";
@@ -10,17 +12,25 @@ import { MidiExportService } from "../services/MidiExportService.js";
 import { MidiObservabilityService, type MidiMetric } from "../services/MidiObservabilityService.js";
 import { MusicXmlExportService } from "../services/MusicXmlExportService.js";
 import type { OmrAdapter } from "../services/OmrAdapter.js";
+import { QueueReconciler } from "../services/QueueReconciler.js";
 
 const pdf = Buffer.from("%PDF-1.4\n1 0 obj\n<<>>\nendobj\n%%EOF");
 const png = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=", "base64");
+
+function bufferParser(response: NodeJS.ReadableStream, callback: (error: Error | null, body: Buffer) => void): void {
+  const chunks: Buffer[] = [];
+  response.on("data", (chunk: Buffer | string) => chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)));
+  response.on("end", () => callback(null, Buffer.concat(chunks)));
+}
 
 class TestOmrAdapter implements OmrAdapter {
   private exportService = new MusicXmlExportService();
 
   async convert(_inputPath: string, originalFilename: string) {
     return {
-      musicXml: this.exportService.minimalValidScore(originalFilename, "Teste automatizado."),
-      confidence: 0.9,
+      musicXml: this.exportService.minimalValidScore(originalFilename, "Teste automatizado.")
+        .replace("<rest/>", "<pitch><step>C</step><octave>4</octave></pitch>"),
+      coverage: { totalPages: 1, processedPages: [1], missingPages: [], pages: [{ page: 1, status: "processed" as const, parts: [{ id: "P1", name: "Melody", staffCount: 1, staves: [1] }] }] },
       warnings: ["Teste automatizado."]
     };
   }
@@ -35,9 +45,12 @@ async function makeTestApp() {
   const dir = await import("node:fs/promises").then((fs) => fs.mkdtemp(path.join(os.tmpdir(), "score-api-test-")));
   services.storage = new FileStorageService(path.join(dir, "uploads"), path.join(dir, "exports"));
   services.conversion = new (await import("../services/ScoreConversionService.js")).ScoreConversionService(repos.scores, repos.audits, services.storage, new TestOmrAdapter());
-  services.scores = new (await import("../services/ScoreService.js")).ScoreService(repos.scores, repos.audits, services.storage, services.midiExport);
   const queue = new (await import("../queues/ScoreConversionQueue.js")).InlineConversionQueue(services.conversion, true);
-  services.uploads = new (await import("../services/ScoreUploadService.js")).ScoreUploadService(repos.audits, services.storage, queue, services.entitlements, services.fileSecurity);
+  services.conversion.setQueue(queue);
+  services.queue = queue;
+  services.reconciler = new QueueReconciler(repos.scores, queue);
+  services.scores = new (await import("../services/ScoreService.js")).ScoreService(repos.scores, repos.audits, services.storage, services.midiExport, queue);
+  services.uploads = new (await import("../services/ScoreUploadService.js")).ScoreUploadService(repos.audits, services.storage, queue, services.entitlements, services.fileSecurity, repos.scores);
   const app = createApp(services);
   const admin = await repos.users.create({
     name: "Admin",
@@ -57,7 +70,7 @@ async function makeTestApp() {
 }
 
 async function login(app: ReturnType<typeof createApp>, email: string, password = "Password123!") {
-  const response = await request(app).post("/api/auth/login").send({ email, password });
+  const response = await request(app).post("/api/auth/login").send({ email, password }).expect(200);
   return response.headers["set-cookie"] as unknown as string[];
 }
 
@@ -66,6 +79,12 @@ describe("API", () => {
 
   beforeEach(async () => {
     ctx = await makeTestApp();
+  });
+
+  it("distingue liveness de readiness sem banco no ambiente de teste", async () => {
+    await request(ctx.app).get("/health").expect(200, { ok: true });
+    const ready = await request(ctx.app).get("/ready").expect(503);
+    expect(ready.body).toEqual({ ok: false, checks: { database: false, redis: true, worker: true } });
   });
 
   it("permite login válido e rejeita login inválido", async () => {
@@ -145,8 +164,9 @@ describe("API", () => {
   it("rejeita arquivo inválido e aceita PDF válido preservando nome original", async () => {
     const cookie = await login(ctx.app, "user@example.com");
     await request(ctx.app).post("/api/scores").set("Cookie", cookie).attach("file", Buffer.from("bad"), "evil.pdf").expect(400);
-    const response = await request(ctx.app).post("/api/scores").set("Cookie", cookie).attach("file", pdf, "minha_partitura.pdf").expect(201);
+    const response = await request(ctx.app).post("/api/scores").set("Cookie", cookie).field("scoreType", "melody").attach("file", pdf, "minha_partitura.pdf").expect(201);
     expect(response.body.score.originalFilename).toBe("minha_partitura.pdf");
+    expect(response.body.score.scoreTypeSelected).toBe(true);
     expect(response.body.score.storedFilename).not.toBe("minha_partitura.pdf");
     expect(response.body.score.conversionStatus).toBe("queued");
   });
@@ -179,7 +199,7 @@ describe("API", () => {
   it("impede acesso e download de partitura de outro usuário", async () => {
     const userCookie = await login(ctx.app, "user@example.com");
     const adminCookie = await login(ctx.app, "admin@example.com");
-    const created = await request(ctx.app).post("/api/scores").set("Cookie", userCookie).attach("file", pdf, "dono.pdf").expect(201);
+    const created = await request(ctx.app).post("/api/scores").set("Cookie", userCookie).field("scoreType", "melody").attach("file", pdf, "dono.pdf").expect(201);
     const other = await ctx.repos.users.create({
       name: "Other",
       email: "other@example.com",
@@ -192,8 +212,83 @@ describe("API", () => {
     await request(ctx.app).get(`/api/scores/${created.body.score.id}/download`).set("Cookie", otherCookie).expect(403);
     await request(ctx.app).get(`/api/scores/${created.body.score.id}/midi`).set("Cookie", otherCookie).expect(403);
     await request(ctx.app).get(`/api/scores/${created.body.score.id}/preview`).set("Cookie", otherCookie).expect(403);
+    await request(ctx.app).get(`/api/scores/${created.body.score.id}/download?preview=true`).set("Cookie", otherCookie).expect(403);
+    await request(ctx.app).get(`/api/scores/${created.body.score.id}/evidence`).set("Cookie", otherCookie).expect(403);
+    const detail = await request(ctx.app).get(`/api/scores/${created.body.score.id}`).set("Cookie", userCookie).expect(200);
+    await request(ctx.app).post(`/api/scores/${created.body.score.id}/review`).set("Cookie", otherCookie).send({ revision: detail.body.score.reviewRevision }).expect(403);
+    await request(ctx.app).post(`/api/scores/${created.body.score.id}/review`).set("Cookie", userCookie).send({ revision: detail.body.score.reviewRevision }).expect(200);
     await request(ctx.app).get(`/api/scores/${created.body.score.id}/download`).set("Cookie", adminCookie).expect(200);
     await request(ctx.app).get(`/api/scores/${created.body.score.id}/midi`).set("Cookie", adminCookie).expect(200);
+  });
+
+  it("protege decisões visuais por sessão, proprietário e revisão-base e devolve a nova versão", async () => {
+    // Exercise the retained explicit decision API on a historical pending revision.
+    ctx.services.scores = new (await import("../services/ScoreService.js")).ScoreService(
+      ctx.repos.scores, ctx.repos.audits, ctx.services.storage, ctx.services.midiExport, ctx.services.queue, false);
+    const cookie = await login(ctx.app, "user@example.com");
+    const created = await request(ctx.app).post("/api/scores").set("Cookie", cookie).field("scoreType", "melody").attach("file", png, "review.png").expect(201);
+    const score = (await ctx.repos.scores.findById(created.body.score.id))!;
+    const visualReview = score.validation!.visualReview!;
+    visualReview.proposals = [{ id: "ambiguous", status: "pending", segmentId: "visual-p0-m0", page: 1, partId: "P1",
+      partIndex: 0, measureIndex: 0, measure: "1", noteIndex: 0, before: null, after: null, applicable: false,
+      reason: "Conferência manual necessária", differences: ["missing_event"] }];
+    await ctx.repos.scores.update(score.id, { reviewStatus: "needs_review", reviewedAt: null, reviewedById: null,
+      validation: { ...score.validation!, visualReview } });
+    const url = `/api/scores/${score.id}/visual-review/decision`;
+    const body = { revision: score.reviewRevision, proposalId: "ambiguous", decision: "reject" };
+    await request(ctx.app).post(url).send(body).expect(401);
+    await request(ctx.app).post(url).set("Cookie", cookie).send({ ...body, filePath: "/private/path" }).expect(400);
+    await ctx.repos.users.create({ name: "Other", email: "visual-other@example.com", passwordHash: await ctx.services.auth.hashPassword("Password123!"), role: "user", isActive: true });
+    const otherCookie = await login(ctx.app, "visual-other@example.com");
+    await request(ctx.app).post(url).set("Cookie", otherCookie).send(body).expect(403);
+    const blocked = await request(ctx.app).post(`/api/scores/${score.id}/review`).set("Cookie", cookie).send({ revision: score.reviewRevision }).expect(409);
+    expect(blocked.body.code).toBe("VISUAL_PROPOSALS_PENDING");
+    const next = await request(ctx.app).post(url).set("Cookie", cookie).send(body).expect(200);
+    expect(next.body.score.reviewRevision).not.toBe(score.reviewRevision);
+    expect(next.body.score.validation.visualReview.proposals[0].status).toBe("rejected");
+    expect(next.body.score.validation.visualReview.trainingEligible).toBe(false);
+    await request(ctx.app).post(url).set("Cookie", cookie).send(body).expect(409);
+  });
+
+  it("limits source-page images to valid pages after checking ownership", async () => {
+    const cookie = await login(ctx.app, "user@example.com");
+    const created = await request(ctx.app).post("/api/scores").set("Cookie", cookie).field("scoreType", "melody").attach("file", png, "original.png").expect(201);
+    const sourceUrl = `/api/scores/${created.body.score.id}/preview-image`;
+    const preview = await request(ctx.app).get(`${sourceUrl}?page=1`).set("Cookie", cookie).expect(200);
+    expect(preview.headers["content-type"]).toContain("image/png");
+    expect(preview.headers["cache-control"]).toContain("no-store");
+    for (const page of ["0", "2", "1.5", "bad", "9007199254740992"]) {
+      const invalid = await request(ctx.app).get(`${sourceUrl}?page=${page}`).set("Cookie", cookie).expect(400);
+      expect(invalid.body.code).toBe("INVALID_PREVIEW_PAGE");
+    }
+    await request(ctx.app).get(`${sourceUrl}?page=1`).expect(401);
+    await ctx.repos.users.create({ name: "Other", email: "source-other@example.com", passwordHash: await ctx.services.auth.hashPassword("Password123!"), role: "user", isActive: true });
+    const otherCookie = await login(ctx.app, "source-other@example.com");
+    await request(ctx.app).get(`${sourceUrl}?page=1`).set("Cookie", otherCookie).expect(403);
+  });
+
+  it("permite iframe do PDF somente na origem web configurada após autorização", async () => {
+    const cookie = await login(ctx.app, "user@example.com");
+    const created = await request(ctx.app).post("/api/scores").set("Cookie", cookie).field("scoreType", "melody").attach("file", pdf, "iframe.pdf").expect(201);
+    const previewPath = `/api/scores/${created.body.score.id}/preview`;
+    const preview = await request(ctx.app).get(previewPath).set("Cookie", cookie).expect(200);
+    const expected = `frame-ancestors 'self' ${new URL(env.WEB_ORIGIN).origin}`;
+    expect(preview.headers["content-security-policy"]).toContain(expected);
+    expect(preview.headers["content-security-policy"]).toContain("default-src 'self'");
+    expect(preview.headers["content-security-policy"]).not.toContain("frame-ancestors *");
+    expect(preview.headers["x-frame-options"]).toBeUndefined();
+    expect(preview.headers["cross-origin-resource-policy"]).toBe("cross-origin");
+    const detail = await request(ctx.app).get(`/api/scores/${created.body.score.id}`).set("Cookie", cookie).expect(200);
+    expect(detail.headers["content-security-policy"]).toContain("frame-ancestors 'self'");
+    expect(detail.headers["content-security-policy"]).not.toContain(expected);
+    expect(detail.headers["x-frame-options"]).toBe("SAMEORIGIN");
+    const denied = await request(ctx.app).get(previewPath).expect(401);
+    expect(denied.headers["x-frame-options"]).toBe("SAMEORIGIN");
+    const other = await ctx.repos.users.create({ name: "Other", email: "preview-other@example.com", passwordHash: await ctx.services.auth.hashPassword("Password123!"), role: "user", isActive: true });
+    expect(other.id).toBeTruthy();
+    const otherCookie = await login(ctx.app, "preview-other@example.com");
+    const forbidden = await request(ctx.app).get(previewPath).set("Cookie", otherCookie).expect(403);
+    expect(forbidden.headers["x-frame-options"]).toBe("SAMEORIGIN");
   });
 
   it("aplica limite gratuito de 3 scans e libera após compra registrada", async () => {
@@ -268,12 +363,21 @@ describe("API", () => {
 
   it("conversão muda status, registra falha e usa nome base original no download", async () => {
     const cookie = await login(ctx.app, "user@example.com");
-    const created = await request(ctx.app).post("/api/scores").set("Cookie", cookie).attach("file", pdf, "minha_partitura.pdf").expect(201);
+    const created = await request(ctx.app).post("/api/scores").set("Cookie", cookie).field("scoreType", "melody").attach("file", pdf, "minha_partitura.pdf").expect(201);
     const detail = await request(ctx.app).get(`/api/scores/${created.body.score.id}`).set("Cookie", cookie).expect(200);
     expect(detail.body.score.conversionStatus).toBe("converted");
     expect(detail.body.score.musicxmlFilename).toMatch(/\.musicxml$/);
-    const download = await request(ctx.app).get(`/api/scores/${created.body.score.id}/download`).set("Cookie", cookie).expect(200);
+    expect(detail.body.score.resultStatus).toBe("complete");
+    expect(detail.body.score.canPlay).toBe(true);
+    expect(detail.body.score.reviewStatus).toBe("approved");
+    expect(detail.body.score.reviewedById).toBeNull();
+    expect(detail.body.score.validation.reviewAcceptance.method).toBe("automatic_delivery_v1");
+    await request(ctx.app).get(`/api/scores/${created.body.score.id}/download`).set("Cookie", cookie).expect(200);
+    await request(ctx.app).get(`/api/scores/${created.body.score.id}/download?preview=true`).set("Cookie", cookie).expect(200);
+    const download = await request(ctx.app).get(`/api/scores/${created.body.score.id}/download`).set("Cookie", cookie).buffer(true).parse(bufferParser).expect(200);
     expect(download.headers["content-disposition"]).toContain("minha_partitura.musicxml");
+    expect(Buffer.isBuffer(download.body)).toBe(true);
+    expect(download.body.toString("utf8")).toContain("score-partwise");
     expect(download.headers["cache-control"]).toBe("private, no-store, max-age=0");
     expect(download.headers.pragma).toBe("no-cache");
     expect(download.headers.expires).toBe("0");
@@ -293,12 +397,35 @@ describe("API", () => {
     await ctx.repos.scores.update(created.body.score.id, { conversionStatus: "failed", errorMessage: "Falha OMR" });
     const failed = await request(ctx.app).get(`/api/scores/${created.body.score.id}`).set("Cookie", cookie).expect(200);
     expect(failed.body.score.errorMessage).toBe("Falha OMR");
-    await request(ctx.app).get(`/api/scores/${created.body.score.id}/midi`).set("Cookie", cookie).expect(409);
-    expect(ctx.midiMetrics).toContainEqual(expect.objectContaining({
-      metric: "midi_export",
-      phase: "download",
-      status: "failure",
-      errorCode: "MIDI_NOT_READY"
-    }));
+    await request(ctx.app).get(`/api/scores/${created.body.score.id}/midi`).set("Cookie", cookie).expect(200);
+  });
+
+  it("returns a generic 410 when the approved MusicXML export is missing or unsafe", async () => {
+    const cookie = await login(ctx.app, "user@example.com");
+    const created = await request(ctx.app).post("/api/scores").set("Cookie", cookie).field("scoreType", "melody").attach("file", pdf, "indisponivel.pdf").expect(201);
+    const score = (await request(ctx.app).get(`/api/scores/${created.body.score.id}`).set("Cookie", cookie).expect(200)).body.score;
+    await request(ctx.app).post(`/api/scores/${created.body.score.id}/review`).set("Cookie", cookie).send({ revision: score.reviewRevision }).expect(200);
+
+    const exportPath = ctx.services.storage.resolveExportPath(score.musicxmlFilename);
+    const available = await request(ctx.app).get(`/api/scores/${created.body.score.id}/download`).set("Cookie", cookie).buffer(true).parse(bufferParser).expect(200);
+    expect(available.body.toString("utf8")).toContain("score-partwise");
+    await fs.rm(exportPath);
+
+    const missingResponse = await request(ctx.app).get(`/api/scores/${created.body.score.id}/download`).set("Cookie", cookie).expect(410);
+    expect(missingResponse.body.code).toBe("MUSICXML_EXPORT_UNAVAILABLE");
+    expect(JSON.stringify(missingResponse.body)).not.toContain(exportPath);
+
+    const outsideDir = await fs.mkdtemp(path.join(os.tmpdir(), "score-unsafe-export-"));
+    const outsidePath = path.join(outsideDir, "private.musicxml");
+    try {
+      await fs.writeFile(outsidePath, "<private-outside-score/>");
+      await fs.symlink(outsidePath, exportPath);
+      const unsafeResponse = await request(ctx.app).get(`/api/scores/${created.body.score.id}/download`).set("Cookie", cookie).expect(410);
+      expect(unsafeResponse.body).toEqual(missingResponse.body);
+      expect(JSON.stringify(unsafeResponse.body)).not.toContain(outsidePath);
+    } finally {
+      await fs.rm(exportPath, { force: true });
+      await fs.rm(outsideDir, { recursive: true, force: true });
+    }
   });
 });

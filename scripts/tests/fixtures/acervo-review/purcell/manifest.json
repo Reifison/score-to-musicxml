@@ -1,0 +1,70 @@
+{
+  "schemaVersion": 1,
+  "case": "purcell-m1-and-m40",
+  "scope": "Regressões delimitadas para três eventos do compasso 1 e dois eventos do compasso 40; não certifica a partitura completa nem áudio.",
+  "sourcePdf": {
+    "path": "private-corpus/Baixo purcell.pdf",
+    "sha256": "1c7074248888e014ab00b356f5cfb637d9538e246c50f0433affb677be8650cc"
+  },
+  "sourceLedgers": {
+    "a": {
+      "path": "docs/validation/acervo-review-2026-10-07/source-ledgers/purcell-sol-a-v2.json",
+      "sha256": "a36da42bd962cf17fee8c440fae7eafcaa546083061f1ef53c421429d64501d4",
+      "expectedPitchField": "octave8SoundingPitch"
+    },
+    "b": {
+      "path": "docs/validation/acervo-review-2026-10-07/source-ledgers/purcell-sol-b-v2.json",
+      "sha256": "3e18368491ceb28adb77683c4371785429e4c7179ab807154ec83e6f559b7a0f",
+      "expectedPitchField": "effectivePitchWithClef8Below"
+    }
+  },
+  "candidateOrigins": {
+    "original": {
+      "path": "output/omr/corpus-partituras-2026-10-07/prepared-retries/1c7074248888e014/prepared-attempts/attempt-0001/application/preview.musicxml",
+      "sha256": "7f2c63e115d66c433b3728ed9dc0f2db963c632e9dbb60b4fb5bac2c7272a3af",
+      "fullMeasureCount": 39,
+      "excerptMeasures": [
+        "1",
+        "39"
+      ]
+    },
+    "v1": {
+      "path": "output/omr/acervo-review-2026-10-07/purcell/v1/abdelazer-suite-ii.musicxml",
+      "sha256": "c0c167fec06a640bd510301f19b0908f093598cfc79723ea4afc0edcd9d57102",
+      "fullMeasureCount": 40,
+      "excerptMeasures": [
+        "1",
+        "40"
+      ]
+    }
+  },
+  "fixtures": {
+    "original-m1-m39.xml": {
+      "sha256": "c0dadcabcf79e90c5bb2a9b6e99884de771ed0b9c8773eba559ea1aadf30683d",
+      "purpose": "Extrato imutável dos compassos 1 e último compasso disponível, 39, da candidata original."
+    },
+    "v1-m1-m40.xml": {
+      "sha256": "105483d016dbdc6fc66477f0ae2bfc16bdd59e56226cc0ca759fa1ffca8f36ee",
+      "purpose": "Extrato imutável dos compassos 1 e 40 da cópia V1."
+    }
+  },
+  "testedSourceFacts": {
+    "measure1": {
+      "graphicD4WithG8": "MusicXML pitch D3",
+      "clefOctaveChange": -1
+    },
+    "measure40": {
+      "sourceEventCount": 2,
+      "lastPrintedTempo": {
+        "onsetQuarter": 4,
+        "beatUnit": "half",
+        "perMinute": 10,
+        "status": "confirmed by ledger A and clear by ledger B"
+      }
+    }
+  },
+  "limits": [
+    "No expected pitch is derived from a candidate, the PDF file, an OMR report, or a third reading; expected events are independently normalized from the two named ledgers after checking their sealed hashes.",
+    "Agreement applies only to the listed excerpt events and the literal final tempo mark; it does not certify all measures, notation, playback, or editorial completeness."
+  ]
+}
