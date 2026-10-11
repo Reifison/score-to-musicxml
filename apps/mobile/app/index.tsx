@@ -4,14 +4,17 @@ import * as DocumentPicker from "expo-document-picker";
 import * as ImagePicker from "expo-image-picker";
 import { Redirect, router } from "expo-router";
 import type { ComponentProps } from "react";
-import { ActivityIndicator, Alert, Image, Pressable, SafeAreaView, ScrollView, StyleSheet, Text, View } from "react-native";
-import { api } from "../src/api/client";
+import { useState } from "react";
+import { ActivityIndicator, Alert, Pressable, SafeAreaView, ScrollView, StyleSheet, Text, View } from "react-native";
+import { ApiError, api } from "../src/api/client";
+import type { ScoreType } from "../src/api/types";
 import { useAuth } from "../src/auth/AuthProvider";
 import { BottomNav, bottomNavHeight } from "../src/components/BottomNav";
 import { BrandLockup } from "../src/components/BrandLockup";
+import { ScoreTypePicker } from "../src/components/ScoreTypePicker";
 import { colors, sharedStyles } from "../src/theme/styles";
 
-type UploadFile = { uri: string; name: string; type: string };
+type UploadFile = { uri: string; name: string; type: string; scoreType: ScoreType };
 type Tile = {
   color: string;
   iconColor?: string;
@@ -23,15 +26,20 @@ type Tile = {
 export default function IndexScreen() {
   const { loading, token, user } = useAuth();
   const queryClient = useQueryClient();
+  const [scoreType, setScoreType] = useState<ScoreType | null>(null);
 
   const uploadMutation = useMutation({
-    mutationFn: (file: UploadFile) => api.upload(token!, file),
+    mutationFn: (file: UploadFile) => api.upload(token!, file, file.scoreType),
     onSuccess: async ({ score }) => {
       await queryClient.invalidateQueries({ queryKey: ["scores"] });
       await queryClient.invalidateQueries({ queryKey: ["entitlement"] });
       router.push(`/score/${score.id}`);
     },
     onError: (error) => {
+      if (error instanceof ApiError && error.code === "FREE_SCAN_LIMIT_REACHED") {
+        router.push("/scores?paywall=1");
+        return;
+      }
       Alert.alert("Nao foi possivel enviar", error instanceof Error ? error.message : "Tente novamente.");
     }
   });
@@ -39,7 +47,7 @@ export default function IndexScreen() {
   if (loading) {
     return (
       <View style={styles.loading}>
-        <Image resizeMode="contain" source={require("../assets/splash.png")} style={styles.loadingImage} />
+        <ActivityIndicator accessibilityLabel="Abrindo suas partituras" color={colors.primary} />
       </View>
     );
   }
@@ -48,13 +56,15 @@ export default function IndexScreen() {
 
   const tiles: Tile[] = [
     { color: colors.primary, icon: "musical-notes-outline", label: "Minhas partituras", onPress: () => router.push("/scores") },
-    { color: colors.accentCoral, icon: "heart-outline", label: "Favoritas", onPress: () => Alert.alert("Favoritas", "Esta área ainda será ligada às suas partituras favoritas.") },
+    { color: colors.accentCoral, icon: "heart-outline", label: "Favoritas", onPress: () => router.push("/scores?view=favorites") },
     { color: colors.surfaceSoft, iconColor: colors.muted, icon: "trash-outline", label: "Lixeira", onPress: () => router.push("/trash") },
-    { color: colors.accentGold, icon: "settings-outline", label: "Configurações", onPress: () => Alert.alert("Configurações", "As configurações do app ainda estão em preparação.") },
+    { color: colors.accentGold, iconColor: colors.ink, icon: "settings-outline", label: "Configurações", onPress: () => router.push("/settings") },
     { color: colors.accentBlue, icon: "person-outline", label: "Perfil", onPress: () => router.push("/profile") }
   ];
 
   async function pickFile() {
+    const selectedType = requireSelectedScoreType();
+    if (!selectedType) return;
     const result = await DocumentPicker.getDocumentAsync({
       copyToCacheDirectory: true,
       type: "application/pdf"
@@ -64,11 +74,14 @@ export default function IndexScreen() {
     uploadMutation.mutate({
       uri: asset.uri,
       name: asset.name || "partitura.pdf",
-      type: asset.mimeType || "application/pdf"
+      type: asset.mimeType || "application/pdf",
+      scoreType: selectedType
     });
   }
 
   async function pickPhoto() {
+    const selectedType = requireSelectedScoreType();
+    if (!selectedType) return;
     const result = await ImagePicker.launchImageLibraryAsync({
       allowsEditing: true,
       mediaTypes: ImagePicker.MediaTypeOptions.Images,
@@ -79,11 +92,14 @@ export default function IndexScreen() {
     uploadMutation.mutate({
       uri: asset.uri,
       name: asset.fileName || "partitura.jpg",
-      type: asset.mimeType || "image/jpeg"
+      type: asset.mimeType || "image/jpeg",
+      scoreType: selectedType
     });
   }
 
   async function scanWithCamera() {
+    const selectedType = requireSelectedScoreType();
+    if (!selectedType) return;
     const permission = await ImagePicker.requestCameraPermissionsAsync();
     if (!permission.granted) {
       Alert.alert("Camera indisponivel", "Autorize o uso da camera para fotografar partituras.");
@@ -99,8 +115,15 @@ export default function IndexScreen() {
     uploadMutation.mutate({
       uri: asset.uri,
       name: asset.fileName || "scan.jpg",
-      type: asset.mimeType || "image/jpeg"
+      type: asset.mimeType || "image/jpeg",
+      scoreType: selectedType
     });
+  }
+
+  function requireSelectedScoreType(): ScoreType | null {
+    if (scoreType) return scoreType;
+    Alert.alert("Selecione o tipo de partitura", "Escolha melodia, piano, violão solo ou violão duo antes de enviar.");
+    return null;
   }
 
   return (
@@ -108,6 +131,7 @@ export default function IndexScreen() {
       <ScrollView contentContainerStyle={styles.content} style={styles.scroller}>
         <BrandLockup />
         <View style={styles.uploadPanel}>
+          <ScoreTypePicker onChange={setScoreType} value={scoreType} />
           <Pressable disabled={uploadMutation.isPending} onPress={scanWithCamera} style={sharedStyles.button}>
             {uploadMutation.isPending ? <ActivityIndicator color={colors.onPrimary} /> : <Ionicons color={colors.onPrimary} name="camera-outline" size={22} />}
             <Text style={sharedStyles.buttonText}>{uploadMutation.isPending ? "Enviando..." : "Escanear partitura"}</Text>
@@ -145,21 +169,20 @@ const styles = StyleSheet.create({
     fontSize: 18
   },
   content: {
+    alignSelf: "center",
     flexGrow: 1,
     gap: 28,
+    maxWidth: 960,
     padding: 20,
     paddingBottom: bottomNavHeight + 40,
-    paddingTop: 28
+    paddingTop: 28,
+    width: "100%"
   },
   loading: {
     alignItems: "center",
     backgroundColor: colors.surface,
     flex: 1,
     justifyContent: "center"
-  },
-  loadingImage: {
-    height: "100%",
-    width: "100%"
   },
   screen: {
     backgroundColor: colors.surface,

@@ -1,8 +1,8 @@
 import { ChevronLeft, ChevronRight, FileWarning, RefreshCw } from "lucide-react";
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { fetchMusicXml } from "../api/client.js";
-import type { Instrument, PlaybackSnapshot, WebAudioMidiEngine } from "../audio/index.js";
-import { SAMPLE_BANK_RELEASE } from "../audio/index.js";
+import type { PlaybackSnapshot } from "../audio/types.js";
+import type { WebAudioMidiEngine } from "../audio/WebAudioMidiEngine.js";
 import { sanitizeScoreSvg } from "../score/sanitizeScoreSvg.js";
 import { applyDefaultTempo, DEFAULT_TEMPO_BPM, hasExplicitTempo } from "../score/musicXmlTempo.js";
 import type { VerovioScoreRenderer } from "../score/VerovioScoreRenderer.js";
@@ -19,6 +19,8 @@ type ScorePlayerProps = {
   scoreName: string;
   scoreId?: string;
   musicXml?: string;
+  allowPlayback?: boolean;
+  previewOnly?: boolean;
   command?: ScorePlayerCommand;
   onStatusChange?: (state: ScorePlayerState, message?: string) => void;
   onPlaybackChange?: (snapshot: PlaybackSnapshot) => void;
@@ -40,6 +42,8 @@ export function ScorePlayer({
   scoreId,
   scoreName,
   musicXml: providedMusicXml,
+  allowPlayback = true,
+  previewOnly = false,
   command,
   onStatusChange,
   onPlaybackChange
@@ -53,17 +57,16 @@ export function ScorePlayer({
   const playbackStateRef = useRef<PlaybackSnapshot["state"]>("idle");
   const desiredActiveIdsRef = useRef<string[]>([]);
   const appliedActiveIdsRef = useRef<string[]>([]);
+  const highlightedMeasureRef = useRef<string | undefined>(undefined);
   const desiredMeasureRef = useRef<string | undefined>(undefined);
   const appliedMeasureRef = useRef<string | undefined>(undefined);
   const lastPlaybackUiUpdateRef = useRef<{ positionMs: number; state: PlaybackSnapshot["state"] } | null>(null);
   const [state, setState] = useState<ScorePlayerState>("loading");
   const [error, setError] = useState("");
   const [audioError, setAudioError] = useState("");
-  const [sampleStatus, setSampleStatus] = useState(`${SAMPLE_BANK_RELEASE} · o primeiro play prepara os timbres.`);
   const [audioAvailable, setAudioAvailable] = useState(false);
   const [tempoAssumed, setTempoAssumed] = useState(true);
   const [baseTempoBpm, setBaseTempoBpm] = useState(DEFAULT_TEMPO_BPM);
-  const [instrument, setInstrument] = useState<Instrument>("piano");
   const [playback, setPlayback] = useState<PlaybackSnapshot>(INITIAL_PLAYBACK);
   const [page, setPage] = useState(1);
   const [pageCount, setPageCount] = useState(0);
@@ -99,6 +102,22 @@ export function ScorePlayer({
     appliedActiveIdsRef.current = ids;
   }, []);
 
+  const highlightMeasure = useCallback((measureId?: string) => {
+    const sheet = sheetRef.current;
+    if (!sheet) return;
+    const previous = highlightedMeasureRef.current && sheet.ownerDocument.getElementById(highlightedMeasureRef.current);
+    if (previous && sheet.contains(previous)) {
+      previous.classList.remove("is-current-measure");
+      previous.removeAttribute("aria-current");
+    }
+    const current = measureId && sheet.ownerDocument.getElementById(measureId);
+    if (current && sheet.contains(current)) {
+      current.classList.add("is-current-measure");
+      current.setAttribute("aria-current", "true");
+    }
+    highlightedMeasureRef.current = measureId;
+  }, []);
+
   const scrollToMeasure = useCallback((measureId?: string) => {
     if (!measureId || appliedMeasureRef.current === measureId) return;
     const sheet = sheetRef.current;
@@ -131,7 +150,7 @@ export function ScorePlayer({
     if (!renderer) return;
     try {
       const elements = renderer.getElementsAtTime(positionMs);
-      const activeIds = [...elements.notes, ...elements.chords];
+      const activeIds = [...elements.notes, ...elements.chords, ...elements.rests];
       desiredActiveIdsRef.current = activeIds;
       desiredMeasureRef.current = elements.measure ?? desiredMeasureRef.current;
       if (elements.page && elements.page !== pageRef.current) {
@@ -144,18 +163,23 @@ export function ScorePlayer({
         return;
       }
       applyHighlights(activeIds);
+      highlightMeasure(elements.measure);
       scrollToMeasure(elements.measure);
     } catch {
       applyHighlights([]);
+      highlightMeasure();
     }
-  }, [applyHighlights, scoreName, scrollToMeasure]);
+  }, [applyHighlights, highlightMeasure, scoreName, scrollToMeasure]);
 
   const renderPage = useCallback((nextPage: number) => {
     const renderer = rendererRef.current;
     if (!renderer) return;
     try {
       desiredActiveIdsRef.current = [];
+      desiredMeasureRef.current = undefined;
       applyHighlights([]);
+      highlightMeasure();
+      appliedMeasureRef.current = undefined;
       const cachedSvg = pageSvgCacheRef.current.get(nextPage);
       const nextSvg = cachedSvg ?? sanitizeScoreSvg(renderer.renderPage(nextPage), scoreName);
       if (!cachedSvg) pageSvgCacheRef.current.set(nextPage, nextSvg);
@@ -167,12 +191,18 @@ export function ScorePlayer({
       setError(renderError instanceof Error ? renderError.message : "Não foi possível renderizar esta página.");
       setState("error");
     }
-  }, [applyHighlights, scoreName]);
+  }, [applyHighlights, highlightMeasure, scoreName]);
+
+  useLayoutEffect(() => {
+    // A page replacement creates new DOM nodes even if the measure ID is unchanged.
+    appliedMeasureRef.current = undefined;
+  }, [svg]);
 
   useLayoutEffect(() => {
     applyHighlights(desiredActiveIdsRef.current);
+    highlightMeasure(desiredMeasureRef.current);
     scrollToMeasure(desiredMeasureRef.current);
-  }, [applyHighlights, playback.positionMs, playback.state, scrollToMeasure, svg]);
+  }, [applyHighlights, highlightMeasure, playback.positionMs, playback.state, scrollToMeasure, svg]);
 
   useEffect(() => {
     let cancelled = false;
@@ -186,12 +216,14 @@ export function ScorePlayer({
     void audioRef.current?.dispose();
     audioRef.current = null;
     applyHighlights([]);
+    highlightMeasure();
+    desiredActiveIdsRef.current = [];
+    desiredMeasureRef.current = undefined;
+    appliedMeasureRef.current = undefined;
     setState("loading");
     setError("");
     setAudioError("");
-    setSampleStatus(`${SAMPLE_BANK_RELEASE} · o primeiro play prepara os timbres.`);
     setAudioAvailable(false);
-    setInstrument("piano");
     playbackStateRef.current = "idle";
     pageSvgCacheRef.current.clear();
     lastPlaybackUiUpdateRef.current = null;
@@ -206,12 +238,12 @@ export function ScorePlayer({
         const musicXmlSource = providedMusicXml !== undefined
           ? Promise.resolve(providedMusicXml)
           : scoreId
-            ? fetchMusicXml(scoreId)
+            ? fetchMusicXml(scoreId, previewOnly)
             : Promise.reject(new Error("Nenhuma partitura foi informada."));
         const [musicXml, scoreModule, audioModule] = await Promise.all([
           musicXmlSource,
           import("../score/index.js"),
-          import("../audio/index.js")
+          allowPlayback ? import("../audio/index.js") : Promise.resolve(null)
         ]);
         if (!musicXml.trim()) {
           if (!cancelled) setState("empty");
@@ -221,15 +253,27 @@ export function ScorePlayer({
         const tempoAssumedForScore = !hasExplicitTempo(musicXml);
         const playableMusicXml = applyDefaultTempo(musicXml);
         pendingRenderer = await scoreModule.createVerovioScoreRenderer(playableMusicXml);
-        const midi = audioModule.parseMidiPlayback(pendingRenderer.renderMidiBytes());
-        const renderedDurationMs = pendingRenderer.getDurationMs();
-        const initialTempo = tempoAssumedForScore ? DEFAULT_TEMPO_BPM : midi.initialTempoBpm || DEFAULT_TEMPO_BPM;
-        pendingAudio = new audioModule.WebAudioMidiEngine({ baseTempoBpm: initialTempo });
-        pendingAudio.load(midi.events, Math.max(midi.durationMs, renderedDurationMs));
+        let hasPlaybackEvents = false;
+        let initialTempo = DEFAULT_TEMPO_BPM;
+        if (audioModule) {
+          try {
+            const midi = audioModule.parseMidiPlayback(pendingRenderer.renderMidiBytes());
+            const renderedDurationMs = pendingRenderer.getDurationMs();
+            initialTempo = tempoAssumedForScore ? DEFAULT_TEMPO_BPM : midi.initialTempoBpm || DEFAULT_TEMPO_BPM;
+            pendingAudio = new audioModule.WebAudioMidiEngine({ baseTempoBpm: initialTempo, instrument: "piano" });
+            pendingAudio.load(midi.events, Math.max(midi.durationMs, renderedDurationMs));
+            hasPlaybackEvents = midi.events.length > 0;
+          } catch (midiError) {
+            await pendingAudio?.dispose();
+            pendingAudio = null;
+            // A playback failure must not hide the notation needed to review the score.
+            if (!cancelled) setAudioError(midiError instanceof Error ? midiError.message : "Não foi possível preparar o áudio desta partitura.");
+          }
+        }
 
         if (cancelled) {
           pendingRenderer.destroy();
-          await pendingAudio.dispose();
+          await pendingAudio?.dispose();
           return;
         }
 
@@ -237,28 +281,35 @@ export function ScorePlayer({
         audioRef.current = pendingAudio;
         setBaseTempoBpm(initialTempo);
         setTempoAssumed(tempoAssumedForScore);
-        setAudioAvailable(midi.events.length > 0);
+        setAudioAvailable(hasPlaybackEvents);
         const initialSvg = sanitizeScoreSvg(pendingRenderer.renderPage(1), scoreName);
         pageSvgCacheRef.current.set(1, initialSvg);
         setPageCount(pendingRenderer.pageCount);
         setSvg(initialSvg);
-        unsubscribeAudioRef.current = pendingAudio.subscribe((snapshot) => {
-          if (cancelled) return;
-          playbackStateRef.current = snapshot.state;
-          const previous = lastPlaybackUiUpdateRef.current;
-          const shouldUpdateUi = previous === null
-            || snapshot.state !== "playing"
-            || previous.state !== "playing"
-            || snapshot.positionMs < previous.positionMs
-            || snapshot.positionMs - previous.positionMs >= PLAYBACK_UI_UPDATE_INTERVAL_MS;
-          if (!shouldUpdateUi) return;
-          lastPlaybackUiUpdateRef.current = {
-            positionMs: snapshot.positionMs,
-            state: snapshot.state
-          };
-          setPlayback(snapshot);
-          syncVisualAtTime(snapshot.positionMs);
-        });
+        if (pendingAudio) {
+          unsubscribeAudioRef.current = pendingAudio.subscribe((snapshot) => {
+            if (cancelled) return;
+            playbackStateRef.current = snapshot.state;
+            const previous = lastPlaybackUiUpdateRef.current;
+            const shouldUpdateUi = previous === null
+              || snapshot.state !== "playing"
+              || previous.state !== "playing"
+              || snapshot.positionMs < previous.positionMs
+              || snapshot.positionMs - previous.positionMs >= PLAYBACK_UI_UPDATE_INTERVAL_MS;
+            if (!shouldUpdateUi) return;
+            lastPlaybackUiUpdateRef.current = {
+              positionMs: snapshot.positionMs,
+              state: snapshot.state
+            };
+            setPlayback(snapshot);
+            if (snapshot.state === "ended") {
+              desiredActiveIdsRef.current = [];
+              desiredMeasureRef.current = undefined;
+              applyHighlights([]);
+              highlightMeasure();
+            } else syncVisualAtTime(snapshot.positionMs);
+          });
+        }
         setState("ready");
       } catch (loadError) {
         pendingRenderer?.destroy();
@@ -278,8 +329,9 @@ export function ScorePlayer({
       void audioRef.current?.dispose();
       audioRef.current = null;
       applyHighlights([]);
+      highlightMeasure();
     };
-  }, [applyHighlights, providedMusicXml, reloadKey, scoreId, scoreName, syncVisualAtTime]);
+  }, [allowPlayback, applyHighlights, highlightMeasure, previewOnly, providedMusicXml, reloadKey, scoreId, scoreName, syncVisualAtTime]);
 
   async function togglePlayback() {
     const audio = audioRef.current;
@@ -289,13 +341,6 @@ export function ScorePlayer({
       if (playback.state === "playing") audio.pause();
       else if (playback.state === "paused") await audio.resume();
       else await audio.play();
-      const selectedBank = audio.getSampleBankSnapshot(instrument);
-      if (selectedBank.status === "ready") {
-        const instrumentLabel = instrument === "piano" ? "Piano" : "Violão";
-        setSampleStatus(`${SAMPLE_BANK_RELEASE} · timbre gravado ativo (${selectedBank.loadedSamples} samples de ${instrumentLabel}).`);
-      } else {
-        setSampleStatus(`${SAMPLE_BANK_RELEASE} · fallback técnico ativo; verifique a conexão local.`);
-      }
     } catch (playError) {
       setAudioError(playError instanceof Error ? playError.message : "Não foi possível iniciar o áudio.");
     }
@@ -318,16 +363,6 @@ export function ScorePlayer({
       setAudioError("");
     } catch (tempoError) {
       setAudioError(tempoError instanceof Error ? tempoError.message : "Não foi possível alterar o andamento.");
-    }
-  }
-
-  function changeInstrument(nextInstrument: Instrument) {
-    try {
-      audioRef.current?.setInstrument(nextInstrument);
-      setInstrument(nextInstrument);
-      setAudioError("");
-    } catch (instrumentError) {
-      setAudioError(instrumentError instanceof Error ? instrumentError.message : "Não foi possível alterar o timbre.");
     }
   }
 
@@ -379,7 +414,7 @@ export function ScorePlayer({
 
   return (
     <section className="score-player" aria-label="Visualizador da partitura">
-      <PlaybackControls
+      {allowPlayback ? <PlaybackControls
         state={controlState}
         positionMs={playback.positionMs}
         durationMs={playback.durationMs}
@@ -387,16 +422,14 @@ export function ScorePlayer({
         tempoMin={tempoMin}
         tempoMax={tempoMax}
         tempoAssumed={tempoAssumed}
-        instrument={instrument}
-        sampleStatus={sampleStatus}
         disabled={!audioAvailable}
         onPlayPause={() => void togglePlayback()}
         onRestart={restartPlayback}
         onSeek={seekPlayback}
         onTempoChange={changeTempo}
-        onInstrumentChange={changeInstrument}
-      />
-      {!audioAvailable && <p className="playback-message">Esta partitura não contém notas reproduzíveis.</p>}
+      /> : <p className="playback-message">A reprodução não está disponível para este resultado.</p>}
+      {allowPlayback && <p className="playback-message">Acompanhe as notas e pausas destacadas durante a reprodução.</p>}
+      {allowPlayback && !audioAvailable && !audioError && <p className="playback-message">Esta partitura não contém notas reproduzíveis.</p>}
       {audioError && <p className="playback-message playback-message-error" role="alert">{audioError}</p>}
       <div
         ref={sheetRef}

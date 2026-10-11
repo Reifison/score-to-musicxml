@@ -1,4 +1,6 @@
 import type { Score } from "../api/types";
+import { coverageSummary } from "./coveragePresentation";
+import { scoreTypeLabel } from "./scoreTypes";
 
 export function scoreDisplayName(score: Score) {
   return score.originalFilename.replace(/\.[^.]+$/, "") || score.originalFilename;
@@ -10,11 +12,20 @@ export function scoreExtension(score: Score) {
 }
 
 export function scoreDetails(score: Score) {
+  const type = score.scoreType
+    ? `${scoreTypeLabel(score.scoreType)}${score.scoreTypeSelected === false ? " (padrão)" : ""}`
+    : "Não informado";
+  const coverage = score.coverage
+    ? score.coverage.excludedPages !== undefined || score.coverage.pages.some(page => page.contentRole)
+      ? coverageSummary(score.coverage)
+      : `${score.coverage.processedPages.length} de ${score.coverage.totalPages} páginas${score.coverage.missingPages.length ? ` · ausentes: ${score.coverage.missingPages.join(", ")}` : ""}`
+    : "Desconhecida";
   return [
     { label: "Envio", value: new Date(score.createdAt).toLocaleString() },
-    { label: "Tipo", value: score.mimeType },
+    { label: "Arquivo", value: score.mimeType },
+    { label: "Partitura", value: type },
+    { label: "Cobertura", value: coverage },
     { label: "Tamanho", value: formatBytes(score.fileSize) },
-    { label: "Confianca", value: score.confidence == null ? "Aguardando" : `${Math.round(score.confidence * 100)}%` }
   ];
 }
 

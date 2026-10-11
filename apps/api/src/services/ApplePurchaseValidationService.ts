@@ -9,6 +9,7 @@ export type ApplePurchaseValidationInput = {
   productId: string;
   purchaseToken?: string;
   transactionId?: string;
+  expectedAppAccountToken?: string;
 };
 
 export class ApplePurchaseValidationService {
@@ -103,6 +104,9 @@ export class ApplePurchaseValidationService {
     }
     if (decoded.originalTransactionId && decoded.originalTransactionId !== input.originalTransactionId) {
       throw new AppError(400, "Transação original Apple não confere.", "APPLE_ORIGINAL_TRANSACTION_MISMATCH");
+    }
+    if (input.expectedAppAccountToken && decoded.appAccountToken !== input.expectedAppAccountToken) {
+      throw new AppError(400, "A compra Apple está vinculada a outra conta.", "APPLE_ACCOUNT_MISMATCH");
     }
   }
 

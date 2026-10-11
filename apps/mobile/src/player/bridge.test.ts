@@ -32,6 +32,19 @@ describe("player bridge", () => {
     expect(serialized).not.toContain("Bearer");
   });
 
+  it("marca a prévia parcial sem ativar controles de reprodução", () => {
+    const message = JSON.parse(createScoreLoadMessage(
+      "score-preview",
+      "<score-partwise />",
+      "Estudo parcial.musicxml",
+      false
+    ));
+
+    expect(message.payload.allowPlayback).toBe(false);
+    expect(createScoreLoadMessage("score-complete", "<score-partwise />", "Estudo.musicxml"))
+      .not.toContain("allowPlayback");
+  });
+
   it("limita os comandos enviados ao player", () => {
     expect(JSON.parse(createPlayerCommandMessage("command-1", "dispose"))).toEqual({
       channel: PLAYER_BRIDGE_CHANNEL,

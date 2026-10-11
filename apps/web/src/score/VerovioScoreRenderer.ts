@@ -1,5 +1,15 @@
 import { VerovioToolkit } from "verovio/esm";
 import { loadVerovioModule } from "./verovioLoader.js";
+import { repairSkippedTieDestinations, UnsupportedMidiEventValidationError } from "./midiEventValidation.js";
+import {
+  createTempoClock,
+  getPerformedTempoTimeline,
+  readMidiTempoChanges,
+  rewriteMidiTempoEvents,
+  UnsupportedTempoTimelineError,
+  type PerformedTempoChange,
+  type TempoClock
+} from "./midiTempoTimeline.js";
 
 export type VerovioRenderErrorCode =
   | "VEROVIO_LOAD_FAILED"
@@ -84,6 +94,11 @@ export class VerovioScoreRenderer {
   private destroyed = false;
   private loaded = false;
   private midiBase64?: string;
+  private playbackEvents?: ReturnType<VerovioToolkit["renderToTimemap"]>;
+  private correctedTempoChanges?: PerformedTempoChange[];
+  private nativeTempoClock?: TempoClock;
+  private performedTempoClock?: TempoClock;
+  private elementPages = new Map<string, number>();
 
   private constructor(private readonly toolkit: VerovioToolkit) {}
 
@@ -106,8 +121,13 @@ export class VerovioScoreRenderer {
 
   /** Replaces the current score with MusicXML data. */
   public loadMusicXml(musicXml: string): void {
+    this.elementPages.clear();
     this.assertUsable();
     this.midiBase64 = undefined;
+    this.playbackEvents = undefined;
+    this.correctedTempoChanges = undefined;
+    this.nativeTempoClock = undefined;
+    this.performedTempoClock = undefined;
 
     if (typeof musicXml !== "string" || !musicXml.trim()) {
       throw new VerovioRenderError("INVALID_MUSICXML", "O arquivo MusicXML está vazio ou inválido.");
@@ -164,7 +184,7 @@ export class VerovioScoreRenderer {
 
   /**
    * Returns the score's performed duration in milliseconds.
-   * Verovio's timemap is authoritative for tempo changes, ties and expanded repetitions.
+   * Verovio's expanded timemap supplies performed quarter positions; imported MEI tempo marks set the tempo clock.
    */
   public get durationMs(): number {
     return this.getDurationMs();
@@ -175,9 +195,10 @@ export class VerovioScoreRenderer {
 
     try {
       this.ensurePlaybackPrepared();
-      const events = this.toolkit.renderToTimemap({ includeMeasures: true, includeRests: true });
+      const events = this.playbackEvents ?? this.toolkit.renderToTimemap({ includeMeasures: true, includeRests: true });
       return events.reduce((duration, event) => Math.max(duration, finiteNumber(event.tstamp)), 0);
-    } catch {
+    } catch (error) {
+      if (error instanceof VerovioRenderError) throw error;
       throw new VerovioRenderError(
         "TIMELINE_FAILED",
         "Não foi possível calcular a duração da partitura."
@@ -194,12 +215,29 @@ export class VerovioScoreRenderer {
       this.ensurePlaybackPrepared();
       // Verovio treats exact boundaries as the preceding event; one millisecond selects
       // the event that is visually active after that boundary.
-      const elements = this.toolkit.getElementsAtTime(Math.floor(timeMs) + 1);
+      let nativeTimeMs = timeMs;
+      if (this.performedTempoClock && this.nativeTempoClock) {
+        const quarter = this.performedTempoClock.quarterAtMilliseconds(timeMs);
+        nativeTimeMs = this.nativeTempoClock.millisecondsAtQuarter(quarter);
+      }
+      const elements = this.toolkit.getElementsAtTime(Math.floor(nativeTimeMs) + 1);
+      const measure = nonEmptyString(elements.measure);
+      // Verovio 6.1 can report page 1 for elements beyond an encoded page break.
+      // Resolve the engraved location directly so playback follows the right page.
+      const anchor = measure ?? stringArray(elements.notes)[0] ?? stringArray(elements.rests)[0];
+      let page = anchor ? this.elementPages.get(anchor) : undefined;
+      if (anchor && page === undefined) {
+        const locatedPage = this.toolkit.getPageWithElement(anchor);
+        if (Number.isInteger(locatedPage) && locatedPage >= 1 && locatedPage <= this.pageCount) {
+          page = locatedPage;
+          this.elementPages.set(anchor, page);
+        }
+      }
       return {
         chords: stringArray(elements.chords),
-        measure: nonEmptyString(elements.measure),
+        measure,
         notes: stringArray(elements.notes),
-        page: optionalValidPage(elements.page, this.pageCount),
+        page: page ?? optionalValidPage(elements.page, this.pageCount),
         rests: stringArray(elements.rests)
       };
     } catch (error) {
@@ -221,6 +259,11 @@ export class VerovioScoreRenderer {
 
     try {
       this.ensurePlaybackPrepared();
+      if (this.performedTempoClock && this.correctedTempoChanges) {
+        const quarter = this.performedTempoClock.quarterAtMilliseconds(timeMs);
+        const activeChange = [...this.correctedTempoChanges].reverse().find((change) => change.quarter <= quarter + 1e-8);
+        return activeChange?.bpm ?? fallbackBpm;
+      }
       const events = this.toolkit.renderToTimemap({ includeMeasures: true, includeRests: true });
       let tempo = fallbackBpm;
       for (const event of events) {
@@ -230,7 +273,8 @@ export class VerovioScoreRenderer {
         }
       }
       return tempo;
-    } catch {
+    } catch (error) {
+      if (error instanceof VerovioRenderError) throw error;
       throw new VerovioRenderError("TIMELINE_FAILED", "Não foi possível consultar o andamento.");
     }
   }
@@ -244,7 +288,7 @@ export class VerovioScoreRenderer {
 
     try {
       this.ensurePlaybackPrepared();
-      const timemap = this.toolkit.renderToTimemap({ includeMeasures: true, includeRests: true });
+      const timemap = this.playbackEvents ?? this.toolkit.renderToTimemap({ includeMeasures: true, includeRests: true });
       const endingTimes = new Map<string, number[]>();
 
       for (const event of timemap) {
@@ -277,7 +321,8 @@ export class VerovioScoreRenderer {
       }
 
       return noteEvents;
-    } catch {
+    } catch (error) {
+      if (error instanceof VerovioRenderError) throw error;
       throw new VerovioRenderError(
         "TIMELINE_FAILED",
         "Não foi possível criar os eventos de reprodução da partitura."
@@ -308,7 +353,7 @@ export class VerovioScoreRenderer {
 
     try {
       this.ensurePlaybackPrepared();
-      const events = this.toolkit.renderToTimemap({ includeMeasures: true, includeRests: true });
+      const events = this.playbackEvents ?? this.toolkit.renderToTimemap({ includeMeasures: true, includeRests: true });
       const startsMs = events
         .filter((event) => stringArray(event.on).includes(id))
         .map((event) => finiteNumber(event.tstamp));
@@ -337,7 +382,8 @@ export class VerovioScoreRenderer {
     try {
       this.ensurePlaybackPrepared();
       return this.midiBase64 as string;
-    } catch {
+    } catch (error) {
+      if (error instanceof VerovioRenderError) throw error;
       throw new VerovioRenderError("MIDI_RENDER_FAILED", "Não foi possível gerar o arquivo MIDI.");
     }
   }
@@ -359,14 +405,77 @@ export class VerovioScoreRenderer {
     this.destroyed = true;
     this.loaded = false;
     this.midiBase64 = undefined;
+    this.playbackEvents = undefined;
+    this.correctedTempoChanges = undefined;
+    this.nativeTempoClock = undefined;
+    this.performedTempoClock = undefined;
+    this.elementPages.clear();
     this.toolkit.destroy();
   }
 
   private ensurePlaybackPrepared(): void {
     if (this.midiBase64) return;
-    const midi = this.toolkit.renderToMIDI();
-    if (typeof midi !== "string" || !midi.trim()) throw new Error("Empty MIDI output");
-    this.midiBase64 = midi;
+    const renderedMidi = this.toolkit.renderToMIDI();
+    if (typeof renderedMidi !== "string" || !renderedMidi.trim()) throw new Error("Empty MIDI output");
+
+    try {
+      const timemap = this.toolkit.renderToTimemap({ includeMeasures: true, includeRests: true });
+      const mei = this.toolkit.getMEI();
+      const expansionMap = this.toolkit.renderToExpansionMap();
+      const tempoTimeline = getPerformedTempoTimeline(mei, timemap, expansionMap);
+      this.playbackEvents = timemap;
+      if (!tempoTimeline.hasIntraMeasureTempo) {
+        this.midiBase64 = encodeBase64(repairSkippedTieDestinations(decodeBase64(renderedMidi), mei, timemap, expansionMap));
+        return;
+      }
+
+      const rawMidi = decodeBase64(renderedMidi);
+      const nativeChanges = readMidiTempoChanges(rawMidi);
+      const nativeInitialBpm = tempoAtQuarterZero(nativeChanges) ?? 120;
+      const nativeClock = createTempoClock(nativeChanges, nativeInitialBpm);
+      const performedClock = createTempoClock(tempoTimeline.changes, nativeInitialBpm);
+      for (const event of timemap) {
+        if (typeof event.qstamp !== "number" || !Number.isFinite(event.qstamp) || event.qstamp < 0) {
+          throw new UnsupportedTempoTimelineError("A timemap event has no valid score-quarter position.");
+        }
+        if (Math.abs(nativeClock.millisecondsAtQuarter(event.qstamp) - finiteNumber(event.tstamp)) > 5) {
+          throw new UnsupportedTempoTimelineError("The native MIDI and Verovio timemap do not share a reliable time map.");
+        }
+      }
+
+      const correctedEvents = timemap.map((event) => {
+        if (typeof event.qstamp !== "number" || !Number.isFinite(event.qstamp) || event.qstamp < 0) {
+          throw new UnsupportedTempoTimelineError("A timemap event has no valid score-quarter position.");
+        }
+        return {
+          ...event,
+          tstamp: performedClock.millisecondsAtQuarter(event.qstamp),
+          tempo: performedClock.tempoAtQuarter(event.qstamp)
+        };
+      });
+      const synchronizedMidi = rewriteMidiTempoEvents(rawMidi, tempoTimeline.changes);
+      const validatedMidi = repairSkippedTieDestinations(synchronizedMidi, mei, timemap, expansionMap);
+
+      this.playbackEvents = correctedEvents;
+      this.correctedTempoChanges = tempoTimeline.changes;
+      this.nativeTempoClock = nativeClock;
+      this.performedTempoClock = performedClock;
+      this.midiBase64 = encodeBase64(validatedMidi);
+    } catch (error) {
+      if (error instanceof UnsupportedTempoTimelineError) {
+        throw new VerovioRenderError(
+          "MIDI_RENDER_FAILED",
+          "Não foi possível sincronizar o andamento desta partitura. Revise os pontos de andamento antes de reproduzir ou exportar o MIDI."
+        );
+      }
+      if (error instanceof UnsupportedMidiEventValidationError) {
+        throw new VerovioRenderError(
+          "MIDI_RENDER_FAILED",
+          "Não foi possível verificar uma ligadura na navegação repetida desta partitura. Revise as casas de repetição e as vozes."
+        );
+      }
+      throw error;
+    }
   }
 
   private assertUsable(): void {
@@ -445,4 +554,22 @@ function validPage(value: unknown, pageCount: number): number {
 function optionalValidPage(value: unknown, pageCount: number): number | undefined {
   if (value === undefined || value === null) return undefined;
   return validPage(value, pageCount);
+}
+
+function decodeBase64(base64: string): Uint8Array {
+  const binary = globalThis.atob(base64);
+  return Uint8Array.from(binary, (character) => character.charCodeAt(0));
+}
+
+function encodeBase64(bytes: Uint8Array): string {
+  const chunks: string[] = [];
+  const chunkSize = 0x8000;
+  for (let offset = 0; offset < bytes.length; offset += chunkSize) {
+    chunks.push(String.fromCharCode(...bytes.subarray(offset, offset + chunkSize)));
+  }
+  return globalThis.btoa(chunks.join(""));
+}
+
+function tempoAtQuarterZero(changes: PerformedTempoChange[]): number | undefined {
+  return [...changes].reverse().find((change) => change.quarter <= 1e-8)?.bpm;
 }

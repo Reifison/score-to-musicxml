@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ActivityIndicator, AppState, Pressable, StyleSheet, Text, View } from "react-native";
 import WebView, { type WebViewMessageEvent } from "react-native-webview";
 import { api } from "../api/client";
+import { allowsScorePlayback, canDownloadMusicXml, canPlayScore, canPreviewMusicXml } from "../api/scoreAvailability";
 import type { Score } from "../api/types";
 import { colors, sharedStyles } from "../theme/styles";
 import {
@@ -23,9 +24,10 @@ import {
   playerCommandForAppState,
   playerCommandForRouteExit
 } from "./lifecycle";
-import { loadCachedPlayerMusicXml, savePlayerMusicXmlToCache } from "./musicXmlCache";
+import { loadCachedPlayerMusicXml, playerCacheIdentity, savePlayerMusicXmlToCache } from "./musicXmlCache";
+import { playerLoadIdentity } from "./playerLoadIdentity";
 
-type NativePlayerState =
+export type ScorePlayerWebViewState =
   | "downloading"
   | "waiting-webview"
   | "sending"
@@ -37,19 +39,30 @@ type NativePlayerState =
 type ScorePlayerWebViewProps = {
   score: Score;
   token: string;
+  onStateChange?: (state: ScorePlayerWebViewState) => void;
 };
 
-export function ScorePlayerWebView({ score, token }: ScorePlayerWebViewProps) {
+export function ScorePlayerWebView({ score, token, onStateChange }: ScorePlayerWebViewProps) {
+  const [retryKey, setRetryKey] = useState(0);
+  const canPreview = canPreviewMusicXml(score);
+  const playbackPermission = allowsScorePlayback(score);
+  const canPlay = canPlayScore(score);
+  const previewOnly = !canDownloadMusicXml(score);
+  const loadIdentity = playerLoadIdentity(score);
+  const reportedLoadIdentityRef = useRef(loadIdentity);
+  const bridgeInstanceKey = `${score.id}-${retryKey}`;
   const webViewRef = useRef<WebView>(null);
   const activeRequestIdRef = useRef<string | null>(null);
   const requestSequenceRef = useRef(0);
   const commandSequenceRef = useRef(0);
   const hasFocusedRef = useRef(false);
-  const [retryKey, setRetryKey] = useState(0);
-  const [bridgeReady, setBridgeReady] = useState(false);
+  const [readyBridgeInstance, setReadyBridgeInstance] = useState<string | null>(null);
   const [musicXml, setMusicXml] = useState<string | null>(null);
-  const [state, setState] = useState<NativePlayerState>("downloading");
+  const [state, setState] = useState<ScorePlayerWebViewState>("downloading");
   const [error, setError] = useState("");
+  const bridgeReady = readyBridgeInstance === bridgeInstanceKey;
+  const cacheIdentity = useMemo(() => playerCacheIdentity(score), [loadIdentity]);
+  const downloadScore = useMemo(() => ({ id: score.id, userId: score.userId }), [score.id, score.userId]);
 
   const configResult = useMemo(() => {
     try {
@@ -64,6 +77,17 @@ export function ScorePlayerWebView({ score, token }: ScorePlayerWebViewProps) {
       };
     }
   }, []);
+
+  useEffect(() => {
+    if (reportedLoadIdentityRef.current !== loadIdentity) {
+      reportedLoadIdentityRef.current = loadIdentity;
+      onStateChange?.("downloading");
+      return;
+    }
+    if (!canPreview) onStateChange?.("empty");
+    else if (!configResult.ok) onStateChange?.("error");
+    else onStateChange?.(state);
+  }, [canPreview, configResult, loadIdentity, onStateChange, state]);
 
   const sendPlayerCommand = useCallback((command: "pause" | "stop" | "dispose") => {
     const requestId = activeRequestIdRef.current;
@@ -99,19 +123,19 @@ export function ScorePlayerWebView({ score, token }: ScorePlayerWebViewProps) {
   }, [sendPlayerCommand]));
 
   useEffect(() => {
-    if (score.conversionStatus !== "converted" || !configResult.ok) return;
+    if (!canPreview || !configResult.ok) return;
     let cancelled = false;
+    sendPlayerCommand("stop");
     activeRequestIdRef.current = null;
-    setBridgeReady(false);
     setMusicXml(null);
     setError("");
     setState("downloading");
 
-    void loadCachedPlayerMusicXml(score)
-      .then((cachedDocument) => cachedDocument ?? api.loadMusicXmlForPlayer(token, score)
+    void loadCachedPlayerMusicXml(cacheIdentity)
+      .then((cachedDocument) => cachedDocument ?? api.loadMusicXmlForPlayer(token, downloadScore, previewOnly)
         .then((downloadedDocument) => {
           try {
-            savePlayerMusicXmlToCache(score, downloadedDocument);
+            savePlayerMusicXmlToCache(cacheIdentity, downloadedDocument);
           } catch {
             // The current download remains usable if persistent storage fails.
           }
@@ -128,7 +152,7 @@ export function ScorePlayerWebView({ score, token }: ScorePlayerWebViewProps) {
           setError(loadError.message);
           setState(loadError.code === "empty" ? "empty" : "error");
         } else {
-          setError("Não foi possível baixar o MusicXML para o player. Verifique sua conexão e tente novamente.");
+          setError("O player precisa de uma conexão com a internet para abrir a partitura. Verifique sua conexão e tente novamente.");
           setState("error");
         }
       });
@@ -136,14 +160,14 @@ export function ScorePlayerWebView({ score, token }: ScorePlayerWebViewProps) {
     return () => {
       cancelled = true;
     };
-  }, [configResult.ok, retryKey, score, token]);
+  }, [cacheIdentity, canPreview, configResult.ok, downloadScore, loadIdentity, previewOnly, retryKey, sendPlayerCommand, token]);
 
   useEffect(() => {
     if (!bridgeReady || !musicXml || !webViewRef.current || state === "error") return;
     requestSequenceRef.current += 1;
     const requestId = `load-${Date.now().toString(36)}-${requestSequenceRef.current}`;
     try {
-      const message = createScoreLoadMessage(requestId, musicXml, score.originalFilename);
+      const message = createScoreLoadMessage(requestId, musicXml, score.originalFilename, playbackPermission);
       activeRequestIdRef.current = requestId;
       setState("sending");
       webViewRef.current.postMessage(message);
@@ -154,18 +178,20 @@ export function ScorePlayerWebView({ score, token }: ScorePlayerWebViewProps) {
       setError("Não foi possível preparar esta partitura para o player.");
       setState("error");
     }
-  }, [bridgeReady, musicXml, score.originalFilename, state]);
+  }, [bridgeReady, musicXml, playbackPermission, score.originalFilename, state]);
 
   useEffect(() => {
     if (state !== "waiting-webview" || bridgeReady) return;
 
     const timeout = setTimeout(() => {
-      setError("O player visual não respondeu. Verifique se o app está atualizado e tente novamente.");
+      setError(canPlay
+        ? "O player precisa de internet e não respondeu. Verifique sua conexão e tente novamente."
+        : "O visualizador precisa de internet e de suporte à prévia sem reprodução. Verifique sua conexão e atualize o app, se houver uma versão nova.");
       setState("error");
     }, PLAYER_BRIDGE_READY_TIMEOUT_MS);
 
     return () => clearTimeout(timeout);
-  }, [bridgeReady, state]);
+  }, [bridgeReady, canPlay, state]);
 
   const handleMessage = useCallback((event: WebViewMessageEvent) => {
     if (!configResult.ok || !isTrustedPlayerDocument(event.nativeEvent.url, configResult.value)) return;
@@ -174,7 +200,7 @@ export function ScorePlayerWebView({ score, token }: ScorePlayerWebViewProps) {
 
     const message = parsed.message;
     if (message.type === "bridge.ready") {
-      setBridgeReady(true);
+      setReadyBridgeInstance(bridgeInstanceKey);
       return;
     }
     if (message.requestId && message.requestId !== activeRequestIdRef.current) return;
@@ -191,23 +217,27 @@ export function ScorePlayerWebView({ score, token }: ScorePlayerWebViewProps) {
     }
 
     if (message.type === "bridge.error") {
-      setError("O player não conseguiu processar a partitura. Tente novamente.");
+      setError(canPlay
+        ? "O player não conseguiu processar a partitura. Tente novamente."
+        : "O visualizador não conseguiu abrir esta prévia sem reprodução. Verifique a conexão e use uma versão compatível do app.");
       setState("error");
     }
-  }, [configResult]);
+  }, [bridgeInstanceKey, configResult, canPlay]);
 
   const failWebView = useCallback(() => {
     setError("Não foi possível carregar o player visual. Verifique sua conexão e tente novamente.");
     setState("error");
   }, []);
 
-  if (score.conversionStatus !== "converted") {
+  if (!canPreview) {
     return (
       <PlayerNotice
-        icon="time-outline"
+        icon={score.conversionStatus === "failed" ? "warning-outline" : "time-outline"}
         message={score.conversionStatus === "failed"
-          ? "A partitura digital está indisponível porque a conversão falhou."
-          : "A partitura digital estará disponível quando a conversão terminar."}
+          ? "A conversão falhou e não há um MusicXML disponível para prévia."
+          : score.conversionStatus === "converted"
+            ? "Não há um MusicXML disponível para abrir nesta partitura."
+            : "A partitura digital estará disponível quando a conversão terminar."}
         title="Player ainda não disponível"
       />
     );
@@ -224,7 +254,7 @@ export function ScorePlayerWebView({ score, token }: ScorePlayerWebViewProps) {
     <View style={styles.container}>
       <WebView
         ref={webViewRef}
-        key={`${score.id}-${retryKey}`}
+        key={bridgeInstanceKey}
         source={{ uri: config.url }}
         originWhitelist={[config.origin]}
         onMessage={handleMessage}
@@ -296,7 +326,7 @@ function shouldAllowNavigation(url: string, isTopFrame: boolean, config: PlayerW
   return isTopFrame ? isTrustedPlayerDocument(url, config) : isTrustedPlayerOrigin(url, config);
 }
 
-function playerStateTitle(state: NativePlayerState): string {
+function playerStateTitle(state: ScorePlayerWebViewState): string {
   if (state === "downloading") return "Baixando partitura";
   if (state === "waiting-webview") return "Preparando player";
   if (state === "sending" || state === "loading") return "Renderizando partitura";
@@ -305,10 +335,10 @@ function playerStateTitle(state: NativePlayerState): string {
   return "Player pronto";
 }
 
-function playerStateMessage(state: NativePlayerState): string {
+function playerStateMessage(state: ScorePlayerWebViewState): string {
   if (state === "downloading") return "O MusicXML está sendo obtido com segurança.";
   if (state === "waiting-webview") return "Aguardando o canal seguro do player.";
-  if (state === "sending" || state === "loading") return "Preparando notação, páginas e áudio.";
+  if (state === "sending" || state === "loading") return "Preparando a notação da partitura.";
   if (state === "empty") return "O MusicXML não contém uma partitura que possa ser exibida.";
   return "";
 }

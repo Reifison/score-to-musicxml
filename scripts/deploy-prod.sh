@@ -20,9 +20,9 @@ fi
 
 bash scripts/validate-prod-env.sh .env.production
 
-set -a
-source .env.production
-set +a
+source scripts/lib/production-env.sh
+load_production_env .env.production
+resolve_public_domains
 
 required_vars=(API_DOMAIN WEB_DOMAIN VITE_API_URL WEB_ORIGIN POSTGRES_PASSWORD DATABASE_URL REDIS_URL SESSION_SECRET ADMIN_EMAIL ADMIN_PASSWORD)
 for name in "${required_vars[@]}"; do
@@ -60,13 +60,16 @@ COMPOSE=(docker compose --env-file .env.production -f docker-compose.prod.yml)
 echo "==> Build das imagens de produção"
 "${COMPOSE[@]}" build
 
+echo "==> Validando proxy dos domínios públicos"
+"${COMPOSE[@]}" run --rm --no-deps caddy caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile
+
 echo "==> Subindo serviços"
 "${COMPOSE[@]}" up -d
 
-echo "==> Aguardando API ficar saudável"
+echo "==> Aguardando banco, fila e worker ficarem prontos"
 api_healthy=false
 for _ in $(seq 1 30); do
-  if "${COMPOSE[@]}" exec -T api node -e "fetch('http://127.0.0.1:4000/health').then((r) => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))" >/dev/null 2>&1; then
+  if "${COMPOSE[@]}" exec -T api node -e "fetch('http://127.0.0.1:4000/ready',{signal:AbortSignal.timeout(5000)}).then(async r=>{const b=await r.json();process.exit(r.ok&&b.checks?.database&&b.checks?.redis&&b.checks?.worker?0:1)}).catch(()=>process.exit(1))" >/dev/null 2>&1; then
     api_healthy=true
     break
   fi
@@ -74,8 +77,7 @@ for _ in $(seq 1 30); do
 done
 
 if [[ "$api_healthy" != "true" ]]; then
-  echo "A API não ficou saudável após 60 segundos. Logs da API:"
-  "${COMPOSE[@]}" logs --tail=100 api
+  echo "O fluxo não ficou pronto. Confira os logs locais da API e do worker e execute o smoke test antes de liberar."
   exit 1
 fi
 
@@ -83,9 +85,9 @@ echo "==> Rodando seed do admin (idempotente)"
 "${COMPOSE[@]}" exec -T api npm run seed:prod -w apps/api
 
 echo
-echo "Deploy concluído."
+echo "Serviços prontos. A liberação depende do smoke test de conversão registrado no runbook."
 echo "Web:  https://${WEB_DOMAIN}"
-echo "API:  https://${API_DOMAIN}/health"
+echo "API:  https://${API_DOMAIN}/ready"
 echo
 echo "Próximo passo mobile:"
 echo "  EXPO_PUBLIC_API_URL=https://${API_DOMAIN}"

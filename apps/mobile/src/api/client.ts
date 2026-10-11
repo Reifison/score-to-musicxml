@@ -4,7 +4,11 @@ import { createMidiDownloadPlan, runMidiDownload } from "../files/midiExport";
 import { validatePlayerMusicXml, validatePlayerMusicXmlSize } from "../player/bridge";
 import { createPlayerMusicXmlDownloadPlan } from "../player/musicXmlDownload";
 import { googlePurchaseRequest, type GooglePurchaseRegistration } from "./purchases";
-import type { AuditLog, Entitlement, PublicUser, Score } from "./types";
+import { scoreRetryRequest } from "./scoreRetry";
+import { scoreReviewRequest } from "./scoreReview";
+import { sourceEvidenceImageSource, visualReviewDecisionRequest, type VisualReviewDecision } from "./sourceVisualReview";
+import { appendScoreUploadFields, type MobileUploadFile } from "./scoreUpload";
+import type { AuditLog, Entitlement, PublicUser, Score, ScoreType } from "./types";
 
 export const API_URL = resolveApiUrl(
   process.env.EXPO_PUBLIC_API_URL,
@@ -86,6 +90,10 @@ export const api = {
     return apiRequest<{ entitlement: Entitlement }>("/api/me/entitlement", {}, token);
   },
 
+  async purchaseBinding(token: string) {
+    return apiRequest<{ binding: { googleObfuscatedAccountId: string; appleAppAccountToken: string } }>("/api/me/purchase-binding", {}, token);
+  },
+
   async scores(token: string) {
     return apiRequest<{ scores: Score[] }>("/api/scores", {}, token);
   },
@@ -100,6 +108,20 @@ export const api = {
 
   async score(token: string, id: string) {
     return apiRequest<{ score: Score }>(`/api/scores/${id}`, {}, token);
+  },
+
+  async approveScoreReview(token: string, id: string, revision: string) {
+    const request = scoreReviewRequest(id, revision);
+    return apiRequest<{ score: Score }>(request.path, request, token);
+  },
+
+  async decideVisualReviewProposal(token: string, id: string, revision: string, proposalId: string, decision: VisualReviewDecision) {
+    const request = visualReviewDecisionRequest(id, revision, proposalId, decision);
+    return apiRequest<{ score: Score }>(request.path, request, token);
+  },
+
+  sourceEvidenceImageSource(token: string, id: string, assetName: string) {
+    return sourceEvidenceImageSource(API_URL, token, id, assetName);
   },
 
   async renameScore(token: string, id: string, originalFilename: string) {
@@ -138,10 +160,18 @@ export const api = {
     return apiRequest<{ score: Score }>(`/api/scores/${id}/restore`, { method: "POST" }, token);
   },
 
-  async upload(token: string, file: { uri: string; name: string; type: string }) {
+  async upload(token: string, file: MobileUploadFile, scoreType: ScoreType) {
     const body = new FormData();
-    body.append("file", file as unknown as Blob);
+    appendScoreUploadFields(body, file, scoreType);
     return apiRequest<{ score: Score }>("/api/scores", { method: "POST", body }, token);
+  },
+
+  async retryScore(token: string, id: string, scoreType?: ScoreType) {
+    const request = scoreRetryRequest(id, scoreType);
+    return apiRequest<{ score: Score }>(request.path, {
+      method: request.method,
+      ...(request.body ? { body: request.body } : {})
+    }, token);
   },
 
   async updatePassword(token: string, password: string) {
@@ -177,8 +207,8 @@ export const api = {
     });
   },
 
-  async loadMusicXmlForPlayer(token: string, score: Score) {
-    const plan = createPlayerMusicXmlDownloadPlan(API_URL, token, score);
+  async loadMusicXmlForPlayer(token: string, score: Pick<Score, "id" | "userId">, preview = true) {
+    const plan = createPlayerMusicXmlDownloadPlan(API_URL, token, score, preview);
     const directory = new Directory(Paths.cache, ...plan.directorySegments);
     directory.create({ idempotent: true, intermediates: true });
     const target = new File(directory, plan.filename);

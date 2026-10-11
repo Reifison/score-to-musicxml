@@ -24,7 +24,7 @@ export default function ProfileScreen() {
 
   return (
     <View style={sharedStyles.screen}>
-      <View style={[sharedStyles.content, { paddingBottom: bottomNavHeight + 24 }]}>
+      <View style={[sharedStyles.content, profileStyles.content]}>
         <View style={{ gap: 6 }}>
           <Text style={sharedStyles.title}>Perfil</Text>
           <Text style={sharedStyles.subtitle}>Dados da sua conta no Conversor de Partituras.</Text>
@@ -64,6 +64,12 @@ export default function ProfileScreen() {
 }
 
 const profileStyles = {
+  content: {
+    alignSelf: "center" as const,
+    maxWidth: 680,
+    paddingBottom: bottomNavHeight + 24,
+    width: "100%" as const
+  },
   disabled: {
     opacity: 0.55
   },

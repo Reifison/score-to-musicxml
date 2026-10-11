@@ -5,12 +5,14 @@ import { loadVerovioModule } from "./verovioLoader.js";
 const toolkit = vi.hoisted(() => ({
   destroy: vi.fn(),
   getElementsAtTime: vi.fn(),
+  getMEI: vi.fn(),
   getMIDIValuesForElement: vi.fn(),
   getPageCount: vi.fn(),
   getPageWithElement: vi.fn(),
   getTimeForElement: vi.fn(),
   getTimesForElement: vi.fn(),
   loadData: vi.fn(),
+  renderToExpansionMap: vi.fn(),
   renderToMIDI: vi.fn(),
   renderToTimemap: vi.fn(),
   setOptions: vi.fn()
@@ -25,6 +27,9 @@ describe("VerovioScoreRenderer playback API", () => {
     vi.mocked(loadVerovioModule).mockResolvedValue({} as never);
     toolkit.loadData.mockReturnValue(true);
     toolkit.getPageCount.mockReturnValue(2);
+    toolkit.getPageWithElement.mockReturnValue(undefined);
+    toolkit.getMEI.mockReturnValue("<mei />");
+    toolkit.renderToExpansionMap.mockReturnValue({});
     toolkit.renderToMIDI.mockReturnValue("TVRoZA==");
   });
 
@@ -73,6 +78,17 @@ describe("VerovioScoreRenderer playback API", () => {
       rests: []
     });
     expect(toolkit.getElementsAtTime).toHaveBeenCalledWith(102);
+  });
+
+  it("corrige a página temporal desatualizada usando a localização do compasso", async () => {
+    toolkit.getElementsAtTime.mockReturnValue({ measure: "measure-page-2", notes: [], rests: ["rest-page-2"], page: 1 });
+    toolkit.getPageWithElement.mockReturnValue(2);
+    const renderer = await loadedRenderer();
+    expect(renderer.getElementsAtTime(1500)).toMatchObject({ page: 2, measure: "measure-page-2", rests: ["rest-page-2"] });
+    expect(renderer.getElementsAtTime(1600).page).toBe(2);
+    expect(toolkit.getPageWithElement).toHaveBeenCalledOnce();
+    expect(toolkit.getPageWithElement).toHaveBeenCalledWith("measure-page-2");
+    renderer.destroy();
   });
 
   it("retorna coleções vazias fora do conteúdo executado", async () => {

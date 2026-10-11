@@ -1,5 +1,7 @@
 # Suporte
 
+Contato definitivo: [reifison@hotmail.com](mailto:reifison@hotmail.com), informado pelo responsável em 2026-10-06.
+
 Para ajuda com o Conversor de Partituras, envie:
 
 - E-mail da conta usada no app.
@@ -11,17 +13,21 @@ Nao envie senhas. Para problemas com compra, use tambem a opcao "Restaurar compr
 
 ## Problemas Comuns
 
-- Foto com baixa confianca: refaca com boa luz, folha reta, sem sombras e sem cortar margens.
+- Foto inadequada: refaça com boa luz, folha reta, sem sombras e sem cortar margens. Exercícios curtos também são aceitos.
 - PDF rejeitado: remova scripts, formularios ou conteudo ativo do PDF e tente novamente.
 - MusicXML incorreto: abra no MuseScore ou outro editor e revise compassos, ritmo, clave e repeticoes.
 - Compra nao aparece: toque em "Restaurar compra" no paywall.
 
 ## MusicXML Ou MIDI
 
+Você não precisa ter um MusicXML para usar o aplicativo. Envie a partitura original em PDF, foto ou imagem; o aplicativo gera o MusicXML automaticamente. Um XML já conferido é usado somente como referência em testes de precisão, não como requisito para o envio.
+
 - Use MusicXML para revisar e editar a notacao. Ele preserva mais informacoes da partitura, como compassos, vozes, articulacoes e estrutura de pagina.
 - Use MIDI para ouvir a execucao ou abrir as notas em outro app compativel. O MIDI representa principalmente notas, duracoes, andamento e instrumentos; a diagramacao pode mudar ao abrir no MuseScore.
 - Para corrigir ou preparar uma partitura para impressao, prefira o MusicXML. Para praticar, ouvir ou usar em um sequenciador, o MIDI costuma ser mais adequado.
-- Os dois formatos podem ser baixados separadamente. Exportar MIDI nao remove nem substitui o MusicXML.
+- Os dois formatos podem ser baixados separadamente quando a cobertura do resultado estiver completa. Exportar MIDI nao remove nem substitui o MusicXML.
+
+Quando páginas inteiras não forem reconhecidas, o resultado parcial permite visualizar e baixar MusicXML com aviso e identificação das páginas ausentes. O player e o MIDI ficam indisponíveis nesse caso. A perda de uma parte obrigatória do duo ou de uma pauta do piano falha a tentativa inteira. Se uma nova tentativa falhar, o resultado anterior continua disponível conforme sua própria cobertura.
 
 Na web, use `Baixar MusicXML` ou `Baixar MIDI`. No iPhone/iPad ou Android, use a acao de exportacao correspondente e escolha MuseScore, Arquivos ou outro app compativel no seletor de compartilhamento. A disponibilidade dos destinos depende dos apps instalados no aparelho.
 
@@ -39,13 +45,15 @@ O reconhecimento da partitura e automatico. Qualidade da foto, sombras, paginas 
 
 Repeticoes simples costumam ser reproduzidas. Casas de repeticao, saltos, codas e repeticoes complexas podem ser interpretados de forma diferente do original. Se a ordem dos compassos estiver incorreta, confira o MusicXML no MuseScore e compare com a imagem ou PDF enviado.
 
-O player web e o player exibido dentro do app iOS/Android usam um piano digital leve. Esse timbre serve como referencia de notas e ritmo e nao reproduz com fidelidade o som de cada instrumento, tecnicas de execucao, dinamica ou articulacoes. O MIDI aberto em outro app pode soar diferente conforme o banco de sons usado por esse app.
+O player oferece timbres de piano e violão com samples e um sintetizador de fallback. Eles servem como referência de notas e ritmo; técnicas de execução, dinâmica e articulações podem soar diferentes do instrumento real. O MIDI aberto em outro app pode soar diferente conforme o banco de sons usado por esse app.
+
+A reprodução no aplicativo requer conexão com a internet para abrir o player HTTPS e preparar seus recursos. O cache temporário do MusicXML não garante reprodução offline. Arquivos exportados podem ser abertos em outros aplicativos que ofereçam esse recurso.
 
 Quando a partitura nao informa andamento, o app assume 70 BPM e mostra essa informacao nos controles. Quando nao ha instrumento reconhecido, o piano digital e usado como padrao. Esses valores permitem a reproducao, mas podem nao representar a intencao da partitura original.
 
 ## Como Conferir O Resultado
 
-Compare a partitura digital com o arquivo original antes de editar, compartilhar ou usar o resultado em uma apresentacao, especialmente quando o app indicar baixa confianca ou alertas de conversao.
+Compare a partitura digital com o arquivo original antes de editar, compartilhar ou usar o resultado em uma apresentação, especialmente quando houver páginas ausentes ou alertas. A cobertura informa o que foi processado e não mede precisão musical.
 
 Se a partitura digital ja mostrar notas ou ritmos incorretos, o problema provavelmente veio do reconhecimento. Tente enviar uma imagem mais nitida ou corrija o MusicXML no MuseScore. Se a partitura digital estiver correta, mas o audio ou o MIDI estiver diferente, abra o MIDI no MuseScore para comparar e informe ao suporte o navegador usado e o ponto da partitura onde ocorreu a diferenca.
 
@@ -57,4 +65,4 @@ Nao envie senha, token de acesso, cookie, arquivo em base64 nem o conteudo compl
 
 ## Exclusao De Dados
 
-O usuario pode excluir partituras no app. Para solicitar exclusao completa da conta ou dados associados, entre em contato pelo canal de suporte informado na App Store ou Google Play.
+O usuário pode excluir partituras no app. Para solicitar exclusão completa da conta ou dados associados, escreva para [reifison@hotmail.com](mailto:reifison@hotmail.com).

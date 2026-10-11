@@ -16,13 +16,14 @@ export type PlayerMusicXmlDownloadPlan = {
 export function createPlayerMusicXmlDownloadPlan(
   apiUrl: string,
   token: string,
-  score: PlayerScore
+  score: PlayerScore,
+  preview = true
 ): PlayerMusicXmlDownloadPlan {
   return {
     directorySegments: ["player-musicxml", safeCacheKey(score.userId), safeCacheKey(score.id)],
     filename: "score.musicxml",
     headers: { Authorization: `Bearer ${token}` },
     idempotent: true,
-    url: `${apiUrl}/api/scores/${encodeURIComponent(score.id)}/download`
+    url: `${apiUrl}/api/scores/${encodeURIComponent(score.id)}/download${preview ? "?preview=true" : ""}`
   };
 }

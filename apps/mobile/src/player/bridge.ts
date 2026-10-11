@@ -68,7 +68,8 @@ export type PlayerMessageParseResult =
 export function createScoreLoadMessage(
   requestId: string,
   musicXml: string,
-  scoreName: string
+  scoreName: string,
+  allowPlayback?: boolean
 ): string {
   assertRequestId(requestId);
   const normalizedName = scoreName.trim();
@@ -81,7 +82,11 @@ export function createScoreLoadMessage(
     version: PLAYER_BRIDGE_VERSION,
     type: "score.load",
     requestId,
-    payload: { musicXml, scoreName: normalizedName }
+    payload: {
+      musicXml,
+      scoreName: normalizedName,
+      ...(allowPlayback === false ? { allowPlayback: false } : {})
+    }
   });
 }
 

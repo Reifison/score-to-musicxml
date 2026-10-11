@@ -20,6 +20,7 @@ export type HostToPlayerMessage =
       payload: {
         musicXml: string;
         scoreName: string;
+        allowPlayback?: boolean;
       };
     }
   | {
@@ -119,9 +120,10 @@ export function parseHostToPlayerMessage(raw: unknown): PlayerBridgeParseResult 
     if (
       !hasOnlyKeys(value, ["channel", "version", "type", "requestId", "payload"])
       || !isRecord(value.payload)
-      || !hasOnlyKeys(value.payload, ["musicXml", "scoreName"])
+      || !hasOnlyOptionalKey(value.payload, ["musicXml", "scoreName"], "allowPlayback")
       || typeof value.payload.musicXml !== "string"
       || typeof value.payload.scoreName !== "string"
+      || ("allowPlayback" in value.payload && typeof value.payload.allowPlayback !== "boolean")
       || !value.payload.scoreName.trim()
       || value.payload.scoreName.trim().length > MAX_SCORE_NAME_LENGTH
       || !isValidMusicXml(value.payload.musicXml)
@@ -137,7 +139,8 @@ export function parseHostToPlayerMessage(raw: unknown): PlayerBridgeParseResult 
         requestId: value.requestId,
         payload: {
           musicXml: value.payload.musicXml,
-          scoreName: value.payload.scoreName.trim()
+          scoreName: value.payload.scoreName.trim(),
+          ...(typeof value.payload.allowPlayback === "boolean" ? { allowPlayback: value.payload.allowPlayback } : {})
         }
       }
     };
@@ -191,6 +194,12 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 function hasOnlyKeys(value: Record<string, unknown>, allowed: string[]): boolean {
   const keys = Object.keys(value);
   return keys.length === allowed.length && keys.every((key) => allowed.includes(key));
+}
+
+function hasOnlyOptionalKey(value: Record<string, unknown>, required: string[], optional: string): boolean {
+  const keys = Object.keys(value);
+  return required.every((key) => keys.includes(key))
+    && keys.every((key) => required.includes(key) || key === optional);
 }
 
 function isValidMusicXml(value: string): boolean {

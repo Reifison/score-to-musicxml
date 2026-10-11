@@ -42,17 +42,20 @@ declare module "verovio/esm" {
       tstampOn?: number[];
     };
     getVersion(): string;
+    getMEI(options?: Record<string, unknown>): string;
     loadData(data: string): boolean;
     renderToMIDI(): string;
+    renderToExpansionMap(): Record<string, string[]>;
     renderToSVG(pageNumber?: number, includeXmlDeclaration?: boolean): string;
     renderToTimemap(options?: Record<string, unknown>): Array<{
-      measureOff?: string;
       measureOn?: string;
+      measureOff?: string;
       off?: string[];
       on?: string[];
       qstamp?: number;
       tempo?: number;
       tstamp: number;
+      [key: string]: unknown;
     }>;
     setOptions(options: Record<string, unknown>): void;
   }

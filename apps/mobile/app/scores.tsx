@@ -4,13 +4,15 @@ import * as DocumentPicker from "expo-document-picker";
 import * as ImagePicker from "expo-image-picker";
 import { useIAP } from "expo-iap";
 import type { Purchase } from "expo-iap";
-import { router } from "expo-router";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { router, useLocalSearchParams } from "expo-router";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ActivityIndicator, Alert, Animated, FlatList, Image, Modal, PanResponder, Platform, Pressable, RefreshControl, StyleSheet, Text, View } from "react-native";
 import { ApiError, api } from "../src/api/client";
-import type { Score } from "../src/api/types";
+import { evaluatePurchaseOffer, type ProductCatalogState, type PurchaseOfferState } from "../src/api/purchaseOffer";
+import type { Score, ScoreType } from "../src/api/types";
 import { useAuth } from "../src/auth/AuthProvider";
 import { BottomNav, bottomNavHeight } from "../src/components/BottomNav";
+import { ScoreTypePicker } from "../src/components/ScoreTypePicker";
 import { StatusBadge } from "../src/components/StatusBadge";
 import { colors, sharedStyles } from "../src/theme/styles";
 
@@ -29,15 +31,25 @@ type PurchaseRegistration = {
 };
 
 export default function ScoresScreen() {
+  const { paywall, view } = useLocalSearchParams<{ paywall?: string; view?: string }>();
+  const favoritesOnly = view === "favorites";
   const { token, user } = useAuth();
   const queryClient = useQueryClient();
   const [paywallVisible, setPaywallVisible] = useState(false);
-  const [pendingImage, setPendingImage] = useState<{ uri: string; name: string; type: string; width?: number; height?: number } | null>(null);
+  const [pendingImage, setPendingImage] = useState<{ uri: string; name: string; type: string; scoreType: ScoreType; width?: number; height?: number } | null>(null);
+  const [scoreType, setScoreType] = useState<ScoreType | null>(null);
   const [uploadError, setUploadError] = useState<string | null>(null);
   const [purchaseStatus, setPurchaseStatus] = useState<string | null>(null);
+  const [productCatalogState, setProductCatalogState] = useState<ProductCatalogState>("idle");
+  const [storeOperationPending, setStoreOperationPending] = useState(false);
   const [selectionMode, setSelectionMode] = useState(false);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [isRefreshing, setIsRefreshing] = useState(false);
   const processedPurchases = useRef(new Set<string>());
+
+  useEffect(() => {
+    if (paywall === "1") setPaywallVisible(true);
+  }, [paywall]);
 
   const isAndroid = Platform.OS === "android";
   const storeName = isAndroid ? "Google Play" : "App Store";
@@ -70,7 +82,7 @@ export default function ScoresScreen() {
     enabled: Boolean(token),
     refetchInterval: (query) => {
       const scores = query.state.data?.scores ?? [];
-      return scores.some((score) => score.conversionStatus === "queued" || score.conversionStatus === "processing") ? 3000 : false;
+      return scores.some((score) => score.conversionStatus === "queued" || score.conversionStatus === "processing" || score.reviewStatus === "needs_review") ? 60_000 : false;
     }
   });
 
@@ -102,7 +114,7 @@ export default function ScoresScreen() {
   const canUpload = entitlement?.plan === "paid" || (entitlement?.freeScansRemaining ?? 0) > 0;
 
   const uploadMutation = useMutation({
-    mutationFn: (file: { uri: string; name: string; type: string }) => api.upload(token!, file),
+    mutationFn: (file: { uri: string; name: string; type: string; scoreType: ScoreType }) => api.upload(token!, file, file.scoreType),
     onSuccess: async ({ score }) => {
       setUploadError(null);
       await Promise.all([
@@ -151,14 +163,32 @@ export default function ScoresScreen() {
   });
 
   const premiumProduct = products.find((product) => product.id === premiumProductId);
-  const premiumPrice = premiumProduct?.displayPrice ?? "R$ 29,90";
   const canUseStore = connected;
+  const purchaseOffer = evaluatePurchaseOffer({
+    connected,
+    catalogState: productCatalogState,
+    product: premiumProduct,
+    productId: premiumProductId,
+    purchasePending: purchaseMutation.isPending || storeOperationPending
+  });
 
-  useEffect(() => {
-    if (connected) {
-      void fetchProducts({ skus: premiumProductIds, type: "in-app" });
+  const loadPremiumProduct = useCallback(async () => {
+    if (!connected) {
+      setProductCatalogState("idle");
+      return;
+    }
+    setProductCatalogState("loading");
+    try {
+      await fetchProducts({ skus: premiumProductIds, type: "in-app" });
+      setProductCatalogState("loaded");
+    } catch {
+      setProductCatalogState("failed");
     }
   }, [connected, fetchProducts]);
+
+  useEffect(() => {
+    void loadPremiumProduct();
+  }, [loadPremiumProduct]);
 
   useEffect(() => {
     const restored = availablePurchases.find((purchase) => purchase.productId === premiumProductId);
@@ -171,10 +201,14 @@ export default function ScoresScreen() {
     return `${entitlement.freeScansRemaining} de ${entitlement.freeScanLimit} scans gratis restantes`;
   }, [entitlement]);
 
-  async function ensureUploadAllowed() {
-    if (canUpload) return true;
+  async function ensureUploadAllowed(): Promise<ScoreType | null> {
+    if (!scoreType) {
+      Alert.alert("Selecione o tipo de partitura", "Escolha melodia, piano, violão solo ou violão duo antes de enviar.");
+      return null;
+    }
+    if (canUpload) return scoreType;
     setPaywallVisible(true);
-    return false;
+    return null;
   }
 
   async function completeStorePurchase(purchase: Purchase, restored: boolean) {
@@ -206,17 +240,26 @@ export default function ScoresScreen() {
   async function buyPremium() {
     setUploadError(null);
     setPurchaseStatus(null);
-    if (!canUseStore) {
-      setPurchaseStatus(`Conectando com a ${storeName}...`);
+    if (!purchaseOffer.canPurchase) {
+      setPurchaseStatus(purchaseOfferUnavailableMessage(purchaseOffer.state, storeName));
       return;
     }
     setPurchaseStatus(`Abrindo ${storeName}...`);
-    await requestPurchase({
-      type: "in-app",
-      request: isAndroid
-        ? { google: { skus: premiumProductIds } }
-        : { apple: { sku: premiumProductId } }
-    });
+    setStoreOperationPending(true);
+    try {
+      if (!token) throw new Error("Faça login para comprar.");
+      const { binding } = await api.purchaseBinding(token);
+      await requestPurchase({
+        type: "in-app",
+        request: isAndroid
+          ? { google: { skus: premiumProductIds, obfuscatedAccountId: binding.googleObfuscatedAccountId } }
+          : { apple: { sku: premiumProductId, appAccountToken: binding.appleAppAccountToken } }
+      });
+    } catch (error) {
+      setPurchaseStatus(error instanceof Error ? error.message : `Não foi possível iniciar a compra na ${storeName}.`);
+    } finally {
+      setStoreOperationPending(false);
+    }
   }
 
   async function restorePremium() {
@@ -227,27 +270,38 @@ export default function ScoresScreen() {
       return;
     }
     setPurchaseStatus(`Buscando compras anteriores na ${storeName}...`);
-    await restorePurchases();
+    setStoreOperationPending(true);
+    try {
+      await restorePurchases();
+      setPurchaseStatus("Busca concluída. Se houver uma compra compatível, o app validará os dados com a loja.");
+    } catch (error) {
+      setPurchaseStatus(error instanceof Error ? error.message : `Não foi possível consultar compras na ${storeName}.`);
+    } finally {
+      setStoreOperationPending(false);
+    }
   }
 
   async function pickPdf() {
-    if (!(await ensureUploadAllowed())) return;
+    const selectedType = await ensureUploadAllowed();
+    if (!selectedType) return;
     const result = await DocumentPicker.getDocumentAsync({ copyToCacheDirectory: true, type: "application/pdf" });
     if (result.canceled) return;
     const asset = result.assets[0];
-    uploadMutation.mutate({ uri: asset.uri, name: asset.name || "partitura.pdf", type: asset.mimeType || "application/pdf" });
+    uploadMutation.mutate({ uri: asset.uri, name: asset.name || "partitura.pdf", type: asset.mimeType || "application/pdf", scoreType: selectedType });
   }
 
   async function pickImage() {
-    if (!(await ensureUploadAllowed())) return;
+    const selectedType = await ensureUploadAllowed();
+    if (!selectedType) return;
     const result = await ImagePicker.launchImageLibraryAsync({ allowsEditing: true, mediaTypes: ImagePicker.MediaTypeOptions.Images, quality: 0.9 });
     if (result.canceled) return;
     const asset = result.assets[0];
-    setPendingImage({ uri: asset.uri, name: asset.fileName || "partitura.jpg", type: asset.mimeType || "image/jpeg", width: asset.width, height: asset.height });
+    setPendingImage({ uri: asset.uri, name: asset.fileName || "partitura.jpg", type: asset.mimeType || "image/jpeg", scoreType: selectedType, width: asset.width, height: asset.height });
   }
 
   async function scanWithCamera() {
-    if (!(await ensureUploadAllowed())) return;
+    const selectedType = await ensureUploadAllowed();
+    if (!selectedType) return;
     const proceed = await new Promise<boolean>((resolve) => {
       Alert.alert("Escanear partitura", "Use o modo documento/scan quando o aparelho oferecer essa opcao. Mantenha a folha reta, bem iluminada, sem sombras e ocupando quase toda a tela.", [
         { text: "Cancelar", style: "cancel", onPress: () => resolve(false) },
@@ -263,7 +317,7 @@ export default function ScoresScreen() {
     const result = await ImagePicker.launchCameraAsync({ allowsEditing: true, cameraType: ImagePicker.CameraType.back, quality: 0.9 });
     if (result.canceled) return;
     const asset = result.assets[0];
-    setPendingImage({ uri: asset.uri, name: asset.fileName || "scan.jpg", type: asset.mimeType || "image/jpeg", width: asset.width, height: asset.height });
+    setPendingImage({ uri: asset.uri, name: asset.fileName || "scan.jpg", type: asset.mimeType || "image/jpeg", scoreType: selectedType, width: asset.width, height: asset.height });
   }
 
   function confirmImageUpload() {
@@ -287,12 +341,19 @@ export default function ScoresScreen() {
   }
 
   async function refresh() {
-    await Promise.all([scoresQuery.refetch(), entitlementQuery.refetch()]);
+    if (isRefreshing) return;
+    setIsRefreshing(true);
+    try {
+      await Promise.all([scoresQuery.refetch(), entitlementQuery.refetch()]);
+    } finally {
+      setIsRefreshing(false);
+    }
   }
 
   const scores = scoresQuery.data?.scores ?? [];
+  const visibleScores = favoritesOnly ? scores.filter((score) => score.isFavorite) : scores;
   const selectedCount = selectedIds.size;
-  const allSelected = scores.length > 0 && scores.every((score) => selectedIds.has(score.id));
+  const allSelected = visibleScores.length > 0 && visibleScores.every((score) => selectedIds.has(score.id));
 
   function toggleSelection(id: string) {
     setSelectedIds((current) => {
@@ -308,7 +369,7 @@ export default function ScoresScreen() {
   }
 
   function toggleSelectAll() {
-    setSelectedIds(allSelected ? new Set() : new Set(scores.map((score) => score.id)));
+    setSelectedIds(allSelected ? new Set() : new Set(visibleScores.map((score) => score.id)));
   }
 
   function confirmDelete(ids: string[]) {
@@ -342,14 +403,14 @@ export default function ScoresScreen() {
   return (
     <View style={sharedStyles.screen}>
       <FlatList
-        contentContainerStyle={{ gap: 14, padding: 20, paddingBottom: bottomNavHeight + 24 }}
-        data={scores}
+        contentContainerStyle={styles.scoreListContent}
+        data={visibleScores}
         keyExtractor={(item) => item.id}
         ListHeaderComponent={
           <View style={{ gap: 16 }}>
             <View style={{ flexDirection: "row", gap: 12, justifyContent: "space-between" }}>
               <View style={{ flex: 1, gap: 5 }}>
-                <Text style={sharedStyles.title}>Partituras</Text>
+                <Text style={sharedStyles.title}>{favoritesOnly ? "Favoritas" : "Partituras"}</Text>
                 <Text style={sharedStyles.subtitle}>{user?.name} · {subtitle}</Text>
               </View>
               <Pressable
@@ -373,6 +434,7 @@ export default function ScoresScreen() {
             ) : null}
 
             <View style={sharedStyles.panel}>
+              <ScoreTypePicker onChange={setScoreType} value={scoreType} />
               <Pressable disabled={uploadMutation.isPending} onPress={scanWithCamera} style={sharedStyles.button}>
                 <Ionicons color={colors.onPrimary} name="camera-outline" size={20} />
                 <Text style={sharedStyles.buttonText}>Escanear partitura</Text>
@@ -392,8 +454,17 @@ export default function ScoresScreen() {
             </View>
           </View>
         }
-        ListEmptyComponent={!scoresQuery.isLoading ? <Text style={sharedStyles.subtitle}>Nenhuma partitura enviada ainda.</Text> : null}
-        refreshControl={<RefreshControl onRefresh={refresh} refreshing={scoresQuery.isFetching || entitlementQuery.isFetching} />}
+        ListEmptyComponent={!scoresQuery.isLoading ? favoritesOnly ? (
+          <View style={styles.emptyFavorites}>
+            <Ionicons color={colors.primaryDark} name="heart-outline" size={30} />
+            <Text style={styles.emptyFavoritesTitle}>Suas favoritas aparecem aqui</Text>
+            <Text style={sharedStyles.subtitle}>Marque uma partitura com o coração para encontrá-la rapidamente.</Text>
+            <Pressable accessibilityRole="button" onPress={() => router.replace("/scores")} style={styles.emptyFavoritesAction}>
+              <Text style={styles.selectAllText}>Ver todas as partituras</Text>
+            </Pressable>
+          </View>
+        ) : <Text style={sharedStyles.subtitle}>Nenhuma partitura enviada ainda.</Text> : null}
+        refreshControl={<RefreshControl onRefresh={refresh} refreshing={isRefreshing} />}
         renderItem={({ item }) => (
           <ScoreRow
             onDelete={() => confirmDelete([item.id])}
@@ -425,20 +496,29 @@ export default function ScoresScreen() {
         </View>
       ) : null}
 
-      <Modal animationType="slide" transparent visible={paywallVisible}>
-        <View style={{ backgroundColor: "rgba(0,0,0,0.35)", flex: 1, justifyContent: "flex-end" }}>
-          <View style={{ backgroundColor: colors.panel, borderTopLeftRadius: 16, borderTopRightRadius: 16, gap: 14, padding: 20 }}>
+      <Modal animationType="slide" onRequestClose={() => setPaywallVisible(false)} transparent visible={paywallVisible}>
+        <View style={styles.paywallBackdrop}>
+          <View style={styles.paywallPanel}>
             <Text style={{ color: colors.ink, fontSize: 22, fontWeight: "700" }}>Desbloquear scans</Text>
             <Text style={sharedStyles.subtitle}>Voce usou os 3 scans gratis. A versao paga libera novos envios nesta conta.</Text>
-            {!connected ? <Text style={{ color: colors.warning }}>Conectando com a {storeName}...</Text> : null}
+            {purchaseOffer.state === "disconnected" ? <Text style={styles.offerMessage}>Aguardando conexão com a {storeName}.</Text> : null}
+            {purchaseOffer.state === "loading" ? <Text style={styles.offerMessage}>Consultando o produto e o preço na {storeName}...</Text> : null}
+            {purchaseOffer.state === "failed" ? <Text style={sharedStyles.error}>Não foi possível consultar o preço na loja.</Text> : null}
+            {purchaseOffer.state === "unavailable" ? <Text style={sharedStyles.error}>A loja não informou preço para este produto. A compra ficará indisponível até que o cadastro na loja esteja completo.</Text> : null}
+            {purchaseOffer.state === "pending" ? <Text style={styles.offerMessage}>Compra em andamento na {storeName}.</Text> : null}
+            {(purchaseOffer.state === "failed" || purchaseOffer.state === "unavailable") ? (
+              <Pressable accessibilityRole="button" disabled={!connected || storeOperationPending} onPress={() => void loadPremiumProduct()} style={[sharedStyles.button, sharedStyles.buttonSecondary, styles.offerRetry]}>
+                <Text style={[sharedStyles.buttonText, sharedStyles.buttonTextSecondary]}>Consultar preço novamente</Text>
+              </Pressable>
+            ) : null}
             {purchaseStatus ? <Text style={sharedStyles.subtitle}>{purchaseStatus}</Text> : null}
-            <Pressable disabled={purchaseMutation.isPending} onPress={buyPremium} style={sharedStyles.button}>
-              {purchaseMutation.isPending ? <ActivityIndicator color={colors.onPrimary} /> : <Text style={sharedStyles.buttonText}>Desbloquear {premiumPrice}</Text>}
+            <Pressable accessibilityRole="button" disabled={!purchaseOffer.canPurchase} onPress={buyPremium} style={[sharedStyles.button, !purchaseOffer.canPurchase && styles.offerDisabled]}>
+              {purchaseOffer.state === "pending" ? <ActivityIndicator color={colors.onPrimary} /> : <Text style={sharedStyles.buttonText}>{purchaseOffer.displayPrice ? `Desbloquear ${purchaseOffer.displayPrice}` : "Preço indisponível"}</Text>}
             </Pressable>
-            <Pressable disabled={purchaseMutation.isPending} onPress={restorePremium} style={[sharedStyles.button, sharedStyles.buttonSecondary]}>
+            <Pressable accessibilityRole="button" disabled={!connected || purchaseMutation.isPending || storeOperationPending} onPress={restorePremium} style={[sharedStyles.button, sharedStyles.buttonSecondary, (!connected || storeOperationPending) && styles.offerDisabled]}>
               <Text style={[sharedStyles.buttonText, sharedStyles.buttonTextSecondary]}>Restaurar compra</Text>
             </Pressable>
-            <Pressable onPress={() => setPaywallVisible(false)} style={[sharedStyles.button, sharedStyles.buttonSecondary]}>
+            <Pressable accessibilityRole="button" onPress={() => setPaywallVisible(false)} style={[sharedStyles.button, sharedStyles.buttonSecondary]}>
               <Text style={[sharedStyles.buttonText, sharedStyles.buttonTextSecondary]}>Agora nao</Text>
             </Pressable>
           </View>
@@ -537,7 +617,7 @@ function ScoreRow({
               <Text style={{ color: colors.muted, fontSize: 13 }}>{formatBytes(score.fileSize)} · {new Date(score.createdAt).toLocaleDateString()}</Text>
             </View>
             <View style={styles.scoreRowTrailing}>
-              <StatusBadge status={score.conversionStatus} />
+              <StatusBadge status={score.conversionStatus} resultStatus={score.resultStatus} />
               <Pressable accessibilityLabel={score.isFavorite ? "Desmarcar favorita" : "Marcar como favorita"} accessibilityRole="button" hitSlop={8} onPress={onToggleFavorite} onPressIn={(event) => event.stopPropagation()} style={styles.heartButton}>
                 <Ionicons color={score.isFavorite ? colors.primary : colors.muted} name={score.isFavorite ? "heart" : "heart-outline"} size={22} />
               </Pressable>
@@ -561,7 +641,33 @@ const styles = StyleSheet.create({
   },
   checkboxSelected: { backgroundColor: colors.primary, borderColor: colors.primary },
   deleteActionText: { color: colors.danger },
+  emptyFavorites: {
+    alignItems: "center",
+    alignSelf: "center",
+    backgroundColor: colors.panel,
+    borderColor: colors.line,
+    borderRadius: 18,
+    borderWidth: 1,
+    gap: 10,
+    marginTop: 12,
+    maxWidth: 520,
+    padding: 22,
+    width: "100%"
+  },
+  emptyFavoritesAction: {
+    alignSelf: "stretch",
+    alignItems: "center",
+    justifyContent: "center",
+    minHeight: 44
+  },
+  emptyFavoritesTitle: { color: colors.ink, fontSize: 17, fontWeight: "800", textAlign: "center" },
   heartButton: { alignItems: "center", justifyContent: "center", minHeight: 44, minWidth: 44 },
+  offerDisabled: { opacity: 0.55 },
+  offerMessage: { color: colors.warning, fontSize: 14, lineHeight: 20 },
+  offerRetry: { minHeight: 48 },
+  paywallBackdrop: { alignItems: "center", backgroundColor: "rgba(0,0,0,0.35)", flex: 1, justifyContent: "flex-end" },
+  paywallPanel: { alignSelf: "center", backgroundColor: colors.panel, borderTopLeftRadius: 22, borderTopRightRadius: 22, gap: 14, maxWidth: 560, padding: 20, width: "100%" },
+  scoreListContent: { alignSelf: "center", gap: 14, maxWidth: 900, padding: 20, paddingBottom: bottomNavHeight + 24, width: "100%" },
   scoreRow: { minHeight: 106, padding: 14 },
   scoreRowContent: { alignItems: "center", flexDirection: "row", gap: 10 },
   scoreRowSelected: { backgroundColor: colors.primarySoft, borderColor: colors.primary },
@@ -615,4 +721,13 @@ function purchaseErrorMessage(error: { code?: string; message?: string }) {
   if (error.code === "user-cancelled") return "Compra cancelada.";
   if (error.code === "deferred-payment") return "Compra pendente de aprovacao.";
   return error.message || "Falha na compra.";
+}
+
+function purchaseOfferUnavailableMessage(state: PurchaseOfferState, storeName: string) {
+  if (state === "disconnected") return `Aguardando conexão com a ${storeName}.`;
+  if (state === "loading") return `Consultando o produto na ${storeName}.`;
+  if (state === "failed") return `Não foi possível consultar o produto na ${storeName}.`;
+  if (state === "unavailable") return `O produto ou o preço não está disponível na ${storeName}.`;
+  if (state === "pending") return "Já existe uma compra em andamento.";
+  return "O preço informado pela loja não está disponível.";
 }

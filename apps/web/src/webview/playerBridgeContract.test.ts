@@ -36,6 +36,33 @@ describe("playerBridgeContract", () => {
     });
   });
 
+  it("aceita apenas a extensão opcional booleana que desativa reprodução", () => {
+    const envelope = {
+      channel: PLAYER_BRIDGE_CHANNEL,
+      version: PLAYER_BRIDGE_VERSION,
+      type: "score.load",
+      requestId: "partial-score",
+      payload: {
+        musicXml: "<score-partwise />",
+        scoreName: "Estudo parcial.musicxml",
+        allowPlayback: false
+      }
+    };
+
+    expect(parseHostToPlayerMessage(envelope)).toMatchObject({
+      ok: true,
+      message: { payload: { allowPlayback: false } }
+    });
+    expect(parseHostToPlayerMessage({
+      ...envelope,
+      payload: { ...envelope.payload, allowPlayback: "false" }
+    }).ok).toBe(false);
+    expect(parseHostToPlayerMessage({
+      ...envelope,
+      payload: { ...envelope.payload, token: "campo não permitido" }
+    }).ok).toBe(false);
+  });
+
   it.each([
     ["pause"],
     ["stop"],

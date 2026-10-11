@@ -1,0 +1,200 @@
+{
+  "schemaVersion": 1,
+  "sourceSha256": "a861036231a4de4bb638b9e675c0efd072147771c644eb59f2426b78c4354911",
+  "sourceOnlyReadings": [
+    {
+      "path": "docs/validation/acervo-review-2026-10-07/source-ledgers/csm100-sol-a-v2.json",
+      "sha256": "ef7a731bc2bead0c4b368e4fe46db32413833041900ee87aa9f3de95084e838a"
+    },
+    {
+      "path": "docs/validation/acervo-review-2026-10-07/source-ledgers/csm100-root-b-v2.json",
+      "sha256": "9ccf8e04efac2be6a2fe93ceb18d033d4a35273e50dfe246937db0be9e79ba82"
+    }
+  ],
+  "scope": "Regression excerpts only. Not a complete score, audio approval or new training data.",
+  "measures": [
+    8,
+    18,
+    19,
+    31
+  ],
+  "expectedSourceEvents": [
+    {
+      "part": "P1",
+      "measure": "8",
+      "voice": "1",
+      "staff": 1,
+      "kind": "note",
+      "pitch": "D:0:4",
+      "onset": 0,
+      "duration": 2,
+      "grace": false,
+      "sourceStatus": "confirmed"
+    },
+    {
+      "part": "P1",
+      "measure": "8",
+      "voice": "1",
+      "staff": 1,
+      "kind": "note",
+      "pitch": "D:0:4",
+      "onset": 2,
+      "duration": 2,
+      "grace": false,
+      "sourceStatus": "confirmed"
+    },
+    {
+      "part": "P1",
+      "measure": "18",
+      "voice": "1",
+      "staff": 1,
+      "kind": "note",
+      "pitch": "D:0:5",
+      "onset": 0,
+      "duration": 3,
+      "grace": false,
+      "sourceStatus": "confirmed"
+    },
+    {
+      "part": "P1",
+      "measure": "18",
+      "voice": "1",
+      "staff": 1,
+      "kind": "note",
+      "pitch": "B:0:4",
+      "onset": 3,
+      "duration": 1,
+      "grace": false,
+      "sourceStatus": "confirmed"
+    },
+    {
+      "part": "P1",
+      "measure": "19",
+      "voice": "1",
+      "staff": 1,
+      "kind": "note",
+      "pitch": "C:0:5",
+      "onset": 0,
+      "duration": 1,
+      "grace": false,
+      "sourceStatus": "confirmed"
+    },
+    {
+      "part": "P1",
+      "measure": "19",
+      "voice": "1",
+      "staff": 1,
+      "kind": "note",
+      "pitch": "D:0:5",
+      "onset": 1,
+      "duration": 1,
+      "grace": false,
+      "sourceStatus": "confirmed"
+    },
+    {
+      "part": "P1",
+      "measure": "19",
+      "voice": "1",
+      "staff": 1,
+      "kind": "note",
+      "pitch": "C:0:5",
+      "onset": 2,
+      "duration": 0.5,
+      "grace": false,
+      "sourceStatus": "confirmed"
+    },
+    {
+      "part": "P1",
+      "measure": "19",
+      "voice": "1",
+      "staff": 1,
+      "kind": "note",
+      "pitch": "B:0:4",
+      "onset": 2.5,
+      "duration": 0.5,
+      "grace": false,
+      "sourceStatus": "confirmed"
+    },
+    {
+      "part": "P1",
+      "measure": "19",
+      "voice": "1",
+      "staff": 1,
+      "kind": "note",
+      "pitch": "A:0:4",
+      "onset": 3,
+      "duration": 1,
+      "grace": false,
+      "sourceStatus": "confirmed"
+    },
+    {
+      "part": "P1",
+      "measure": "31",
+      "voice": "1",
+      "staff": 1,
+      "kind": "note",
+      "pitch": "F:0:4",
+      "onset": 0,
+      "duration": 1,
+      "grace": false,
+      "sourceStatus": "confirmed"
+    },
+    {
+      "part": "P1",
+      "measure": "31",
+      "voice": "1",
+      "staff": 1,
+      "kind": "note",
+      "pitch": "E:0:4",
+      "onset": 1,
+      "duration": 1,
+      "grace": false,
+      "sourceStatus": "confirmed"
+    },
+    {
+      "part": "P1",
+      "measure": "31",
+      "voice": "1",
+      "staff": 1,
+      "kind": "note",
+      "pitch": "D:0:4",
+      "onset": 2,
+      "duration": 1,
+      "grace": false,
+      "sourceStatus": "confirmed"
+    },
+    {
+      "part": "P1",
+      "measure": "31",
+      "voice": "1",
+      "staff": 1,
+      "kind": "note",
+      "pitch": "C:0:4",
+      "onset": 3,
+      "duration": 1,
+      "grace": false,
+      "sourceStatus": "confirmed"
+    }
+  ],
+  "files": [
+    {
+      "label": "original",
+      "file": "original-m8-m18-m19-m31.xml",
+      "sha256": "f902d94255f12805efccf101baba1c7c7385397cde956ec18fba8f8d2b648b9d",
+      "fullCandidate": {
+        "path": "output/omr/corpus-partituras-2026-10-07/prepared-retries/a861036231a4de4b/prepared-attempts/attempt-0001/application/preview.musicxml",
+        "sha256": "54491ae0153d893d7b03d811e0a294bb282713572b5eae0ae6e009db8e46fbda"
+      }
+    },
+    {
+      "label": "v2",
+      "file": "v2-m8-m18-m19-m31.xml",
+      "sha256": "42b28bcd21eb4ffd2bd1f829ed37e0bdd62f6dc39224a9cc674a4c9eae4c58dd",
+      "fullCandidate": {
+        "path": "output/omr/acervo-review-2026-10-07/csm100/v2/santa-maria-strela-do-dia.musicxml",
+        "sha256": "478d3672a9a6298aa035feb1884d52bfaddf8e5c0f00f802a7722d3e3e001099"
+      }
+    }
+  ],
+  "approvedForTraining": false
+}

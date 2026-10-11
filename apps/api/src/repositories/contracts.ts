@@ -1,4 +1,4 @@
-import type { AuditAction, AuditLog, EntitlementSummary, Role, Score, ScoreStatus, Session, User } from "../domain.js";
+import type { AuditAction, AuditLog, ConversionAttempt, ConversionAttemptKind, ConversionAttemptStatus, ConversionCoverage, ConversionResultStatus, EntitlementSummary, Role, Score, ScoreStatus, ScoreType, Session, User } from "../domain.js";
 
 export type CreateUserInput = {
   name: string;
@@ -18,11 +18,13 @@ export type CreateScoreInput = {
   mimeType: string;
   fileSize: number;
   preprocessingProfile?: string | null;
+  scoreType?: ScoreType;
+  scoreTypeSelected?: boolean;
   uploadStatus: ScoreStatus;
   conversionStatus: ScoreStatus;
 };
 
-export type UpdateScoreInput = Partial<Pick<Score, "originalFilename" | "uploadStatus" | "conversionStatus" | "errorMessage" | "warnings" | "confidence" | "musicxmlFilename" | "convertedAt" | "isFavorite">>;
+export type UpdateScoreInput = Partial<Pick<Score, "originalFilename" | "uploadStatus" | "conversionStatus" | "errorMessage" | "warnings" | "confidence" | "musicxmlFilename" | "convertedAt" | "isFavorite" | "resultStatus" | "coverage" | "lastErrorCode" | "scoreType" | "scoreTypeSelected" | "reviewStatus" | "reviewRevision" | "validation" | "reviewedAt" | "reviewedById">>;
 
 export type ScoreFilters = {
   userId?: string;
@@ -60,6 +62,19 @@ export interface ScoreRepository {
   softDelete(id: string, input: { deletedAt: Date; purgeAt: Date }): Promise<Score>;
   restore(id: string): Promise<Score>;
   delete(id: string): Promise<void>;
+  createAttempt(scoreId: string, kind: ConversionAttemptKind): Promise<ConversionAttempt>;
+  createManualAttempt(scoreId: string, scoreType?: ScoreType): Promise<ConversionAttempt>;
+  getAttempt(id: string): Promise<ConversionAttempt | null>;
+  listAttempts(scoreId: string): Promise<ConversionAttempt[]>;
+  listPendingAttempts(limit: number): Promise<ConversionAttempt[]>;
+  claimAttempt(id: string): Promise<string | null>;
+  requeueStaleAttempts(before: Date): Promise<number>;
+  finishAttempt(id: string, input: { status: ConversionAttemptStatus; errorCode?: string | null; errorMessage?: string | null; coverage?: ConversionCoverage | null; musicxmlFilename?: string | null }): Promise<ConversionAttempt>;
+  publishResult(scoreId: string, attemptId: string, claimToken: string, input: { resultStatus: ConversionResultStatus; coverage: ConversionCoverage; musicxmlFilename: string; warnings: string[]; reviewRevision?: string; validation?: NonNullable<Score["validation"]> }): Promise<Score | null>;
+  approveReview(scoreId: string, revision: string, reviewerId: string, validation?: NonNullable<Score["validation"]>): Promise<Score | null>;
+  approveAutomatic(scoreId: string, revision: string, validation: NonNullable<Score["validation"]>): Promise<Score | null>;
+  publishReviewDecision(scoreId: string, baseRevision: string, input: { musicxmlFilename: string; reviewRevision: string; validation: NonNullable<Score["validation"]>; warnings: string[] }): Promise<Score | null>;
+  failAttempt(scoreId: string, attemptId: string, claimToken: string, errorCode: string, message: string, automaticRetry: boolean): Promise<{ score: Score; retryAttempt: ConversionAttempt | null } | null>;
 }
 
 export interface EntitlementRepository {

@@ -1,5 +1,7 @@
 import { nanoid } from "nanoid";
-import type { AuditLog, EntitlementPlan, EntitlementSource, EntitlementSummary, Score, Session, User } from "../domain.js";
+import { randomUUID } from "node:crypto";
+import { scoreAvailability } from "../services/MusicalReview.js";
+import type { AuditLog, ConversionAttempt, ConversionAttemptKind, EntitlementPlan, EntitlementSource, EntitlementSummary, Score, Session, User } from "../domain.js";
 import { AppError } from "../errors/AppError.js";
 import type {
   AuditRepository,
@@ -90,6 +92,23 @@ export class InMemorySessionRepository implements SessionRepository {
 
 export class InMemoryScoreRepository implements ScoreRepository {
   private scores = new Map<string, Score>();
+  private attempts = new Map<string, ConversionAttempt>();
+  private claimTokens = new Map<string, string>();
+
+  private currentAttempt(scoreId: string): ConversionAttempt | null {
+    const attempts = [...this.attempts.values()].filter((attempt) => attempt.scoreId === scoreId);
+    return attempts.find((attempt) => attempt.kind === "manual")
+      ?? attempts.find((attempt) => attempt.kind === "automatic")
+      ?? attempts.find((attempt) => attempt.kind === "initial")
+      ?? null;
+  }
+
+  private newAttempt(scoreId: string, kind: ConversionAttemptKind): ConversionAttempt {
+    if ([...this.attempts.values()].some((attempt) => attempt.scoreId === scoreId && attempt.kind === kind)) throw new Error("Duplicate conversion attempt kind");
+    const attempt: ConversionAttempt = { id: nanoid(), scoreId, kind, status: "queued", errorCode: null, errorMessage: null, coverage: null, musicxmlFilename: null, createdAt: now(), startedAt: null, finishedAt: null };
+    this.attempts.set(attempt.id, attempt);
+    return attempt;
+  }
 
   async create(input: CreateScoreInput): Promise<Score> {
     const createdAt = now();
@@ -98,6 +117,19 @@ export class InMemoryScoreRepository implements ScoreRepository {
       errorMessage: null,
       warnings: null,
       confidence: null,
+      scoreType: input.scoreType ?? "melody",
+      scoreTypeSelected: input.scoreTypeSelected ?? false,
+      resultStatus: null,
+      coverage: null,
+      lastErrorCode: null,
+      reviewStatus: "unverified",
+      reviewRevision: null,
+      validation: null,
+      reviewedAt: null,
+      reviewedById: null,
+      canDownloadMusicXml: false,
+      canPlay: false,
+      canExportMidi: false,
       musicxmlFilename: null,
       isFavorite: false,
       deletedAt: null,
@@ -109,6 +141,7 @@ export class InMemoryScoreRepository implements ScoreRepository {
       preprocessingProfile: input.preprocessingProfile ?? null
     };
     this.scores.set(score.id, score);
+    this.newAttempt(score.id, "initial");
     return score;
   }
 
@@ -160,6 +193,7 @@ export class InMemoryScoreRepository implements ScoreRepository {
     const existing = this.scores.get(id);
     if (!existing) throw new Error("Score not found");
     const updated = { ...existing, ...input, updatedAt: now() };
+    Object.assign(updated, scoreAvailability(updated));
     this.scores.set(id, updated);
     return updated;
   }
@@ -182,6 +216,101 @@ export class InMemoryScoreRepository implements ScoreRepository {
 
   async delete(id: string): Promise<void> {
     this.scores.delete(id);
+    for (const [attemptId, attempt] of this.attempts) if (attempt.scoreId === id) this.attempts.delete(attemptId);
+  }
+
+  async createAttempt(scoreId: string, kind: ConversionAttemptKind): Promise<ConversionAttempt> {
+    const current = this.currentAttempt(scoreId);
+    if (current && ["queued", "processing"].includes(current.status)) throw new AppError(409, "Conversão em andamento.", "CONVERSION_IN_PROGRESS");
+    return this.newAttempt(scoreId, kind);
+  }
+  async createManualAttempt(scoreId: string, scoreType?: Score["scoreType"]): Promise<ConversionAttempt> {
+    const current = this.currentAttempt(scoreId);
+    if (current && ["queued", "processing"].includes(current.status)) throw new AppError(409, "Conversão em andamento.", "CONVERSION_IN_PROGRESS");
+    const attempt = this.newAttempt(scoreId, "manual");
+    const existing = this.scores.get(scoreId)!;
+    this.scores.set(scoreId, { ...existing, ...(scoreType ? { scoreType, scoreTypeSelected: true } : {}), ...(!existing.musicxmlFilename ? { conversionStatus: "queued" as const } : {}), updatedAt: now() });
+    return attempt;
+  }
+
+  async getAttempt(id: string): Promise<ConversionAttempt | null> { return this.attempts.get(id) ?? null; }
+  async listAttempts(scoreId: string): Promise<ConversionAttempt[]> { return [...this.attempts.values()].filter((item) => item.scoreId === scoreId).sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime()); }
+  async listPendingAttempts(limit: number): Promise<ConversionAttempt[]> { return [...this.attempts.values()].filter((item) => item.status === "queued" && !this.scores.get(item.scoreId)?.deletedAt && this.currentAttempt(item.scoreId)?.id === item.id).slice(0, limit); }
+  async claimAttempt(id: string): Promise<string | null> {
+    const attempt = this.attempts.get(id);
+    if (!attempt || attempt.status !== "queued" || this.currentAttempt(attempt.scoreId)?.id !== id || this.scores.get(attempt.scoreId)?.deletedAt) return null;
+    const token = randomUUID();
+    this.attempts.set(id, { ...attempt, status: "processing", startedAt: now() });
+    this.claimTokens.set(id, token);
+    const score = this.scores.get(attempt.scoreId)!;
+    if (!score.musicxmlFilename) this.scores.set(score.id, { ...score, conversionStatus: "processing", errorMessage: null, lastErrorCode: null, updatedAt: now() });
+    return token;
+  }
+  async requeueStaleAttempts(before: Date): Promise<number> {
+    let count = 0;
+    for (const [id, attempt] of this.attempts) if (attempt.status === "processing" && attempt.startedAt && attempt.startedAt < before && this.currentAttempt(attempt.scoreId)?.id === id) {
+      this.attempts.set(id, { ...attempt, status: "queued", startedAt: null });
+      this.claimTokens.delete(id);
+      count += 1;
+    }
+    return count;
+  }
+  async finishAttempt(id: string, input: Parameters<ScoreRepository["finishAttempt"]>[1]): Promise<ConversionAttempt> {
+    const attempt = this.attempts.get(id);
+    if (!attempt) throw new Error("Attempt not found");
+    const updated = { ...attempt, ...input, finishedAt: now() };
+    this.attempts.set(id, updated);
+    return updated;
+  }
+  async publishResult(scoreId: string, attemptId: string, claimToken: string, input: Parameters<ScoreRepository["publishResult"]>[3]): Promise<Score | null> {
+    const current = this.currentAttempt(scoreId);
+    if (current?.id !== attemptId || current.status !== "processing" || this.claimTokens.get(attemptId) !== claimToken) return null;
+    this.claimTokens.delete(attemptId);
+    this.attempts.set(attemptId, { ...current, status: input.resultStatus, coverage: input.coverage, musicxmlFilename: input.musicxmlFilename, finishedAt: now() });
+    const score = this.scores.get(scoreId)!;
+    const updatedBase: Score = { ...score, conversionStatus: "converted", resultStatus: input.resultStatus, coverage: input.coverage, musicxmlFilename: input.musicxmlFilename, warnings: input.warnings, confidence: null, errorMessage: null, lastErrorCode: null, convertedAt: now(), updatedAt: now(), reviewStatus: "needs_review", reviewRevision: input.reviewRevision ?? null, validation: input.validation ?? null, reviewedAt: null, reviewedById: null };
+    const updated: Score = { ...updatedBase, ...scoreAvailability(updatedBase) };
+    this.scores.set(scoreId, updated);
+    return updated;
+  }
+  async approveReview(scoreId: string, revision: string, reviewerId: string, validation?: NonNullable<Score["validation"]>): Promise<Score | null> {
+    const score = this.scores.get(scoreId);
+    if (!score || score.deletedAt || score.reviewRevision !== revision || !score.musicxmlFilename ||
+      [...this.attempts.values()].some((attempt) => attempt.scoreId === scoreId && ["queued", "processing"].includes(attempt.status))) return null;
+    if (score.reviewStatus === "approved") return score;
+    if (score.reviewStatus !== "needs_review") return null;
+    if (score.validation?.visualReview?.proposals.some((proposal) => proposal.status === "pending")) return null;
+    return this.update(scoreId, { reviewStatus: "approved", reviewedAt: now(), reviewedById: reviewerId,
+      ...(validation ? { validation: structuredClone(validation) } : {}) });
+  }
+  async approveAutomatic(scoreId: string, revision: string, validation: NonNullable<Score["validation"]>): Promise<Score | null> {
+    const score = this.scores.get(scoreId);
+    if (!score || score.deletedAt || score.conversionStatus !== "converted" || score.reviewStatus !== "needs_review"
+      || score.reviewRevision !== revision || !score.musicxmlFilename
+      || [...this.attempts.values()].some((attempt) => attempt.scoreId === scoreId && ["queued", "processing"].includes(attempt.status))
+      || validation.visualReview?.proposals.some((proposal) => proposal.status === "pending")) return null;
+    return this.update(scoreId, { reviewStatus: "approved", reviewedAt: now(), reviewedById: null,
+      validation: structuredClone(validation) });
+  }
+  async publishReviewDecision(scoreId: string, baseRevision: string, input: Parameters<ScoreRepository["publishReviewDecision"]>[2]): Promise<Score | null> {
+    const score = this.scores.get(scoreId);
+    if (!score || score.deletedAt || score.conversionStatus !== "converted" || score.reviewStatus !== "needs_review" || score.reviewRevision !== baseRevision || !score.musicxmlFilename
+      || [...this.attempts.values()].some((attempt) => attempt.scoreId === scoreId && ["queued", "processing"].includes(attempt.status))) return null;
+    const updatedBase: Score = { ...score, ...input, updatedAt: now(), reviewedAt: null, reviewedById: null, reviewStatus: "needs_review" };
+    const updated: Score = { ...updatedBase, ...scoreAvailability(updatedBase) };
+    this.scores.set(scoreId, updated);
+    return updated;
+  }
+  async failAttempt(scoreId: string, attemptId: string, claimToken: string, errorCode: string, message: string, automaticRetry: boolean): Promise<{ score: Score; retryAttempt: ConversionAttempt | null } | null> {
+    const current = this.currentAttempt(scoreId);
+    if (current?.id !== attemptId || current.status !== "processing" || this.claimTokens.get(attemptId) !== claimToken) return null;
+    this.claimTokens.delete(attemptId);
+    this.attempts.set(attemptId, { ...current, status: "failed", errorCode, errorMessage: message, finishedAt: now() });
+    const retryAttempt = automaticRetry && current.kind === "initial" ? this.newAttempt(scoreId, "automatic") : null;
+    const score = this.scores.get(scoreId)!;
+    const updated = { ...score, conversionStatus: (score.musicxmlFilename ? "converted" : retryAttempt ? "queued" : "failed") as Score["conversionStatus"], errorMessage: message, lastErrorCode: errorCode, updatedAt: now() };
+    this.scores.set(scoreId, updated);
+    return { score: updated, retryAttempt };
   }
 }
 

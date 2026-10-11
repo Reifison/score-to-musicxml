@@ -1,7 +1,9 @@
+import { randomUUID } from "node:crypto";
 import { Prisma, type ScoreStatus as PrismaScoreStatus } from "@prisma/client";
 import { prisma } from "../db/prisma.js";
-import type { AuditLog, EntitlementSummary, Score, Session, User } from "../domain.js";
+import type { AuditLog, ConversionAttempt, ConversionCoverage, EntitlementSummary, Score, Session, User } from "../domain.js";
 import { AppError } from "../errors/AppError.js";
+import { scoreAvailability } from "../services/MusicalReview.js";
 import type {
   AuditRepository,
   CreateScoreInput,
@@ -18,10 +20,35 @@ import type {
 
 function mapScore(score: Awaited<ReturnType<typeof prisma.score.findFirst>>): Score | null {
   if (!score) return null;
-  return {
+  const mapped: Score = {
     ...score,
-    warnings: Array.isArray(score.warnings) ? score.warnings.map(String) : null
+    confidence: null,
+    warnings: Array.isArray(score.warnings) ? score.warnings.map(String) : null,
+    coverage: score.coverage as ConversionCoverage | null,
+    validation: score.validation as Score["validation"],
+    canPlay: score.reviewStatus === "approved" && score.resultStatus === "complete" && score.scoreTypeSelected && Boolean(score.coverage && score.musicxmlFilename),
+    canExportMidi: score.reviewStatus === "approved" && score.resultStatus === "complete" && score.scoreTypeSelected && Boolean(score.coverage && score.musicxmlFilename),
+    canDownloadMusicXml: Boolean(score.musicxmlFilename && (score.reviewStatus === "approved" || !score.reviewRevision))
   };
+  return { ...mapped, ...scoreAvailability(mapped) };
+}
+
+function mapAttempt(attempt: Awaited<ReturnType<typeof prisma.conversionAttempt.findUnique>>): ConversionAttempt | null {
+  if (!attempt) return null;
+  const { claimToken: _claimToken, ...publicAttempt } = attempt;
+  return { ...publicAttempt, coverage: attempt.coverage as ConversionCoverage | null };
+}
+
+async function lockScore(tx: Prisma.TransactionClient, scoreId: string): Promise<void> {
+  await tx.$queryRaw`SELECT "id" FROM "Score" WHERE "id" = ${scoreId} FOR UPDATE`;
+}
+
+async function currentAttempt(tx: Prisma.TransactionClient, scoreId: string) {
+  const attempts = await tx.conversionAttempt.findMany({ where: { scoreId } });
+  return attempts.find((attempt) => attempt.kind === "manual")
+    ?? attempts.find((attempt) => attempt.kind === "automatic")
+    ?? attempts.find((attempt) => attempt.kind === "initial")
+    ?? null;
 }
 
 function mapAudit(log: Awaited<ReturnType<typeof prisma.auditLog.findFirst>>): AuditLog | null {
@@ -102,7 +129,7 @@ class PrismaSessionRepository implements SessionRepository {
 
 class PrismaScoreRepository implements ScoreRepository {
   async create(input: CreateScoreInput): Promise<Score> {
-    const score = await prisma.score.create({ data: input });
+    const score = await prisma.score.create({ data: { ...input, attempts: { create: { kind: "initial" } } } });
     return mapScore(score)!;
   }
 
@@ -162,7 +189,9 @@ class PrismaScoreRepository implements ScoreRepository {
       where: { id },
       data: {
         ...input,
-        warnings: input.warnings === undefined ? undefined : (input.warnings as Prisma.InputJsonArray | null) ?? Prisma.JsonNull
+        warnings: input.warnings === undefined ? undefined : (input.warnings as Prisma.InputJsonArray | null) ?? Prisma.JsonNull,
+        coverage: input.coverage === undefined ? undefined : input.coverage === null ? Prisma.JsonNull : input.coverage as Prisma.InputJsonValue,
+        validation: input.validation === undefined ? undefined : input.validation === null ? Prisma.JsonNull : input.validation as Prisma.InputJsonValue
       }
     });
     return mapScore(score)!;
@@ -182,6 +211,148 @@ class PrismaScoreRepository implements ScoreRepository {
     // Purge can be triggered concurrently by two list requests. deleteMany
     // keeps this final physical removal idempotent in that case.
     await prisma.score.deleteMany({ where: { id } });
+  }
+
+  async createAttempt(scoreId: string, kind: "initial" | "automatic" | "manual"): Promise<ConversionAttempt> {
+    return prisma.$transaction(async (tx) => {
+      await lockScore(tx, scoreId);
+      const current = await currentAttempt(tx, scoreId);
+      if (current && ["queued", "processing"].includes(current.status)) throw new AppError(409, "Conversão em andamento.", "CONVERSION_IN_PROGRESS");
+      return mapAttempt(await tx.conversionAttempt.create({ data: { scoreId, kind } }))!;
+    });
+  }
+
+  async createManualAttempt(scoreId: string, scoreType?: Score["scoreType"]): Promise<ConversionAttempt> {
+    return prisma.$transaction(async (tx) => {
+      await lockScore(tx, scoreId);
+      const current = await currentAttempt(tx, scoreId);
+      if (current && ["queued", "processing"].includes(current.status)) throw new AppError(409, "Conversão em andamento.", "CONVERSION_IN_PROGRESS");
+      const attempt = await tx.conversionAttempt.create({ data: { scoreId, kind: "manual" } });
+      const score = await tx.score.findUniqueOrThrow({ where: { id: scoreId } });
+      await tx.score.update({ where: { id: scoreId }, data: { ...(scoreType ? { scoreType, scoreTypeSelected: true } : {}), ...(!score.musicxmlFilename ? { conversionStatus: "queued" } : {}) } });
+      return mapAttempt(attempt)!;
+    });
+  }
+
+  async getAttempt(id: string): Promise<ConversionAttempt | null> {
+    return mapAttempt(await prisma.conversionAttempt.findUnique({ where: { id } }));
+  }
+
+  async listAttempts(scoreId: string): Promise<ConversionAttempt[]> {
+    return (await prisma.conversionAttempt.findMany({ where: { scoreId }, orderBy: { createdAt: "asc" } })).map((item) => mapAttempt(item)!);
+  }
+
+  async listPendingAttempts(limit: number): Promise<ConversionAttempt[]> {
+    const queued = await prisma.conversionAttempt.findMany({ where: { status: "queued", score: { deletedAt: null } }, orderBy: { createdAt: "asc" } });
+    const latest = new Map<string, typeof queued[number]>();
+    for (const attempt of queued) latest.set(attempt.scoreId, attempt);
+    return [...latest.values()].sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime()).slice(0, limit).map((item) => mapAttempt(item)!);
+  }
+
+  async claimAttempt(id: string): Promise<string | null> {
+    const found = await prisma.conversionAttempt.findUnique({ where: { id }, select: { scoreId: true } });
+    if (!found) return null;
+    return prisma.$transaction(async (tx) => {
+      await lockScore(tx, found.scoreId);
+      const current = await currentAttempt(tx, found.scoreId);
+      if (current?.id !== id || current.status !== "queued") return null;
+      const score = await tx.score.findUniqueOrThrow({ where: { id: found.scoreId } });
+      if (score.deletedAt) return null;
+      const claimToken = randomUUID();
+      await tx.conversionAttempt.update({ where: { id }, data: { status: "processing", startedAt: new Date(), claimToken } });
+      if (!score.musicxmlFilename) await tx.score.update({ where: { id: found.scoreId }, data: { conversionStatus: "processing", errorMessage: null, lastErrorCode: null } });
+      return claimToken;
+    });
+  }
+
+  async requeueStaleAttempts(before: Date): Promise<number> {
+    const candidates = await prisma.conversionAttempt.findMany({ where: { status: "processing", startedAt: { lt: before } }, select: { id: true, scoreId: true } });
+    let count = 0;
+    for (const candidate of candidates) {
+      count += await prisma.$transaction(async (tx) => {
+        await lockScore(tx, candidate.scoreId);
+        const current = await currentAttempt(tx, candidate.scoreId);
+        if (current?.id !== candidate.id || current.status !== "processing" || !current.startedAt || current.startedAt >= before) return 0;
+        await tx.conversionAttempt.update({ where: { id: candidate.id }, data: { status: "queued", startedAt: null, claimToken: null } });
+        return 1;
+      });
+    }
+    return count;
+  }
+
+  async finishAttempt(id: string, input: Parameters<ScoreRepository["finishAttempt"]>[1]): Promise<ConversionAttempt> {
+    const item = await prisma.conversionAttempt.update({ where: { id }, data: {
+      ...input,
+      coverage: input.coverage === undefined ? undefined : input.coverage === null ? Prisma.JsonNull : input.coverage as Prisma.InputJsonValue,
+      finishedAt: new Date()
+    } });
+    return mapAttempt(item)!;
+  }
+
+  async publishResult(scoreId: string, attemptId: string, claimToken: string, input: Parameters<ScoreRepository["publishResult"]>[3]): Promise<Score | null> {
+    return prisma.$transaction(async (tx) => {
+      await lockScore(tx, scoreId);
+      const current = await currentAttempt(tx, scoreId);
+      if (current?.id !== attemptId || current.status !== "processing" || current.claimToken !== claimToken) return null;
+      await tx.conversionAttempt.update({ where: { id: attemptId }, data: { status: input.resultStatus, coverage: input.coverage as Prisma.InputJsonValue, musicxmlFilename: input.musicxmlFilename, finishedAt: new Date() } });
+      const score = await tx.score.update({ where: { id: scoreId }, data: { conversionStatus: "converted", resultStatus: input.resultStatus, coverage: input.coverage as Prisma.InputJsonValue, musicxmlFilename: input.musicxmlFilename, warnings: input.warnings, confidence: null, errorMessage: null, lastErrorCode: null, convertedAt: new Date(), reviewStatus: "needs_review", reviewRevision: input.reviewRevision ?? null, validation: input.validation ? input.validation as Prisma.InputJsonValue : Prisma.JsonNull, reviewedAt: null, reviewedById: null } });
+      return mapScore(score)!;
+    });
+  }
+
+  async approveReview(scoreId: string, revision: string, reviewerId: string, validation?: NonNullable<Score["validation"]>): Promise<Score | null> {
+    return prisma.$transaction(async (tx) => {
+      await lockScore(tx, scoreId);
+      const score = await tx.score.findUnique({ where: { id: scoreId } });
+      if (!score || score.deletedAt || score.reviewRevision !== revision || !score.musicxmlFilename) return null;
+      if (await tx.conversionAttempt.count({ where: { scoreId, status: { in: ["queued", "processing"] } } })) return null;
+      if (score.reviewStatus === "approved") return mapScore(score);
+      if (score.reviewStatus !== "needs_review") return null;
+      if ((score.validation as Score["validation"])?.visualReview?.proposals.some((proposal) => proposal.status === "pending")) return null;
+      return mapScore(await tx.score.update({ where: { id: scoreId }, data: { reviewStatus: "approved", reviewedAt: new Date(), reviewedById: reviewerId,
+        ...(validation ? { validation: validation as Prisma.InputJsonValue } : {}) } }));
+    });
+  }
+
+  async approveAutomatic(scoreId: string, revision: string, validation: NonNullable<Score["validation"]>): Promise<Score | null> {
+    return prisma.$transaction(async (tx) => {
+      await lockScore(tx, scoreId);
+      const score = await tx.score.findUnique({ where: { id: scoreId } });
+      if (!score || score.deletedAt || score.conversionStatus !== "converted" || score.reviewStatus !== "needs_review"
+        || score.reviewRevision !== revision || !score.musicxmlFilename
+        || await tx.conversionAttempt.count({ where: { scoreId, status: { in: ["queued", "processing"] } } })
+        || validation.visualReview?.proposals.some((proposal) => proposal.status === "pending")) return null;
+      return mapScore(await tx.score.update({ where: { id: scoreId }, data: {
+        reviewStatus: "approved", reviewedAt: new Date(), reviewedById: null,
+        validation: validation as Prisma.InputJsonValue
+      } }));
+    });
+  }
+
+  async publishReviewDecision(scoreId: string, baseRevision: string, input: Parameters<ScoreRepository["publishReviewDecision"]>[2]): Promise<Score | null> {
+    return prisma.$transaction(async (tx) => {
+      await lockScore(tx, scoreId);
+      const score = await tx.score.findUnique({ where: { id: scoreId } });
+      if (!score || score.deletedAt || score.conversionStatus !== "converted" || score.reviewStatus !== "needs_review" || score.reviewRevision !== baseRevision || !score.musicxmlFilename) return null;
+      if (await tx.conversionAttempt.count({ where: { scoreId, status: { in: ["queued", "processing"] } } })) return null;
+      return mapScore(await tx.score.update({ where: { id: scoreId }, data: {
+        musicxmlFilename: input.musicxmlFilename, reviewRevision: input.reviewRevision, validation: input.validation as Prisma.InputJsonValue,
+        warnings: input.warnings, reviewStatus: "needs_review", reviewedAt: null, reviewedById: null
+      } }));
+    });
+  }
+
+  async failAttempt(scoreId: string, attemptId: string, claimToken: string, errorCode: string, message: string, automaticRetry: boolean): Promise<{ score: Score; retryAttempt: ConversionAttempt | null } | null> {
+    return prisma.$transaction(async (tx) => {
+      await lockScore(tx, scoreId);
+      const current = await currentAttempt(tx, scoreId);
+      if (current?.id !== attemptId || current.status !== "processing" || current.claimToken !== claimToken) return null;
+      await tx.conversionAttempt.update({ where: { id: attemptId }, data: { status: "failed", errorCode, errorMessage: message, finishedAt: new Date() } });
+      const existing = await tx.score.findUniqueOrThrow({ where: { id: scoreId } });
+      const retryAttempt = automaticRetry && current.kind === "initial" ? await tx.conversionAttempt.create({ data: { scoreId, kind: "automatic" } }) : null;
+      const score = await tx.score.update({ where: { id: scoreId }, data: { conversionStatus: existing.musicxmlFilename ? "converted" : retryAttempt ? "queued" : "failed", errorMessage: message, lastErrorCode: errorCode } });
+      return { score: mapScore(score)!, retryAttempt: mapAttempt(retryAttempt) };
+    });
   }
 }
 
@@ -224,7 +395,7 @@ class PrismaEntitlementRepository implements EntitlementRepository {
         freeScanNumber = entitlement.freeScansUsed + 1;
       }
 
-      const score = await tx.score.create({ data: input });
+      const score = await tx.score.create({ data: { ...input, attempts: { create: { kind: "initial" } } } });
       await tx.scanUsage.create({
         data: {
           userId: input.userId,

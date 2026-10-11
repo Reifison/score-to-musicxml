@@ -21,6 +21,38 @@ enum ScoreStatus {
   failed
 }
 
+enum ScoreType {
+  melody
+  piano
+  guitar_solo
+  guitar_duo
+}
+
+enum ConversionResultStatus {
+  complete
+  partial
+}
+
+enum ReviewStatus {
+  unverified
+  needs_review
+  approved
+}
+
+enum ConversionAttemptKind {
+  initial
+  automatic
+  manual
+}
+
+enum ConversionAttemptStatus {
+  queued
+  processing
+  complete
+  partial
+  failed
+}
+
 enum EntitlementPlan {
   free
   paid
@@ -53,6 +85,7 @@ enum AuditAction {
   score_deleted
   score_restored
   score_renamed
+  score_reviewed
   purchase_started
   purchase_completed
   purchase_failed
@@ -104,12 +137,22 @@ model Score {
   mimeType         String
   fileSize         Int
   preprocessingProfile String?
+  scoreType        ScoreType   @default(melody)
+  scoreTypeSelected Boolean    @default(false)
+  resultStatus     ConversionResultStatus?
+  coverage         Json?
+  lastErrorCode    String?
   uploadStatus     ScoreStatus @default(uploaded)
   conversionStatus ScoreStatus @default(uploaded)
   errorMessage     String?
   warnings         Json?
   confidence       Float?
   musicxmlFilename String?
+  reviewStatus     ReviewStatus @default(unverified)
+  reviewRevision   String?
+  validation       Json?
+  reviewedAt       DateTime?
+  reviewedById     String?
   isFavorite       Boolean     @default(false)
   deletedAt        DateTime?
   purgeAt          DateTime?
@@ -117,12 +160,33 @@ model Score {
   updatedAt        DateTime    @updatedAt
   convertedAt      DateTime?
   scanUsage        ScanUsage?
+  attempts         ConversionAttempt[]
 
   @@index([userId])
   @@index([conversionStatus])
   @@index([createdAt])
   @@index([userId, deletedAt])
   @@index([purgeAt])
+}
+
+model ConversionAttempt {
+  id               String                  @id @default(uuid())
+  scoreId          String
+  score            Score                   @relation(fields: [scoreId], references: [id], onDelete: Cascade)
+  kind             ConversionAttemptKind
+  status           ConversionAttemptStatus @default(queued)
+  errorCode        String?
+  errorMessage     String?
+  coverage         Json?
+  musicxmlFilename String?
+  createdAt        DateTime                @default(now())
+  startedAt        DateTime?
+  finishedAt       DateTime?
+  claimToken       String?
+
+  @@index([scoreId, createdAt])
+  @@unique([scoreId, kind])
+  @@index([status, createdAt])
 }
 
 model Entitlement {

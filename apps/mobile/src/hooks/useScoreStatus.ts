@@ -9,8 +9,9 @@ export function useScoreStatus(token: string | null | undefined, scoreId: string
     queryFn: () => api.score(token!, scoreId!),
     enabled: Boolean(token && scoreId),
     refetchInterval: (query) => {
-      const status = query.state.data?.score.conversionStatus;
-      return status && activeStatuses.has(status) ? 3000 : false;
+      const score = query.state.data?.score;
+      const status = score?.conversionStatus;
+      return (status && activeStatuses.has(status)) || score?.reviewStatus === "needs_review" ? 3000 : false;
     }
   });
 }
