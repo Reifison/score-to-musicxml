@@ -27,6 +27,7 @@ class SceneDelegate: UIResponder, UIWindowSceneDelegate {
     if let existingController {
       window.rootViewController = existingController
       window.makeKeyAndVisible()
+      appDelegate.completeSceneLaunch()
       self.scene(scene, openURLContexts: connectionOptions.urlContexts)
       for activity in connectionOptions.userActivities {
         self.scene(scene, continue: activity)
@@ -58,6 +59,7 @@ class SceneDelegate: UIResponder, UIWindowSceneDelegate {
       self.scene(scene, continue: activity)
     }
     factory.startReactNative(withModuleName: "main", in: window, launchOptions: launchOptions)
+    appDelegate.completeSceneLaunch()
     appDelegate.appLaunchOptions = nil
   }
 

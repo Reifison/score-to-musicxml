@@ -67,7 +67,7 @@ export function UploadPanel({
           <div>
             <strong>Envio recebido: {recentUpload.originalFilename}</strong>
             <span>Acompanhe a conversão. Situação atual:</span>
-            <StatusBadge status={recentUpload.conversionStatus} resultStatus={recentUpload.resultStatus} />
+            <StatusBadge status={recentUpload.conversionStatus} resultStatus={recentUpload.resultStatus} recognitionQuality={recentUpload.recognitionQuality} />
           </div>
           <button className="secondary-button" type="button" onClick={() => onOpenScore(recentUpload)}>
             Ver andamento

@@ -48,4 +48,21 @@ describe("ScoreCard delivery availability", () => {
 
     expect(props.onDownload).toHaveBeenCalledWith(expect.objectContaining({ reviewStatus: "needs_review" }));
   });
+
+  it("shows a recognition warning while preserving API-provided downloads", () => {
+    render(<ScoreCard score={{
+      ...baseScore,
+      canDownloadMusicXml: true,
+      recognitionQuality: {
+        status: "needs_review",
+        sourceComparison: "compared",
+        checkedMeasures: 4,
+        accuracyVerified: false,
+        issues: []
+      }
+    }} {...props} />);
+
+    expect(screen.getByText("Revisar partitura")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Baixar MusicXML" })).toBeEnabled();
+  });
 });

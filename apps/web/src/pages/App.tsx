@@ -7,6 +7,7 @@ import { ScoreCard } from "../components/ScoreCard.js";
 import { ScoreDetails } from "../components/ScoreDetails.js";
 import { UploadPanel } from "../components/UploadPanel.js";
 import { canDownloadScoreMusicXml, canExportScoreMidi } from "../score/availability.js";
+import { shouldPollConversionScore } from "../score/conversionProgressPresentation.js";
 import type { AuditLog, Score, ScoreStatus, ScoreType, User } from "../types/domain.js";
 
 type View = "home" | "scores" | "favorites" | "trash" | "settings" | "profile" | "admin" | "admin-users" | "admin-scores" | "audits";
@@ -33,9 +34,39 @@ export function App() {
   const [adminError, setAdminError] = useState("");
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
-  const scoresRequestInFlight = useRef(false);
+  const scoresRequestInFlight = useRef<number | null>(null);
   const selectedIdRef = useRef<string | null>(null);
   const detailRequestSequence = useRef(new Map<string, number>());
+  const sessionEpochRef = useRef(0);
+  const sessionUserIdRef = useRef<string | null>(null);
+  const authRequestSequenceRef = useRef(0);
+
+  function beginSession(nextUser: User | null) {
+    sessionEpochRef.current += 1;
+    authRequestSequenceRef.current += 1;
+    sessionUserIdRef.current = nextUser?.id ?? null;
+    scoresRequestInFlight.current = null;
+    detailRequestSequence.current.clear();
+    selectedIdRef.current = null;
+    setScores([]);
+    setRecentUpload(null);
+    setTrashScores([]);
+    setUsers([]);
+    setAudits([]);
+    setSelectedId(null);
+    setSelectedDetail(null);
+    setDetailError("");
+    setDetailPollingPaused(false);
+    setScoresLoading(false);
+    setScoresError("");
+    setPollingPaused(false);
+    setAdminError("");
+    setError("");
+    setNotice("");
+    setView("home");
+    setUser(nextUser);
+    window.dispatchEvent(new Event("score-to-musicxml:session-changed"));
+  }
 
   const isAdmin = normalizeRole(user?.role) === "admin";
   const selected = useMemo(
@@ -50,14 +81,16 @@ export function App() {
 
   const refreshScores = useCallback(async ({ silent = false }: { silent?: boolean } = {}) => {
     if (silent && document.visibilityState === "hidden") return;
-    if (scoresRequestInFlight.current) return;
-    scoresRequestInFlight.current = true;
+    const epoch = sessionEpochRef.current;
+    if (!sessionUserIdRef.current || scoresRequestInFlight.current === epoch) return;
+    scoresRequestInFlight.current = epoch;
     if (!silent) {
       setScoresLoading(true);
       setPollingPaused(false);
     }
     try {
       const response = await api<{ scores: Score[] }>("/api/scores");
+      if (sessionEpochRef.current !== epoch) return;
       setScores((current) => mergeScoreList(current, response.scores));
       setRecentUpload((current) => {
         if (!current) return null;
@@ -67,32 +100,42 @@ export function App() {
       setScoresError("");
       setPollingPaused(false);
     } catch (err) {
-      if (!expireSessionOnUnauthorized(err)) {
+      if (sessionEpochRef.current !== epoch) return;
+      if (!expireSessionOnUnauthorized(err, epoch)) {
         setScoresError(errorMessage(err, "Não foi possível atualizar suas partituras."));
         setPollingPaused(true);
       }
     } finally {
-      scoresRequestInFlight.current = false;
-      setScoresLoading(false);
+      if (scoresRequestInFlight.current === epoch) scoresRequestInFlight.current = null;
+      if (sessionEpochRef.current === epoch) setScoresLoading(false);
     }
   }, []);
 
   const refreshAdmin = useCallback(async () => {
-    if (normalizeRole(user?.role) !== "admin") return;
+    if (normalizeRole(user?.role) !== "admin" || sessionUserIdRef.current !== user?.id) return;
+    const epoch = sessionEpochRef.current;
     setAdminError("");
-    const [userResponse, auditResponse] = await Promise.all([
-      api<{ users: User[] }>("/api/users"),
-      api<{ audits: AuditLog[] }>("/api/admin/audits")
-    ]);
-    setUsers(userResponse.users);
-    setAudits(auditResponse.audits);
-  }, [user?.role]);
+    try {
+      const [userResponse, auditResponse] = await Promise.all([
+        api<{ users: User[] }>("/api/users"),
+        api<{ audits: AuditLog[] }>("/api/admin/audits")
+      ]);
+      if (sessionEpochRef.current !== epoch) return;
+      setUsers(userResponse.users);
+      setAudits(auditResponse.audits);
+    } catch (err) {
+      if (sessionEpochRef.current === epoch) throw err;
+    }
+  }, [user?.id, user?.role]);
 
   const loadScoreDetail = useCallback(async (scoreId: string) => {
+    const epoch = sessionEpochRef.current;
+    if (!sessionUserIdRef.current) return null;
     const requestSequence = (detailRequestSequence.current.get(scoreId) ?? 0) + 1;
     detailRequestSequence.current.set(scoreId, requestSequence);
     try {
       const response = await api<{ score: Score }>(`/api/scores/${scoreId}`);
+      if (sessionEpochRef.current !== epoch) return null;
       if (detailRequestSequence.current.get(scoreId) !== requestSequence) return response.score;
       setScores((current) => current.map((score) => score.id === scoreId ? mergeScoreSnapshot(score, response.score) : score));
       setRecentUpload((current) => current?.id === scoreId ? mergeScoreSnapshot(current, response.score) : current);
@@ -102,8 +145,9 @@ export function App() {
       }
       return response.score;
     } catch (err) {
+      if (sessionEpochRef.current !== epoch) return null;
       if (detailRequestSequence.current.get(scoreId) !== requestSequence) return null;
-      if (!expireSessionOnUnauthorized(err) && selectedIdRef.current === scoreId) {
+      if (!expireSessionOnUnauthorized(err, epoch) && selectedIdRef.current === scoreId) {
         setDetailError(errorMessage(err, "Não foi possível atualizar os detalhes da partitura."));
         setDetailPollingPaused(true);
       }
@@ -112,12 +156,19 @@ export function App() {
   }, []);
 
   const refreshScoreDetail = useCallback(async (scoreId: string) => {
+    if (selectedIdRef.current !== scoreId) return null;
     setDetailPollingPaused(false);
     return loadScoreDetail(scoreId);
   }, [loadScoreDetail]);
 
   async function refreshTrash() {
-    setTrashScores(await listTrashScores());
+    const epoch = sessionEpochRef.current;
+    try {
+      const result = await listTrashScores();
+      if (sessionEpochRef.current === epoch) setTrashScores(result);
+    } catch (err) {
+      if (sessionEpochRef.current === epoch) throw err;
+    }
   }
 
   useEffect(() => {
@@ -128,10 +179,7 @@ export function App() {
     const expireSession = () => {
       setSessionNotice("Sua sessão expirou. Entre novamente para continuar.");
       setSessionState("signed-out");
-      setUser(null);
-      setSelectedId(null);
-      selectedIdRef.current = null;
-      setSelectedDetail(null);
+      beginSession(null);
     };
     window.addEventListener("score-to-musicxml:session-expired", expireSession);
     return () => window.removeEventListener("score-to-musicxml:session-expired", expireSession);
@@ -145,16 +193,16 @@ export function App() {
     });
   }, [user?.id, refreshScores, refreshAdmin]);
 
-  const hasActiveScoreConversion = scores.some((score) => ["uploaded", "queued", "processing"].includes(score.conversionStatus));
-  const hasActiveSelectedAttempt = selectedDetail?.attempts?.some((attempt) => attempt.status === "queued" || attempt.status === "processing") ?? false;
+  const hasActiveScoreConversion = scores.some((score) => shouldPollConversionScore(score));
+  const hasActiveSelectedConversion = shouldPollConversionScore(selectedDetail ?? undefined);
   const hasPendingAutomatedDelivery = scores.some((score) => score.reviewStatus === "needs_review") || selectedDetail?.reviewStatus === "needs_review";
-  const hasActiveConversions = hasActiveScoreConversion || hasActiveSelectedAttempt || hasPendingAutomatedDelivery;
+  const hasActiveConversions = hasActiveScoreConversion || hasActiveSelectedConversion || hasPendingAutomatedDelivery;
   useEffect(() => {
     if (!user || !hasActiveConversions || pollingPaused) return;
     const poll = () => {
       if (document.visibilityState !== "visible") return;
       if (hasActiveScoreConversion || hasPendingAutomatedDelivery) void refreshScores({ silent: true });
-      if ((hasActiveSelectedAttempt || selectedDetail?.reviewStatus === "needs_review") && selectedId && !detailPollingPaused) void loadScoreDetail(selectedId);
+      if ((hasActiveSelectedConversion || selectedDetail?.reviewStatus === "needs_review") && selectedId && !detailPollingPaused) void loadScoreDetail(selectedId);
     };
     const timer = window.setInterval(poll, 5000);
     document.addEventListener("visibilitychange", poll);
@@ -162,7 +210,7 @@ export function App() {
       window.clearInterval(timer);
       document.removeEventListener("visibilitychange", poll);
     };
-  }, [user?.id, hasActiveConversions, hasActiveScoreConversion, hasActiveSelectedAttempt, hasPendingAutomatedDelivery, selectedDetail?.reviewStatus, selectedId, pollingPaused, detailPollingPaused, refreshScores, loadScoreDetail]);
+  }, [user?.id, hasActiveConversions, hasActiveScoreConversion, hasActiveSelectedConversion, hasPendingAutomatedDelivery, selectedDetail?.reviewStatus, selectedId, pollingPaused, detailPollingPaused, refreshScores, loadScoreDetail]);
 
   useEffect(() => {
     if (!user || view !== "trash") return;
@@ -172,15 +220,18 @@ export function App() {
   }, [user?.id, view]);
 
   async function checkSession() {
+    const requestSequence = ++authRequestSequenceRef.current;
     setSessionState("checking");
     setSessionError("");
     try {
       const response = await api<{ user: User }>("/api/auth/me");
-      setUser(response.user);
+      if (authRequestSequenceRef.current !== requestSequence) return;
+      beginSession(response.user);
       setSessionNotice("");
       setSessionState("authenticated");
     } catch (err) {
-      setUser(null);
+      if (authRequestSequenceRef.current !== requestSequence) return;
+      beginSession(null);
       if (err instanceof ApiError && err.status === 401) {
         setSessionNotice("");
         setSessionState("signed-out");
@@ -191,14 +242,12 @@ export function App() {
     }
   }
 
-  function expireSessionOnUnauthorized(err: unknown) {
+  function expireSessionOnUnauthorized(err: unknown, expectedEpoch = sessionEpochRef.current) {
+    if (expectedEpoch !== sessionEpochRef.current) return true;
     if (!(err instanceof ApiError) || err.status !== 401) return false;
     setSessionNotice("Sua sessão expirou. Entre novamente para continuar.");
     setSessionState("signed-out");
-    setUser(null);
-    setSelectedId(null);
-    selectedIdRef.current = null;
-    setSelectedDetail(null);
+    beginSession(null);
     return true;
   }
 
@@ -227,16 +276,13 @@ export function App() {
       </main>
     );
   }
-  if (!user) return <Login onLogged={(loggedUser) => { setUser(loggedUser); setSessionNotice(""); setSessionState("authenticated"); }} notice={sessionNotice} />;
+  if (!user) return <Login onLogged={(loggedUser) => { beginSession(loggedUser); setSessionNotice(""); setSessionState("authenticated"); }} notice={sessionNotice} />;
 
   async function logout() {
     setError("");
     try {
       await api("/api/auth/logout", { method: "POST" });
-      setUser(null);
-      selectedIdRef.current = null;
-      setSelectedId(null);
-      setSelectedDetail(null);
+      beginSession(null);
       setSessionState("signed-out");
     } catch (err) {
       if (!expireSessionOnUnauthorized(err)) setError(errorMessage(err, "Não foi possível sair agora."));
@@ -244,12 +290,14 @@ export function App() {
   }
 
   async function upload(file: File, scoreType: ScoreType) {
+    const epoch = sessionEpochRef.current;
     setNotice("");
     setError("");
     const formData = new FormData();
     formData.append("file", file);
     formData.append("scoreType", scoreType);
     const response = await api<{ score: Score }>("/api/scores", { method: "POST", body: formData });
+    if (sessionEpochRef.current !== epoch) return response.score;
     setRecentUpload(response.score);
     setScores((current) => [response.score, ...current.filter((score) => score.id !== response.score.id)]);
     void refreshScores({ silent: true });
@@ -266,11 +314,13 @@ export function App() {
   }
 
   async function retryScore(scoreId: string, scoreType?: ScoreType) {
+    const epoch = sessionEpochRef.current;
     setDetailPollingPaused(false);
     const response = await api<{ score: Score }>(`/api/scores/${scoreId}/retry`, {
       method: "POST",
       ...(scoreType ? { body: JSON.stringify({ scoreType }) } : {})
     });
+    if (sessionEpochRef.current !== epoch) return response.score;
     setScores((current) => current.map((score) => score.id === scoreId ? mergeScoreSnapshot(score, response.score) : score));
     setRecentUpload((current) => current?.id === scoreId ? mergeScoreSnapshot(current, response.score) : current);
     if (selectedIdRef.current === scoreId) {
@@ -283,12 +333,15 @@ export function App() {
   async function deleteScore(score: Score) {
     if (!window.confirm(`Excluir ${score.originalFilename}?`)) return;
     setError("");
+    const epoch = sessionEpochRef.current;
     try {
       await deleteScoreRequest(score.id);
+      if (sessionEpochRef.current !== epoch) return;
       setRecentUpload((current) => current?.id === score.id ? null : current);
       setNotice("Partitura movida para a lixeira por 7 dias.");
       await refreshScores();
     } catch (err) {
+      if (sessionEpochRef.current !== epoch) return;
       setError(err instanceof Error ? err.message : "Não foi possível mover a partitura para a lixeira.");
     }
   }
@@ -296,24 +349,30 @@ export function App() {
   async function bulkDeleteScores(selectedScores: Score[]) {
     if (!selectedScores.length || !window.confirm(`Mover ${selectedScores.length} partituras para a lixeira? Elas poderão ser restauradas por 7 dias.`)) return;
     setError("");
+    const epoch = sessionEpochRef.current;
     try {
       await bulkScoreAction(selectedScores.map((score) => score.id), "delete");
+      if (sessionEpochRef.current !== epoch) return;
       setNotice(`${selectedScores.length} ${selectedScores.length === 1 ? "partitura movida" : "partituras movidas"} para a lixeira.`);
       await refreshScores();
     } catch (err) {
+      if (sessionEpochRef.current !== epoch) return;
       setError(err instanceof Error ? err.message : "Não foi possível mover as partituras para a lixeira.");
     }
   }
 
   async function toggleFavorite(score: Score) {
     setError("");
+    const epoch = sessionEpochRef.current;
     try {
       const response = await api<{ score: Score }>(`/api/scores/${score.id}/favorite`, {
         method: "PATCH",
         body: JSON.stringify({ isFavorite: !score.isFavorite })
       });
+      if (sessionEpochRef.current !== epoch) return;
       setScores((current) => current.map((item) => (item.id === score.id ? response.score : item)));
     } catch (err) {
+      if (sessionEpochRef.current !== epoch) return;
       setError(err instanceof Error ? err.message : "Não foi possível atualizar os favoritos.");
     }
   }
@@ -321,39 +380,49 @@ export function App() {
   async function bulkFavoriteScores(selectedScores: Score[]) {
     if (!selectedScores.length) return;
     setError("");
+    const epoch = sessionEpochRef.current;
     try {
       await bulkScoreAction(selectedScores.map((score) => score.id), "favorite", true);
+      if (sessionEpochRef.current !== epoch) return;
       setScores((current) => current.map((score) => selectedScores.some((selected) => selected.id === score.id) ? { ...score, isFavorite: true } : score));
       setNotice(`${selectedScores.length === 1 ? "Partitura marcada" : "Partituras marcadas"} como favorita${selectedScores.length === 1 ? "" : "s"}.`);
     } catch (err) {
+      if (sessionEpochRef.current !== epoch) return;
       setError(err instanceof Error ? err.message : "Não foi possível atualizar os favoritos.");
     }
   }
 
   async function restoreTrashScore(score: TrashScore) {
     setError("");
+    const epoch = sessionEpochRef.current;
     try {
       await restoreScore(score.id);
+      if (sessionEpochRef.current !== epoch) return;
       setTrashScores((current) => current.filter((item) => item.id !== score.id));
       await refreshScores();
+      if (sessionEpochRef.current !== epoch) return;
       setNotice("Partitura restaurada.");
     } catch (err) {
+      if (sessionEpochRef.current !== epoch) return;
       setError(err instanceof Error ? err.message : "Não foi possível restaurar a partitura.");
     }
   }
 
   async function renameScore(score: Score, originalFilename: string) {
+    const epoch = sessionEpochRef.current;
     setError("");
     setNotice("");
     const response = await api<{ score: Score }>(`/api/scores/${score.id}`, {
       method: "PATCH",
       body: JSON.stringify({ originalFilename })
     });
+    if (sessionEpochRef.current !== epoch) return;
     setScores((current) => current.map((item) => (item.id === score.id ? response.score : item)));
     setNotice("Nome da partitura atualizado.");
   }
 
   async function downloadScore(score: Score) {
+    const epoch = sessionEpochRef.current;
     setError("");
     setNotice("");
     if (!canDownloadScoreMusicXml(score)) {
@@ -362,13 +431,16 @@ export function App() {
     }
     try {
       await downloadMusicXml(score.id, musicXmlName(score.originalFilename));
+      if (sessionEpochRef.current !== epoch) return;
       setNotice(`Download iniciado: ${musicXmlName(score.originalFilename)}`);
     } catch (err) {
+      if (sessionEpochRef.current !== epoch) return;
       setError(err instanceof Error ? err.message : "Não foi possível baixar o MusicXML.");
     }
   }
 
   async function downloadScoreMidi(score: Score) {
+    const epoch = sessionEpochRef.current;
     setError("");
     setNotice("");
     if (score.resultStatus === "partial") {
@@ -381,8 +453,10 @@ export function App() {
     }
     try {
       await downloadMidi(score.id, midiName(score.originalFilename));
+      if (sessionEpochRef.current !== epoch) return;
       setNotice(`Download iniciado: ${midiName(score.originalFilename)}`);
     } catch (err) {
+      if (sessionEpochRef.current !== epoch) return;
       setError(err instanceof Error ? err.message : "Não foi possível baixar o MIDI.");
     }
   }

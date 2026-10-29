@@ -107,6 +107,7 @@ model User {
   sessions     Session[]
   scores       Score[]
   entitlement  Entitlement?
+  applePurchases ApplePurchase[]
   grantsMade   Entitlement[] @relation("EntitlementGrantedBy")
   scanUsages   ScanUsage[]
   audits       AuditLog[] @relation("AuditActor")
@@ -141,6 +142,8 @@ model Score {
   scoreTypeSelected Boolean    @default(false)
   resultStatus     ConversionResultStatus?
   coverage         Json?
+  conversionProgress Json?
+  conversionPreview Json?
   lastErrorCode    String?
   uploadStatus     ScoreStatus @default(uploaded)
   conversionStatus ScoreStatus @default(uploaded)
@@ -196,7 +199,8 @@ model Entitlement {
   plan                       EntitlementPlan @default(free)
   source                     EntitlementSource @default(free)
   freeScansUsed              Int             @default(0)
-  appleOriginalTransactionId String?         @unique
+  appleOriginalTransactionId String?
+  appleEnvironment           String?
   appleProductId             String?
   googlePurchaseToken        String?         @unique
   googleProductId            String?
@@ -211,6 +215,27 @@ model Entitlement {
   @@index([plan])
   @@index([source])
   @@index([grantedById])
+  @@unique([appleEnvironment, appleOriginalTransactionId])
+}
+
+// Durable claims survive entitlement changes so an older signed receipt cannot
+// restore a refunded purchase. Sandbox and production IDs are separate domains.
+model ApplePurchase {
+  id                         String   @id @default(uuid())
+  userId                     String?
+  user                       User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
+  environment                String
+  originalTransactionId      String
+  productId                  String
+  purchasedAt                DateTime?
+  revoked                    Boolean  @default(false)
+  lastNotificationId         String?
+  lastNotificationSignedAt   DateTime?
+  createdAt                  DateTime @default(now())
+  updatedAt                  DateTime @updatedAt
+
+  @@unique([environment, originalTransactionId])
+  @@index([userId])
 }
 
 model GooglePlayNotification {

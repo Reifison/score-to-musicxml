@@ -25,6 +25,22 @@ export type VisualSourceSegment = {
   rectangle?: { left: number; top: number; width: number; height: number };
 };
 
+/** Source observations on a page whose measures cannot be aligned with XML. */
+export type VisualUnmappedSourceMeasure = {
+  id: string;
+  page: number;
+  partIndex: number;
+  /** Index in this page's independent reading, never an editable XML index. */
+  sourceMeasureIndex: number;
+  association: "ambiguous";
+  sourceAsset: string;
+  sourceImageSHA256: string;
+  rectangle?: { left: number; top: number; width: number; height: number };
+  contextOnly: boolean;
+  readable: boolean;
+  keyFifths?: number;
+};
+
 export type VisualCorrectionProposal = {
   id: string;
   status: "pending" | "accepted" | "rejected";
@@ -51,9 +67,10 @@ export type SourceVisualReview = {
   checkedMeasures: number;
   unknownMeasures: number;
   segments: VisualSourceSegment[];
+  sourceMeasures?: VisualUnmappedSourceMeasure[];
   proposals: VisualCorrectionProposal[];
   limitations: string[];
-  diagnostics?: Array<{ code: string; page?: number; message: string }>;
+  diagnostics?: Array<{ code: string; page?: number; measure?: string; partId?: string; message: string }>;
   accuracyVerified: false;
   trainingEligible: false;
   history: Array<{

@@ -1,6 +1,7 @@
-import { constants as fsConstants } from "node:fs";
+import { constants as fsConstants, type Dirent } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { DOMParser, XMLSerializer } from "@xmldom/xmldom";
 import sharp from "sharp";
 import { env } from "../config/env.js";
@@ -15,6 +16,14 @@ import { compareMusicXmlCandidateAgreement } from "./MusicXmlCandidateAgreement.
 import { compareSourceStaffLayout } from "./SourceImageLayout.js";
 import { assertConversionActive, runCommand } from "./SubprocessRunner.js";
 import { isTemporaryConversionError } from "./ScoreConversionService.js";
+import { inspectAudiverisProcessOutput, redactedAudiverisProcessLog } from "./AudiverisProcessDiagnostics.js";
+import { readAudiverisSourceAnchors, readAudiverisNativeMeasureEvidence } from "./AudiverisSourceAnchors.js";
+import { validSourceImageTransform, type SourceImageTransform } from "./SourceImageTransform.js";
+import { recoverNativeMeasureEvents, type NativeEventRecoveryReport } from "./NativeMeasureEventRecovery.js";
+import { readIndependentSourceNotation } from "./IndependentSourceRecognition.js";
+import { readEighthRestImageEvidence } from "./EighthRestImageEvidence.js";
+import { reconcileAutomaticMusicXmlCandidates, type AutomaticReconciliationResult } from "./AutomaticCandidateReconciliation.js";
+import { ConversionCheckpointStore, conversionCheckpointDigest, type ConversionCheckpointIdentity } from "./ConversionCheckpointStore.js";
 
 const execFileAsync = runCommand;
 const maxAudiverisDimension = 4400;
@@ -64,6 +73,8 @@ type PreparedAttempt = {
   paths: string[];
   description: string;
   combineSegments?: boolean;
+  sourceTransform?: SourceImageTransform;
+  reconciliationFallback?: boolean;
 };
 
 type CompletedAttempt = {
@@ -77,6 +88,11 @@ type CandidateSelection = {
   attempt: CompletedAttempt;
   reason: string;
   mode: "original" | "structural-dominance" | "validation";
+};
+
+type CheckpointContext = {
+  store: ConversionCheckpointStore;
+  global: Record<string, unknown>;
 };
 
 const hardTimingIssueCodes = new Set(["RHYTHM_LONG", "RHYTHM_SHORT", "RHYTHM_INVALID_POSITION", "VOICE_EARLY_END"]);
@@ -360,12 +376,17 @@ export type CandidateEvidence = {
   candidate: number;
   candidateIds?: number[];
   selected: boolean;
+  /** Native export passed structural and process-integrity checks. Derived XML has no native export. */
+  exportValid?: boolean;
   reason: string;
   xml: string;
   sourceImagePath?: string;
   /** Full original page raster; coordinates from transformed preparations cannot be assumed here. */
   originalImagePath?: string;
   nativeArchivePath?: string;
+  sourceTransform?: SourceImageTransform;
+  automaticReconciliation?: Omit<AutomaticReconciliationResult, "musicXml">;
+  automaticEventRecovery?: NativeEventRecoveryReport;
   sourceImagePaths?: Array<{ candidate: number; path: string; sha256: string }>;
   validation: MusicXmlValidation;
 };
@@ -379,13 +400,44 @@ export type OmrResult = {
   engine?: { name: string; version: string | null };
 };
 
+export type OmrReadyPage = {
+  page: number;
+  totalPages: number;
+  result: OmrResult;
+};
+
 export type OmrConversionOptions = {
   preprocessingProfile?: string | null;
+  /** Local opt-in experiment. Never enabled by a user upload or default configuration. */
+  experimentalAutomaticRecovery?: boolean;
   scoreType?: ScoreType;
   scoreTypeSelected?: boolean;
   signal?: AbortSignal;
   pageDecisions?: VerifiedPageDecision[];
   preparedInspection?: PreparedInputInspection;
+  /** Durable, score-private directory retained across retry work directories. */
+  checkpointDirectory?: string;
+  /**
+   * Persisted by the conversion owner with its lease fence. A rejection must
+   * abort this adapter call; it is never downgraded to a page-recognition
+   * failure.
+   */
+  onProgress?: (progress: OmrPageProgress) => Promise<void>;
+  /**
+   * Publishes a successfully selected page before recognition advances. A
+   * rejection aborts the conversion and is never downgraded to a page failure.
+   */
+  onPageReady?: (page: OmrReadyPage) => Promise<void>;
+};
+
+export type OmrPageProgress = {
+  stage: "preparing" | "recognizing" | "validating";
+  totalPages: number | null;
+  currentPage: number | null;
+  completedPages: number[];
+  failedPages: number[];
+  excludedPages: number[];
+  reusedPages: number[];
 };
 
 export interface OmrAdapter {
@@ -422,6 +474,26 @@ export class AudiverisOmrAdapter implements OmrAdapter {
 
   async convert(inputPath: string, originalFilename: string, outputDir: string, options: OmrConversionOptions = {}): Promise<OmrResult> {
     await fs.mkdir(outputDir, { recursive: true, mode: 0o700 });
+    const completedPages: number[] = [];
+    const failedPages: number[] = [];
+    const excludedPages: number[] = [];
+    const reusedPages: number[] = [];
+    const progress = async (stage: OmrPageProgress["stage"], totalPages: number | null, currentPage: number | null): Promise<void> => {
+      assertConversionActive();
+      await options.onProgress?.({
+        stage,
+        totalPages,
+        currentPage,
+        completedPages: [...completedPages].sort((left, right) => left - right),
+        failedPages: [...failedPages].sort((left, right) => left - right),
+        excludedPages: [...excludedPages].sort((left, right) => left - right),
+        reusedPages: [...reusedPages].sort((left, right) => left - right)
+      });
+      assertConversionActive();
+    };
+    // Rendering/preparing a PDF can itself be the costly operation. At this
+    // point its page count is intentionally still unknown.
+    await progress("preparing", null, null);
     const inspected = options.preparedInspection;
     if (inspected && (path.resolve(inspected.sourcePath) !== path.resolve(inputPath) || path.resolve(inspected.outputDir) !== path.resolve(outputDir)
       || !inspected.sourceSHA256 || inspected.sourceSHA256 !== await sha256File(inputPath).catch(() => null))) {
@@ -442,27 +514,113 @@ export class AudiverisOmrAdapter implements OmrAdapter {
     if (preprocessing.pages.every((page) => page.contentRole === "nonmusical" || page.supportStatus === "unsupported")) {
       throw new AppError(422, "A notação musical está fora dos tipos suportados nesta conversão.", "OMR_UNSUPPORTED_LAYOUT");
     }
-    await this.resolveAudiverisBin();
     const pageResults: Array<{ page: number; result: OmrResult }> = [];
     const pageFailures: Array<{ page: number; message: string; code: string }> = [];
     const scoreType = options.scoreType ?? "melody";
+    await progress("preparing", preprocessing.pages.length, null);
+    const checkpoint = await this.createCheckpointContext(options, preprocessing, originalFilename);
+    let audiverisReady = false;
+    const ensureAudiveris = async (): Promise<void> => {
+      if (audiverisReady) return;
+      await this.resolveAudiverisBin();
+      audiverisReady = true;
+    };
+    // Preserve the prior fast-fail behavior when caching is not available.
+    if (!checkpoint) await ensureAudiveris();
 
     for (const [index, page] of preprocessing.pages.entries()) {
       assertConversionActive();
-      if (page.contentRole === "nonmusical" && page.classification.method === "verified_manual_v1") continue;
-      if (page.supportStatus === "unsupported") {
-        pageFailures.push({ page: index + 1, message: `Página ${index + 1}: notação musical fora dos tipos suportados.`, code: "OMR_UNSUPPORTED_LAYOUT" });
+      const pageNumber = index + 1;
+      await progress("recognizing", preprocessing.pages.length, pageNumber);
+      if (page.contentRole === "nonmusical" && page.classification.method === "verified_manual_v1") {
+        excludedPages.push(pageNumber);
+        await progress("recognizing", preprocessing.pages.length, null);
         continue;
       }
-      const pageOutputDir = path.join(outputDir, `page-${String(index + 1).padStart(3, "0")}`);
+      if (page.supportStatus === "unsupported") {
+        pageFailures.push({ page: pageNumber, message: `Página ${pageNumber}: notação musical fora dos tipos suportados.`, code: "OMR_UNSUPPORTED_LAYOUT" });
+        failedPages.push(pageNumber);
+        await progress("recognizing", preprocessing.pages.length, null);
+        continue;
+      }
+      const pageOutputDir = path.join(outputDir, `page-${String(pageNumber).padStart(3, "0")}`);
+      const checkpointIdentity = checkpoint ? await this.createPageCheckpointIdentity(checkpoint.global, page, pageNumber) : null;
+      if (checkpoint && checkpointIdentity) {
+        let restored: OmrResult | null = null;
+        try {
+          restored = await checkpoint.store.restore({ page: pageNumber, identity: checkpointIdentity, workDir: outputDir, pageOutputDir });
+        } catch {
+          // Invalid/corrupt cache state must never turn a fresh recognition
+          // into a page failure. Abort state still propagates below.
+          assertConversionActive();
+        }
+        if (restored) {
+          pageResults.push({ page: pageNumber, result: restored });
+          completedPages.push(pageNumber);
+          reusedPages.push(pageNumber);
+          await progress("recognizing", preprocessing.pages.length, null);
+          await options.onPageReady?.({ page: pageNumber, totalPages: preprocessing.pages.length, result: restored });
+          continue;
+        }
+      }
+      await ensureAudiveris();
       await fs.mkdir(pageOutputDir, { recursive: true, mode: 0o700 });
+      let completionProgressError: unknown;
+      let completionReported = false;
+      let pageReadyCallbackFailed = false;
+      let pageReadyCallbackError: unknown;
+      const reportCompletion = async (): Promise<void> => {
+        if (completionReported) return;
+        try {
+          // Terminal page updates never overlap their page number with the
+          // active currentPage field.
+          await progress("recognizing", preprocessing.pages.length, null);
+          completionReported = true;
+        } catch (error) {
+          completionProgressError = error;
+          throw error;
+        }
+      };
       try {
-        const result = await this.convertPreparedPage(page, originalFilename, pageOutputDir, index + 1, scoreType);
-        pageResults.push({ page: index + 1, result });
+        const result = await this.convertPreparedPage(page, originalFilename, pageOutputDir, pageNumber, scoreType,
+          options.experimentalAutomaticRecovery === true);
+        pageResults.push({ page: pageNumber, result });
+        completedPages.push(pageNumber);
+        const sourceUnchanged = checkpoint && preprocessing.sourceSHA256
+          ? await sha256File(inputPath).catch(() => null) === preprocessing.sourceSHA256 : false;
+        const currentIdentity = checkpoint && checkpointIdentity
+          ? await this.createPageCheckpointIdentity(checkpoint.global, page, pageNumber) : null;
+        if (checkpoint && checkpointIdentity && sourceUnchanged && currentIdentity && this.sameCheckpointIdentity(checkpointIdentity, currentIdentity)) {
+          try {
+            await checkpoint.store.publish({ page: pageNumber, identity: checkpointIdentity, sourcePath: inputPath, result, workDir: outputDir, pageOutputDir,
+              beforeCommit: async () => {
+                assertConversionActive();
+                await reportCompletion();
+                assertConversionActive();
+              } });
+          } catch (error) {
+            // The fenced progress callback is authoritative. Do not turn its
+            // lease-loss/abort error into an ordinary partial-page failure.
+            if (completionProgressError === error) throw error;
+            assertConversionActive();
+          }
+        }
+        await reportCompletion();
+        try {
+          await options.onPageReady?.({ page: pageNumber, totalPages: preprocessing.pages.length, result });
+        } catch (error) {
+          pageReadyCallbackFailed = true;
+          pageReadyCallbackError = error;
+          throw error;
+        }
       } catch (error) {
+        if (completionProgressError === error) throw error;
+        if (pageReadyCallbackFailed && pageReadyCallbackError === error) throw error;
         assertConversionActive();
         if (temporaryErrorCode(error) || (error instanceof AppError && ["OMR_PART_INTEGRITY", "OMR_STAFF_INTEGRITY", "OMR_PART_IDENTITY_AMBIGUOUS"].includes(error.code))) throw error;
-        pageFailures.push({ page: index + 1, message: `Página ${index + 1}: ${this.summarizePageFailure(error)}`, code: error instanceof AppError ? error.code : "OMR_PAGE_FAILED" });
+        pageFailures.push({ page: pageNumber, message: `Página ${pageNumber}: ${this.summarizePageFailure(error)}`, code: error instanceof AppError ? error.code : "OMR_PAGE_FAILED" });
+        failedPages.push(pageNumber);
+        await progress("recognizing", preprocessing.pages.length, null);
       }
     }
 
@@ -482,6 +640,7 @@ export class AudiverisOmrAdapter implements OmrAdapter {
       );
     }
 
+    await progress("validating", preprocessing.pages.length, null);
     const coverage: ConversionCoverage = {
       totalPages: preprocessing.pages.length,
       processedPages: pageResults.map(({ page }) => page),
@@ -501,7 +660,8 @@ export class AudiverisOmrAdapter implements OmrAdapter {
     const musicXml = mergeVerifiedPages(pageResults.map(({ page, result }) => ({ page, xml: result.musicXml })), scoreType, coverage, options.scoreTypeSelected === true);
     const combinedValidation = inspectMusicXmlValidation(musicXml);
     const candidateIssues = pageResults.flatMap(({ page, result }) => (result.validation?.issues ?? [])
-      .filter((issue) => issue.code.startsWith("CANDIDATE_") || issue.code.startsWith("SOURCE_"))
+      .filter((issue) => issue.code.startsWith("CANDIDATE_") || issue.code.startsWith("SOURCE_")
+        || issue.code === "OMR_RHYTHM_UNRESOLVED" || issue.code === "AUTOMATIC_SOURCE_RECONCILIATION")
       .map((issue) => ({ ...issue, page, message: issue.message.startsWith(`Página ${page}:`) ? issue.message : `Página ${page}: ${issue.message}` })));
     if (candidateIssues.length) {
       combinedValidation.issues.push(...candidateIssues);
@@ -527,6 +687,285 @@ export class AudiverisOmrAdapter implements OmrAdapter {
     };
   }
 
+  private async createCheckpointContext(
+    options: OmrConversionOptions,
+    preprocessing: PreparedInputInspection,
+    originalFilename: string
+  ): Promise<CheckpointContext | null> {
+    if (!options.checkpointDirectory || !preprocessing.sourceSHA256) return null;
+    try {
+      const runtime = await this.checkpointRuntimeFingerprint();
+      if (!runtime) return null;
+      const decisions = (options.pageDecisions ?? []).map((decision) => ({
+        page: decision.page,
+        role: decision.role,
+        support: decision.support ?? null,
+        sourceSHA256: decision.sourceSHA256,
+        originalImageSHA256: decision.originalImageSHA256,
+        reviewer: decision.reviewer,
+        reason: decision.reason
+      })).sort((left, right) => left.page - right.page);
+      return {
+        store: new ConversionCheckpointStore(options.checkpointDirectory),
+        global: {
+          version: 1,
+          originalSourceSHA256: preprocessing.sourceSHA256,
+          originalFilename,
+          scoreType: options.scoreType ?? "melody",
+          scoreTypeSelected: options.scoreTypeSelected === true,
+          preprocessingProfile: options.preprocessingProfile ?? null,
+          experimentalAutomaticRecovery: options.experimentalAutomaticRecovery === true,
+          nativeEventRecoveryVersion: 1,
+          pageDecisions: decisions,
+          runtime
+        }
+      };
+    } catch {
+      // Cache identity is deliberately fail-closed. Recognition still uses
+      // the normal engine path if its runtime cannot be identified.
+      assertConversionActive();
+      return null;
+    }
+  }
+
+  private async createPageCheckpointIdentity(
+    global: Record<string, unknown>,
+    page: PreparedInputInspection["pages"][number],
+    pageNumber: number
+  ): Promise<ConversionCheckpointIdentity | null> {
+    try {
+      const originalImageSHA256 = await sha256File(page.originalImagePath).catch(() => null);
+      if (!originalImageSHA256 || originalImageSHA256 !== page.originalImageSHA256) return null;
+      const attempts = await Promise.all(page.attempts.map(async (attempt, index) => {
+        const paths = await Promise.all(attempt.paths.map(async (candidate) => ({ path: path.basename(candidate), sha256: await sha256File(candidate).catch(() => null) })));
+        if (paths.some((candidate) => !candidate.sha256)) return null;
+        return {
+          index: index + 1,
+          paths,
+          description: attempt.description,
+          combineSegments: attempt.combineSegments === true,
+          reconciliationFallback: attempt.reconciliationFallback === true,
+          sourceTransform: attempt.sourceTransform ?? null
+        };
+      }));
+      if (attempts.some((attempt) => attempt === null)) return null;
+      return {
+        global,
+        page: {
+          page: pageNumber,
+          originalImageSHA256,
+          contentRole: page.contentRole,
+          supportStatus: page.supportStatus ?? null,
+          classification: page.classification,
+          attempts
+        }
+      };
+    } catch {
+      assertConversionActive();
+      return null;
+    }
+  }
+
+  private sameCheckpointIdentity(left: ConversionCheckpointIdentity, right: ConversionCheckpointIdentity): boolean {
+    return conversionCheckpointDigest(left.global) === conversionCheckpointDigest(right.global)
+      && conversionCheckpointDigest(left.page) === conversionCheckpointDigest(right.page);
+  }
+
+  private async checkpointRuntimeFingerprint(): Promise<Record<string, unknown> | null> {
+    const audiveris = await this.runtimeExecutableFingerprint(await this.resolveAudiverisBin());
+    if (!audiveris) return null;
+    const sourceReader = env.SOURCE_VISUAL_READER_BIN
+      ? await this.runtimeExecutableFingerprint(env.SOURCE_VISUAL_READER_BIN)
+      : { enabled: false };
+    if (!sourceReader) return null;
+    const modules = await this.checkpointModuleFingerprints();
+    if (!modules) return null;
+    return {
+      version: 1,
+      modules,
+      audiveris,
+      sourceReader,
+      config: {
+        omrEngine: env.OMR_ENGINE,
+        checkpointGeneration: env.OMR_CHECKPOINT_GENERATION,
+        audiverisBin: env.AUDIVERIS_BIN ?? null,
+        audiverisTimeoutMs: env.OMR_AUDIVERIS_TIMEOUT_MS,
+        maxPages: env.OMR_MAX_PAGES,
+        sourceVisualReaderBin: env.SOURCE_VISUAL_READER_BIN ?? null,
+        sourceVisualMaxPages: env.SOURCE_VISUAL_MAX_PAGES,
+        sourceVisualMaxMeasures: env.SOURCE_VISUAL_MAX_MEASURES,
+        sourceVisualTimeoutMs: env.SOURCE_VISUAL_TIMEOUT_MS,
+        experimentalNativeEventRecovery: env.EXPERIMENTAL_NATIVE_EVENT_RECOVERY
+      }
+    };
+  }
+
+  private async checkpointModuleFingerprints(): Promise<Record<string, string> | null> {
+    const current = fileURLToPath(import.meta.url);
+    const extension = path.extname(current);
+    const directory = path.dirname(current);
+    let serviceEntries: Dirent<string>[];
+    try { serviceEntries = await fs.readdir(directory, { withFileTypes: true }); }
+    catch { return null; }
+    // Recognition and reconciliation have a broad transitive surface. Hashing
+    // the local service implementation set is intentionally conservative and
+    // avoids a fragile hand-maintained list of output-affecting helpers.
+    const modules = serviceEntries.filter((entry) => entry.isFile() && entry.name.endsWith(extension))
+      .map((entry) => entry.name.slice(0, -extension.length)).sort();
+    const fingerprints: Record<string, string> = {};
+    for (const module of modules) {
+      const modulePath = path.join(directory, `${module}${extension}`);
+      try {
+        const details = await fs.lstat(modulePath);
+        if (!details.isFile() || details.isSymbolicLink()) return null;
+        fingerprints[module] = await sha256File(modulePath);
+      } catch { return null; }
+    }
+    for (const modulePath of [
+      path.resolve(directory, `../domain${extension}`),
+      path.resolve(directory, `../config/env${extension}`)
+    ]) {
+      try {
+        const details = await fs.lstat(modulePath);
+        if (!details.isFile() || details.isSymbolicLink()) return null;
+        fingerprints[path.relative(directory, modulePath)] = await sha256File(modulePath);
+      } catch { return null; }
+    }
+    return fingerprints;
+  }
+
+  private async runtimeExecutableFingerprint(command: string): Promise<Record<string, unknown> | null> {
+    try {
+      let candidate = command;
+      if (!path.isAbsolute(candidate) && !candidate.includes(path.sep)) {
+        const { stdout } = await execFileAsync("/usr/bin/which", [candidate], { timeout: 3_000, maxBuffer: 64 * 1024 });
+        candidate = stdout.split(/\r?\n/).map((line) => line.trim()).find(Boolean) ?? "";
+      }
+      if (!candidate) return null;
+      const executable = await fs.realpath(candidate);
+      const details = await fs.lstat(executable);
+      if (!details.isFile() || details.isSymbolicLink()) return null;
+      const scope = await this.runtimeDistributionScope(executable);
+      const digest = await this.runtimeTreeDigest(scope);
+      return digest ? { command, executable, scope, digest } : null;
+    } catch (error) {
+      if (temporaryErrorCode(error)) throw error;
+      return null;
+    }
+  }
+
+  private async runtimeDistributionScope(executable: string): Promise<string> {
+    const parent = path.dirname(executable);
+    if (path.basename(parent) === "MacOS" && path.basename(path.dirname(parent)) === "Contents") return path.dirname(parent);
+    // Do not treat /usr/local/bin or /opt/homebrew/bin as one engine runtime.
+    // A parent-of-bin is used only when it is demonstrably an Audiveris
+    // distribution with its own Audiveris JARs.
+    if (path.basename(parent) !== "bin" || !/^audiveris(?:\.exe)?$/i.test(path.basename(executable))) return executable;
+    const distribution = path.dirname(parent);
+    try {
+      const lib = path.join(distribution, "lib");
+      const details = await fs.lstat(lib);
+      if (!details.isDirectory() || details.isSymbolicLink()) return executable;
+      const files = await fs.readdir(lib, { withFileTypes: true });
+      return files.some((entry) => entry.isFile() && /^audiveris.*\.jar$/i.test(entry.name)) ? distribution : executable;
+    } catch { return executable; }
+  }
+
+  private async runtimeTreeDigest(root: string): Promise<string | null> {
+    const entries: string[] = [];
+    let totalBytes = 0;
+    let files = 0;
+    const visit = async (current: string, relative: string): Promise<boolean> => {
+      const details = await fs.lstat(current);
+      if (details.isSymbolicLink()) {
+        entries.push(`link:${relative}:${await fs.readlink(current)}`);
+        return true;
+      }
+      if (details.isFile()) {
+        files += 1;
+        totalBytes += details.size;
+        if (files > 20_000 || totalBytes > 512 * 1024 * 1024) return false;
+        entries.push(`file:${relative}:${details.size}:${await sha256File(current)}`);
+        return true;
+      }
+      if (!details.isDirectory()) return false;
+      const children = await fs.readdir(current, { withFileTypes: true });
+      for (const child of children.sort((left, right) => left.name.localeCompare(right.name))) {
+        if (!child.name || child.name.includes("/") || child.name.includes("\\")) return false;
+        const childRelative = relative ? `${relative}/${child.name}` : child.name;
+        if (!await visit(path.join(current, child.name), childRelative)) return false;
+      }
+      return true;
+    };
+    try { return await visit(root, "") ? conversionCheckpointDigest(entries) : null; }
+    catch { return null; }
+  }
+
+  private async reconcilePageCandidates(evidence: CandidateEvidence[], selectedId: number, workDir: string, page: number): Promise<CandidateEvidence | null> {
+    if (!env.SOURCE_VISUAL_READER_BIN || page > env.SOURCE_VISUAL_MAX_PAGES) return null;
+    const base = evidence.find((item) => item.candidate === selectedId);
+    const healthy = evidence.filter((item) => item.exportValid === true);
+    if (!base?.originalImagePath || !base.nativeArchivePath || healthy.length !== 2) return null;
+    const sourceSHA256 = await sha256File(base.originalImagePath);
+    const candidates = [];
+    for (const candidate of healthy) {
+      assertConversionActive();
+      if (!candidate.nativeArchivePath || !candidate.sourceImagePath || candidate.originalImagePath !== base.originalImagePath) return null;
+      const expectedInput = candidate.sourceImagePaths?.find((item) => item.candidate === candidate.candidate);
+      if (expectedInput && await sha256File(candidate.sourceImagePath) !== expectedInput.sha256) return null;
+      const anchors = await readAudiverisSourceAnchors({ archivePath: candidate.nativeArchivePath, imagePath: candidate.sourceImagePath,
+        originalImagePath: base.originalImagePath, pageXml: candidate.xml, boundsMode: "measure-stack", sourceTransform: candidate.sourceTransform });
+      if (!anchors.length || anchors.length > env.SOURCE_VISUAL_MAX_MEASURES) return null;
+      candidates.push({ id: `candidate-${candidate.candidate}`, xml: candidate.xml, anchors,
+        sourceImageSha256: sourceSHA256 });
+    }
+    const original = candidates.find((candidate) => candidate.id === `candidate-${selectedId}`);
+    if (!original) return null;
+    const independent = await readIndependentSourceNotation({ imagePath: base.originalImagePath, page, workDir,
+      readerExecutable: env.SOURCE_VISUAL_READER_BIN, timeoutMs: env.SOURCE_VISUAL_TIMEOUT_MS });
+    if (!independent || independent.sourceImageSha256 !== original.sourceImageSha256
+      || await sha256File(base.originalImagePath) !== sourceSHA256) return null;
+    const glyphs = base.sourceImagePath && !base.sourceTransform ? await readEighthRestImageEvidence({ archivePath: base.nativeArchivePath,
+      imagePath: base.sourceImagePath, originalImagePath: base.originalImagePath, pageXml: base.xml }) : null;
+    if (await sha256File(base.originalImagePath) !== sourceSHA256) return null;
+    const reconciliation = reconcileAutomaticMusicXmlCandidates({ base: original, donors: candidates.filter((candidate) => candidate !== original), independent,
+      sourceRestEvidence: glyphs ? [...glyphs.leadingRests, ...glyphs.contradictedNativeRests] : [] });
+    const { musicXml: xml, ...report } = reconciliation;
+    await fs.writeFile(path.join(workDir, "automatic-reconciliation.json"), JSON.stringify(report, null, 2), { mode: 0o600 });
+    if (!reconciliation.history.length) return null;
+    return { page, candidate: Math.max(...evidence.map((candidate) => candidate.candidate)) + 1,
+      selected: true, reason: "Reconciliação local com geometria nativa e leitura independente da imagem original; requer conferência musical.",
+      xml, sourceImagePath: base.originalImagePath, originalImagePath: base.originalImagePath,
+      automaticReconciliation: report, validation: inspectMusicXmlValidation(xml, { scope: "page" }) };
+  }
+
+  private async recoverPageEvents(evidence: CandidateEvidence[], selectedId: number, workDir: string, page: number): Promise<CandidateEvidence | null> {
+    const base = evidence.find((item) => item.candidate === selectedId);
+    const healthy = evidence.filter((item) => item.exportValid === true);
+    if (!base?.originalImagePath || healthy.length < 2 || healthy.length > 3 || page > 3) return null;
+    const sourceImageSha256 = await sha256File(base.originalImagePath);
+    const candidates = [];
+    for (const candidate of healthy) {
+      assertConversionActive();
+      if (!candidate.nativeArchivePath || !candidate.sourceImagePath || candidate.originalImagePath !== base.originalImagePath) return null;
+      const measures = await readAudiverisNativeMeasureEvidence({ archivePath: candidate.nativeArchivePath,
+        imagePath: candidate.sourceImagePath, originalImagePath: base.originalImagePath, pageXml: candidate.xml,
+        sourceTransform: candidate.sourceTransform });
+      if (!measures.length || measures.length > 200) return null;
+      candidates.push({ id: `candidate-${candidate.candidate}`, xml: candidate.xml, measures, sourceImageSha256 });
+    }
+    if (await sha256File(base.originalImagePath) !== sourceImageSha256) return null;
+    const original = candidates.find((candidate) => candidate.id === `candidate-${selectedId}`);
+    if (!original) return null;
+    const recovered = recoverNativeMeasureEvents({ base: original, donors: candidates.filter((candidate) => candidate !== original) });
+    await fs.writeFile(path.join(workDir, "experimental-event-recovery.json"), JSON.stringify(recovered.report, null, 2), { mode: 0o600 });
+    if (!recovered.report.changes.length) return null;
+    return { page, candidate: Math.max(...evidence.map((candidate) => candidate.candidate)) + 1,
+      selected: true, reason: "Recuperação experimental de eventos vinculada a cabeças nativas e pixels da fonte; requer revisão de notações.",
+      xml: recovered.musicXml, sourceImagePath: base.originalImagePath, originalImagePath: base.originalImagePath,
+      automaticEventRecovery: recovered.report, validation: inspectMusicXmlValidation(recovered.musicXml, { scope: "page" }) };
+  }
+
   private async prepareInputForOmr(inputPath: string, outputDir: string, options: OmrConversionOptions): Promise<{ pages: PreparedPage[]; warnings: string[] }> {
     try {
       return await this.preprocessInput(inputPath, outputDir, options);
@@ -536,10 +975,11 @@ export class AudiverisOmrAdapter implements OmrAdapter {
     }
   }
 
-  private async convertPreparedPage(page: PreparedPage, originalFilename: string, pageOutputDir: string, pageNumber: number, scoreType: ScoreType): Promise<OmrResult> {
+  private async convertPreparedPage(page: PreparedPage, originalFilename: string, pageOutputDir: string, pageNumber: number, scoreType: ScoreType,
+    experimentalAutomaticRecovery = false): Promise<OmrResult> {
     const failures: string[] = [];
     const successes: CompletedAttempt[] = [];
-    const inspected: Array<{ attempt: PreparedAttempt; index: number; xml: string; validation: MusicXmlValidation; valid: boolean }> = [];
+    const inspected: Array<{ attempt: PreparedAttempt; index: number; xml: string; validation: MusicXmlValidation; valid: boolean; exportIncomplete?: boolean }> = [];
     const imageSHA256ByAttempt = new Map<number, string | null>();
     const duplicateAttemptsByLeader = new Map<number, Array<{ index: number; path: string; sha256: string }>>();
     const firstAttemptByImageSHA256 = new Map<string, number>();
@@ -549,6 +989,14 @@ export class AudiverisOmrAdapter implements OmrAdapter {
     for (const [index, attempt] of page.attempts.entries()) {
       assertConversionActive();
       if (attempt.combineSegments) continue;
+      // A third preparation is useful only when one of the regular exports
+      // failed. It is never counted as an independent reading of the source.
+      if (attempt.reconciliationFallback) {
+        if (!env.SOURCE_VISUAL_READER_BIN || successes.length !== 1) continue;
+        const measures = parseVisualMusicXml(successes[0].result.musicXml);
+        if (!measures.length || measures.some((measure) => measure.partIndex !== 0
+          || measure.events.some((event) => event.staff !== 1 || event.voice !== "1" || event.chord))) continue;
+      }
       const imagePath = attempt.paths[0];
       if (imagePath) {
         const imageSHA256 = await sha256File(imagePath).catch(() => null);
@@ -573,7 +1021,11 @@ export class AudiverisOmrAdapter implements OmrAdapter {
       let result: OmrResult | undefined;
       try {
         result = await this.convertPage(attempt.paths[0], originalFilename, attemptOutputDir);
-        const baseValidation = inspectMusicXmlValidation(result.musicXml, { scope: "page" });
+        const checked = inspectMusicXmlValidation(result.musicXml, { scope: "page" });
+        const engineIssues = (result.validation?.issues ?? []).filter((issue) => issue.code === "OMR_RHYTHM_UNRESOLVED")
+          .map((issue) => ({ ...issue, page: pageNumber }));
+        const baseValidation = engineIssues.length
+          ? { ...checked, issues: [...checked.issues, ...engineIssues], requiresReview: true } : checked;
         const sourceLayoutIssues = page.classification?.sourceLayout
           ? compareSourceStaffLayout(result.musicXml, page.classification.sourceLayout, pageNumber, scoreType).map((issue) => ({ ...issue, page: pageNumber }))
           : [];
@@ -599,6 +1051,16 @@ export class AudiverisOmrAdapter implements OmrAdapter {
         });
       } catch (error) {
         assertConversionActive();
+        if (error instanceof AppError && error.code === "AUDIVERIS_EXPORT_INCOMPLETE") {
+          // Preserve the rejected export and native project for review, but
+          // never treat a partially visited export as a successful candidate.
+          const rejectedPath = await this.findExportedMusicXml(attemptOutputDir);
+          if (rejectedPath) {
+            const xml = await fs.readFile(rejectedPath, "utf8");
+            inspected.push({ attempt, index, xml, validation: inspectMusicXmlValidation(xml, { scope: "page" }), valid: false, exportIncomplete: true });
+          }
+          integrityFailure ??= error;
+        }
         if (result && !inspected.some((item) => item.index === index)) {
           inspected.push({ attempt, index, xml: result.musicXml, validation: inspectMusicXmlValidation(result.musicXml, { scope: "page" }), valid: false });
         }
@@ -641,7 +1103,8 @@ export class AudiverisOmrAdapter implements OmrAdapter {
           candidate: item.index + 1,
           candidateIds,
           selected,
-          reason: (!item.valid ? "Rejeitado por integridade estrutural." : agreementIssues.length
+          exportValid: item.valid,
+          reason: (!item.valid ? item.exportIncomplete ? "Rejeitado: o motor informou falha ao exportar compassos; o arquivo pode omitir conteúdo." : "Rejeitado por integridade estrutural." : agreementIssues.length
             ? selected ? selection.reason : selection.mode === "structural-dominance"
               ? "Não escolhido: outra leitura eliminou uma violação temporal comprovável sem introduzir nova violação e preservou as vozes; a leitura foi mantida no histórico para revisão."
               : "Não escolhido: divergência musical impede usar menos avisos como prova de qualidade."
@@ -652,6 +1115,7 @@ export class AudiverisOmrAdapter implements OmrAdapter {
           ...(evidenceSourceImagePath ? { sourceImagePath: evidenceSourceImagePath } : {}),
           ...(originalImagePath ? { originalImagePath } : {}),
           ...(nativeArchivePath ? { nativeArchivePath } : {}),
+          ...(item.attempt.sourceTransform ? { sourceTransform: item.attempt.sourceTransform } : {}),
           ...(persistedSourceImagePaths.length ? { sourceImagePaths: persistedSourceImagePaths } : {}),
           validation: item.validation
         };
@@ -664,11 +1128,34 @@ export class AudiverisOmrAdapter implements OmrAdapter {
             ? { code: "CANDIDATE_XML_DIVERGENCE", severity: "warning" as const, message: "As preparações geraram MusicXML diferente sem diferença nos diagnósticos internos; confira o original." }
             : null;
       const rejectedIssue = inspected.some((item) => !item.valid)
-        ? { code: "CANDIDATE_STRUCTURAL_REJECTION", severity: "warning" as const, message: "Uma leitura alternativa perdeu integridade de partes ou pautas; confira a cobertura da versão selecionada na fonte." }
+        ? inspected.some((item) => item.exportIncomplete)
+          ? { code: "CANDIDATE_EXPORT_REJECTION", severity: "warning" as const, message: "Uma leitura foi descartada porque o motor não conseguiu exportar todos os compassos; confira a versão selecionada com a fonte." }
+          : { code: "CANDIDATE_STRUCTURAL_REJECTION", severity: "warning" as const, message: "Uma leitura alternativa perdeu integridade de partes ou pautas; confira a cobertura da versão selecionada na fonte." }
         : null;
-      const validation = divergenceIssue || agreementIssues.length || rejectedIssue
+      let validation = divergenceIssue || agreementIssues.length || rejectedIssue
         ? { ...chosen.validation, issues: [...chosen.validation.issues, ...(divergenceIssue ? [divergenceIssue] : []), ...(rejectedIssue ? [rejectedIssue] : []), ...agreementIssues], requiresReview: true }
         : chosen.validation;
+      let reconciled: CandidateEvidence | null = null;
+      try { reconciled = await this.reconcilePageCandidates(evidence, chosen.index + 1, pageOutputDir, pageNumber); }
+      catch { assertConversionActive(); /* Optional reconciliation must not discard a healthy baseline export. */ }
+      if (!reconciled && experimentalAutomaticRecovery) {
+        try { reconciled = await this.recoverPageEvents(evidence, chosen.index + 1, pageOutputDir, pageNumber); }
+        catch { assertConversionActive(); /* The experimental path must not discard the healthy baseline. */ }
+      }
+      if (reconciled) {
+        const checked = inspectMusicXmlValidation(reconciled.xml, { scope: "page" });
+        const retained = validation.issues.filter((issue) => !chosen.validation.issues.includes(issue) || issue.code === "OMR_RHYTHM_UNRESOLVED");
+        validation = { ...checked, requiresReview: true, issues: [...checked.issues, ...retained, {
+          code: "AUTOMATIC_SOURCE_RECONCILIATION", severity: "warning", page: pageNumber,
+          message: reconciled.automaticEventRecovery
+            ? "Eventos recuperados experimentalmente do grafo nativo e dos pixels da fonte; notações omitidas exigem revisão."
+            : "Trechos recuperados por comparação com uma leitura independente da imagem; confira a partitura antes de usar."
+        }] };
+        for (const candidate of evidence) candidate.selected = false;
+        reconciled.validation = validation;
+        evidence.push(reconciled);
+        return { ...chosen.result, musicXml: reconciled.xml, validation, evidence };
+      }
       return { ...chosen.result, validation, evidence };
     }
     if (integrityFailure) throw integrityFailure;
@@ -777,6 +1264,7 @@ export class AudiverisOmrAdapter implements OmrAdapter {
     try {
       await this.runAudiveris(pagePath, pageOutputDir);
     } catch (error) {
+      if (error instanceof AppError && error.code === "AUDIVERIS_EXPORT_INCOMPLETE") throw error;
       if (temporaryErrorCode(error)) throw error;
       const output = this.errorOutput(error);
       const exportedAfterError = await this.findExportedMusicXml(pageOutputDir);
@@ -801,19 +1289,25 @@ export class AudiverisOmrAdapter implements OmrAdapter {
     }
     const musicXml = this.cleanAudiverisText(await fs.readFile(exported, "utf8"), originalFilename);
     this.assertUsefulMusicXml(musicXml, originalFilename);
+    const processDiagnostics = inspectAudiverisProcessOutput(await fs.readFile(path.join(pageOutputDir, "audiveris.log"), "utf8").catch(() => ""));
+    const validation = inspectMusicXmlValidation(musicXml, { scope: "page" });
     return {
       musicXml,
+      ...(processDiagnostics.issues.length ? { validation: { ...validation,
+        issues: [...validation.issues, ...processDiagnostics.issues], requiresReview: true } } : {}),
       warnings: ["Textos OCR de cabecalho removidos para evitar titulos e creditos sobrepostos."]
     };
   }
 
   private async runAudiveris(pagePath: string, outputDir: string): Promise<void> {
     const audiverisBin = await this.resolveAudiverisBin();
+    let processOutput: string;
     // Critical: execFile passes arguments separately and never invokes a shell.
     try {
-      await execFileAsync(audiverisBin, [
+      const output = await execFileAsync(audiverisBin, [
         "-batch",
         "-transcribe",
+        "-save",
         "-export",
         "-constant",
         "org.audiveris.omr.sheet.BookManager.useCompression=false",
@@ -825,11 +1319,21 @@ export class AudiverisOmrAdapter implements OmrAdapter {
         timeout: env.OMR_AUDIVERIS_TIMEOUT_MS,
         maxBuffer: 10 * 1024 * 1024
       });
+      processOutput = `${output.stdout}\n${output.stderr}`;
     } catch (error) {
       if (this.isMissingExecutableError(error)) {
         throw this.audiverisNotFoundError(audiverisBin);
       }
+      const output = this.errorOutput(error);
+      await fs.writeFile(path.join(outputDir, "audiveris.log"), redactedAudiverisProcessLog(output), { mode: 0o600 }).catch(() => undefined);
+      if (inspectAudiverisProcessOutput(output).exportIncomplete) {
+        throw new AppError(422, "O motor não conseguiu exportar todos os compassos desta leitura.", "AUDIVERIS_EXPORT_INCOMPLETE");
+      }
       throw error;
+    }
+    await fs.writeFile(path.join(outputDir, "audiveris.log"), redactedAudiverisProcessLog(processOutput), { mode: 0o600 });
+    if (inspectAudiverisProcessOutput(processOutput).exportIncomplete) {
+      throw new AppError(422, "O motor não conseguiu exportar todos os compassos desta leitura.", "AUDIVERIS_EXPORT_INCOMPLETE");
     }
   }
 
@@ -844,7 +1348,8 @@ export class AudiverisOmrAdapter implements OmrAdapter {
         await this.renderPdfPages(pdftoppm, inputPath, outputPrefix);
         const paths = await this.findRenderedPages(outputDir);
         warnings.push(`PDF dividido em ${paths.length} pagina(s) e renderizado em resolucao controlada antes do OMR.`);
-        return { pages: await Promise.all(paths.map((pagePath, index) => this.prepareRenderedPdfPage(pagePath, outputDir, index + 1))), warnings };
+        return { pages: await Promise.all(paths.map((pagePath, index) => this.prepareRenderedPdfPage(pagePath, outputDir, index + 1,
+          options.experimentalAutomaticRecovery === true))), warnings };
       }
       throw new AppError(501, "Renderização de PDF indisponível neste servidor.", "PDF_RENDER_NOT_CONFIGURED");
     }
@@ -894,14 +1399,27 @@ export class AudiverisOmrAdapter implements OmrAdapter {
     return outputPath;
   }
 
-  private async prepareRenderedPdfPage(pagePath: string, outputDir: string, pageNumber: number): Promise<PreparedPage> {
+  private async prepareRenderedPdfPage(pagePath: string, outputDir: string, pageNumber: number,
+    experimentalAutomaticRecovery = false): Promise<PreparedPage> {
     const attempts: PreparedAttempt[] = [{ paths: [pagePath], description: "página inteira renderizada" }];
     const preparedDir = path.join(outputDir, `prepared-page-${String(pageNumber).padStart(3, "0")}`);
     await fs.mkdir(preparedDir, { recursive: true, mode: 0o700 });
 
+    const recordTransform = async (preparedPath: string, info: sharp.OutputInfo, originalSHA256: string): Promise<SourceImageTransform | undefined> => {
+      const meta = await sharp(pagePath).metadata();
+      if (!meta.width || !meta.height || (meta.orientation ?? 1) !== 1 || await sha256File(pagePath) !== originalSHA256
+        || !Number.isInteger(info.trimOffsetLeft) || !Number.isInteger(info.trimOffsetTop)) return undefined;
+      const transform: SourceImageTransform = { version: 1, method: "crop_padding_v1", originalImageSHA256: originalSHA256,
+        preparedImageSHA256: await sha256File(preparedPath), originalWidth: meta.width, originalHeight: meta.height,
+        preparedWidth: info.width, preparedHeight: info.height,
+        crop: { left: -info.trimOffsetLeft!, top: -info.trimOffsetTop!, width: info.width - 160, height: info.height - 160 },
+        padding: { left: 80, top: 80, right: 80, bottom: 80 } };
+      return validSourceImageTransform(transform) ? transform : undefined;
+    };
     try {
+      const originalSHA256 = await sha256File(pagePath);
       const cleanedPath = path.join(preparedDir, "cleaned.png");
-      await sharp(pagePath)
+      const info = await sharp(pagePath)
         .grayscale()
         .normalize()
         .sharpen()
@@ -909,10 +1427,44 @@ export class AudiverisOmrAdapter implements OmrAdapter {
         .extend({ top: 80, bottom: 80, left: 80, right: 80, background: "#ffffff" })
         .png()
         .toFile(cleanedPath);
-      attempts.push({ paths: [cleanedPath], description: "página limpa em tons de cinza" });
+      attempts.push({ paths: [cleanedPath], description: "página limpa em tons de cinza", sourceTransform: await recordTransform(cleanedPath, info, originalSHA256) });
 
     } catch {
       // The original rendered page is still a valid Audiveris input.
+    }
+
+    if (experimentalAutomaticRecovery && pageNumber <= 3) {
+      try {
+        const originalSHA256 = await sha256File(pagePath);
+        const cropped = await sharp(pagePath).grayscale().normalize().sharpen()
+          .trim({ background: "#ffffff", threshold: 16 }).png().toBuffer({ resolveWithObject: true });
+        const meta = await sharp(pagePath).metadata();
+        const crop = { left: -(cropped.info.trimOffsetLeft ?? NaN), top: -(cropped.info.trimOffsetTop ?? NaN),
+          width: cropped.info.width, height: cropped.info.height };
+        const scale = Math.min(1.25, 4500 / crop.height, Math.sqrt(18_000_000 / (crop.width * crop.height)));
+        if (meta.width && meta.height && scale >= 1.08 && Number.isSafeInteger(crop.left) && Number.isSafeInteger(crop.top)) {
+          const resize = { width: Math.round(crop.width * scale), height: Math.round(crop.height * scale) };
+          const upscaledPath = path.join(preparedDir, "experimental-upscaled.png");
+          const info = await sharp(cropped.data).resize(resize.width, resize.height, { fit: "fill" })
+            .extend({ top: 80, bottom: 80, left: 80, right: 80, background: "#ffffff" }).png().toFile(upscaledPath);
+          const transform: SourceImageTransform = { version: 1, method: "crop_resize_padding_v1", originalImageSHA256: originalSHA256,
+            preparedImageSHA256: await sha256File(upscaledPath), originalWidth: meta.width, originalHeight: meta.height,
+            preparedWidth: info.width, preparedHeight: info.height, crop, resize,
+            padding: { top: 80, bottom: 80, left: 80, right: 80 } };
+          if (validSourceImageTransform(transform)) attempts.push({ paths: [upscaledPath], description: "ampliação experimental da pauta", sourceTransform: transform });
+        }
+      } catch { /* Optional source-only experiment; preserve regular preparations. */ }
+    }
+
+    if (env.SOURCE_VISUAL_READER_BIN && pageNumber <= env.SOURCE_VISUAL_MAX_PAGES) {
+      try {
+        const originalSHA256 = await sha256File(pagePath);
+        const normalizedPath = path.join(preparedDir, "normalized.png");
+        const info = await sharp(pagePath).grayscale().normalize().trim({ background: "#ffffff", threshold: 16 })
+          .extend({ top: 80, bottom: 80, left: 80, right: 80, background: "#ffffff" }).png().toFile(normalizedPath);
+        attempts.push({ paths: [normalizedPath], description: "página normalizada sem reforço de contornos", reconciliationFallback: true,
+          sourceTransform: await recordTransform(normalizedPath, info, originalSHA256) });
+      } catch { /* The two regular preparations remain available. */ }
     }
 
     return { originalPath: pagePath, attempts };

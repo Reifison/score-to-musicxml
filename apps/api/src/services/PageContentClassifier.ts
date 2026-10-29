@@ -57,13 +57,14 @@ export async function classifyPageContent(
     staffBands: [],
     evidence: ["source_image_analysis_unavailable"],
     limitations: [
-      "As faixas são observações geométricas de cinco linhas horizontais longas; não confirmam conteúdo musical.",
+      "As faixas são observações geométricas de cinco linhas horizontais longas; a evidência inclinada não fornece coordenadas originais nem confirma conteúdo musical.",
       "A detecção não agrupa pautas em sistemas nem infere compassos, partes ou barras.",
       "Pautas curvas, fracas, cortadas ou inclinadas podem não ser detectadas.",
       "Tabelas, grades e linhas de tablatura podem produzir geometria semelhante."
     ]
   };
   const hasStaff = sourceLayout.status === "observed";
+  const hasSkewStaff = Boolean(sourceLayout.positiveSkewEvidence && sourceLayout.positiveSkewEvidence.staffLineCount >= 5);
   if (decision) {
     let actualSourceSHA256: string;
     let actualImageSHA256: string;
@@ -79,7 +80,7 @@ export async function classifyPageContent(
     if (decision.role === "nonmusical" && !analysis) {
       throw new AppError(422, "A imagem original não pôde ser inspecionada para excluir a página.", "PAGE_DECISION_IMAGE_UNAVAILABLE");
     }
-    if (decision.role === "nonmusical" && hasStaff) {
+    if (decision.role === "nonmusical" && (hasStaff || hasSkewStaff)) {
       throw new AppError(422, "A página contém evidência de pauta; revise antes de excluí-la.", "PAGE_DECISION_CONFLICT");
     }
     return { role: decision.role, ...(decision.support ? { supportStatus: decision.support } : {}), classification: {
@@ -89,8 +90,11 @@ export async function classifyPageContent(
     } };
   }
   if (analysis) {
-    if (hasStaff) {
-      return { role: "musical", classification: { method: "staff_evidence_v1", evidence: ["five_horizontal_staff_lines"], sourceLayout } };
+    if (hasStaff || hasSkewStaff) {
+      const evidence = hasStaff
+        ? ["five_horizontal_staff_lines"]
+        : [`five_skewed_staff_lines:${sourceLayout.positiveSkewEvidence!.angleDegrees}deg`];
+      return { role: "musical", classification: { method: "staff_evidence_v1", evidence, sourceLayout } };
     }
     return { role: "uncertain", classification: { method: "staff_evidence_v1", evidence: [
       "no_strong_staff_evidence;not_proof_of_nonmusical",

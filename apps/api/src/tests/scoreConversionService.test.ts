@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { createHash } from "node:crypto";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { ConversionCoverage, User } from "../domain.js";
+import type { ConversionCoverage, ConversionProgress, User } from "../domain.js";
 import { AppError } from "../errors/AppError.js";
 import { InMemoryAuditRepository, InMemoryScoreRepository } from "../repositories/inMemoryRepositories.js";
 import type { ScoreConversionQueue } from "../queues/ScoreConversionQueue.js";
@@ -52,6 +52,86 @@ async function setup(omr: OmrAdapter, midiInspector?: MidiExportService, automat
 }
 
 describe("ScoreConversionService", () => {
+  it("persiste páginas concluídas durante o reconhecimento e só conclui após publicar o resultado", async () => {
+    let ctx: Awaited<ReturnType<typeof setup>>;
+    const observations: ConversionProgress[] = [];
+    ctx = await setup({ convert: async (_input, _name, _work, options) => {
+      expect(options?.checkpointDirectory).toBe(ctx.storage.resolveConversionCheckpointDirectory("source.pdf"));
+      const initial = await ctx.service.getFor(ctx.user, ctx.score.id);
+      expect(initial.conversionProgress).toMatchObject({ stage: "preparing", totalPages: null, completedPages: [] });
+      await options?.onProgress?.({ stage: "recognizing", totalPages: 2, currentPage: 2,
+        completedPages: [1], failedPages: [], excludedPages: [], reusedPages: [1] });
+      observations.push((await ctx.service.getFor(ctx.user, ctx.score.id)).conversionProgress!);
+      return result([2]);
+    } });
+    const progressWrites = vi.spyOn(ctx.scores, "updateConversionProgress");
+    const final = await ctx.conversion.convertScore(ctx.score.id);
+    expect(observations).toMatchObject([{ stage: "recognizing", totalPages: 2, currentPage: 2, completedPages: [1], reusedPages: [1] }]);
+    expect(final.conversionProgress).toMatchObject({ stage: "complete", totalPages: 2, currentPage: null, completedPages: [1], failedPages: [2], reusedPages: [1] });
+    expect(progressWrites.mock.calls.map((call) => call[3].stage)).toEqual(["preparing", "recognizing", "validating"]);
+    expect((await ctx.service.listFor(ctx.user))[0].conversionProgress).toEqual(final.conversionProgress);
+  });
+
+  it("mantém páginas salvas no estado interrompido e disponibiliza a mesma pasta ao retry manual", async () => {
+    let calls = 0;
+    const directories: Array<string | undefined> = [];
+    const ctx = await setup({ convert: async (_input, _name, _work, options) => {
+      directories.push(options?.checkpointDirectory);
+      await options?.onProgress?.({ stage: "recognizing", totalPages: 2, currentPage: 2,
+        completedPages: [1], failedPages: [], excludedPages: [], reusedPages: calls ? [1] : [] });
+      if (!calls++) throw new AppError(504, "Tempo excedido", "OMR_CONVERSION_TIMEOUT");
+      return result([2]);
+    } });
+    const failed = await ctx.conversion.convertScore(ctx.score.id);
+    expect(failed.conversionProgress).toMatchObject({ stage: "interrupted", completedPages: [1], currentPage: null });
+    await ctx.service.retryFor(ctx.user, ctx.score.id);
+    const manual = (await ctx.scores.listAttempts(ctx.score.id)).at(-1)!;
+    const retried = await ctx.conversion.convertScore(ctx.score.id, manual.id);
+    expect(directories).toHaveLength(2);
+    expect(directories[0]).toBe(directories[1]);
+    expect(retried.conversionProgress).toMatchObject({ attemptId: manual.id, stage: "complete", reusedPages: [1] });
+  });
+
+  it("protege o progresso com o token atual, a partitura e a exclusão", async () => {
+    const ctx = await setup({ convert: async () => result() });
+    const attempt = (await ctx.scores.listAttempts(ctx.score.id))[0];
+    const oldToken = (await ctx.scores.claimAttempt(attempt.id))!;
+    const snapshot: ConversionProgress = { attemptId: attempt.id, stage: "recognizing", totalPages: 2, currentPage: 2,
+      completedPages: [1], failedPages: [], excludedPages: [], reusedPages: [], updatedAt: new Date().toISOString() };
+    expect(await ctx.scores.updateConversionProgress(ctx.score.id, attempt.id, oldToken, snapshot)).toBe(true);
+    await ctx.scores.requeueStaleAttempts(new Date(Date.now() + 1000));
+    const token = (await ctx.scores.claimAttempt(attempt.id))!;
+    expect(await ctx.scores.updateConversionProgress(ctx.score.id, attempt.id, oldToken, snapshot)).toBe(false);
+    expect(await ctx.scores.updateConversionProgress("other-score", attempt.id, token, snapshot)).toBe(false);
+    expect(await ctx.scores.updateConversionProgress(ctx.score.id, attempt.id, token, { ...snapshot, completedPages: [3] })).toBe(false);
+    expect(await ctx.scores.updateConversionProgress(ctx.score.id, attempt.id, token, { ...snapshot, failedPages: [1] })).toBe(false);
+    expect(await ctx.scores.updateConversionProgress(ctx.score.id, attempt.id, token, { ...snapshot, currentPage: 1 })).toBe(false);
+    expect(await ctx.scores.updateConversionProgress(ctx.score.id, attempt.id, token, snapshot)).toBe(true);
+    await ctx.scores.softDelete(ctx.score.id, { deletedAt: new Date(), purgeAt: new Date() });
+    expect(await ctx.scores.updateConversionProgress(ctx.score.id, attempt.id, token, snapshot)).toBe(false);
+  });
+
+  it("interrompe uma execução substituída sem sobrescrever o progresso da retomada", async () => {
+    let ctx: Awaited<ReturnType<typeof setup>>;
+    ctx = await setup({ convert: async (_input, _name, _work, options) => {
+      const attempt = (await ctx.scores.listAttempts(ctx.score.id))[0];
+      await ctx.scores.requeueStaleAttempts(new Date(Date.now() + 1000));
+      const newToken = (await ctx.scores.claimAttempt(attempt.id))!;
+      await ctx.scores.updateConversionProgress(ctx.score.id, attempt.id, newToken, {
+        attemptId: attempt.id, stage: "recognizing", totalPages: 2, currentPage: 2, completedPages: [1], failedPages: [],
+        excludedPages: [], reusedPages: [1], updatedAt: new Date().toISOString()
+      });
+      await options?.onProgress?.({ stage: "recognizing", totalPages: 2, currentPage: 1,
+        completedPages: [], failedPages: [], excludedPages: [], reusedPages: [] });
+      return result();
+    } });
+    const current = await ctx.conversion.convertScore(ctx.score.id);
+    expect(current.conversionProgress).toMatchObject({ stage: "recognizing", currentPage: 2, completedPages: [1], reusedPages: [1] });
+    expect(current.lastErrorCode).toBeNull();
+    expect(current.musicxmlFilename).toBeNull();
+    expect((await ctx.scores.listAttempts(ctx.score.id))[0].status).toBe("processing");
+  });
+
   it("entrega automaticamente o MusicXML selecionado com origem do sistema e MIDI validado", async () => {
     const ctx = await setup({ convert: async () => result() }, undefined, true);
     const converted = await ctx.conversion.convertScore(ctx.score.id);

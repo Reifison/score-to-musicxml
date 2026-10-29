@@ -330,4 +330,38 @@ describe("regressão do fluxo principal web", () => {
     expect(confirm).toHaveBeenCalledWith(expect.stringContaining("Mover 2 partituras"));
     confirm.mockRestore();
   });
+
+  it("ignora a lista da conta anterior quando a resposta chega após entrar em outra conta", async () => {
+    const otherUser = { ...user, id: "user-2", name: "Bruno", email: "bruno@example.com" };
+    const otherScore = { ...convertedScore, id: "score-2", userId: otherUser.id, originalFilename: "Partitura do Bruno.pdf" };
+    let resolveOldList!: (value: { scores: Score[] }) => void;
+    const oldList = new Promise<{ scores: Score[] }>((resolve) => { resolveOldList = resolve; });
+    let listCalls = 0;
+    vi.mocked(api).mockImplementation(async (path, options = {}) => {
+      if (path === "/api/auth/me") return { user } as never;
+      if (path === "/api/auth/logout") return undefined as never;
+      if (path === "/api/auth/login" && options.method === "POST") return { user: otherUser } as never;
+      if (path === "/api/scores") {
+        listCalls += 1;
+        return (listCalls === 1 ? oldList : { scores: [otherScore] }) as never;
+      }
+      throw new Error(`Chamada não prevista: ${path}`);
+    });
+
+    render(<App />);
+    expect(await screen.findByText("Envie PDF ou imagem da partitura")).toBeInTheDocument();
+    await waitFor(() => expect(listCalls).toBe(1));
+    fireEvent.click(screen.getAllByRole("button", { name: "Sair" })[0]);
+    fireEvent.change(await screen.findByLabelText("E-mail"), { target: { value: otherUser.email } });
+    fireEvent.change(screen.getByLabelText("Senha"), { target: { value: "segredo123" } });
+    fireEvent.click(screen.getByRole("button", { name: "Entrar" }));
+
+    expect(await screen.findByText("Envie PDF ou imagem da partitura")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Minhas partituras" }));
+    expect(await screen.findByText(otherScore.originalFilename)).toBeInTheDocument();
+    expect(listCalls).toBe(2);
+    await act(async () => { resolveOldList({ scores: [convertedScore] }); });
+    expect(screen.getByText(otherScore.originalFilename)).toBeInTheDocument();
+    expect(screen.queryByText(convertedScore.originalFilename)).not.toBeInTheDocument();
+  });
 });

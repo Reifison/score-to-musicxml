@@ -11,6 +11,7 @@
     "start": "node dist/server.js",
     "seed": "tsx src/seed.ts",
     "seed:prod": "node dist/seed.js",
+    "repair:assisted": "node --import tsx src/scripts/applyAssistedNotationRepair.ts",
     "test": "NODE_ENV=test vitest run",
     "lint": "tsc -p tsconfig.json --noEmit"
   },
@@ -30,6 +31,7 @@
     "ioredis": "^5.6.1",
     "multer": "^2.1.1",
     "nanoid": "^5.1.5",
+    "pdf-lib": "^1.17.1",
     "sharp": "^0.34.5",
     "verovio": "6.1.0",
     "zod": "^3.24.3"

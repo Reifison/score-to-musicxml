@@ -2,6 +2,7 @@ import * as SecureStore from "expo-secure-store";
 import { createContext, useCallback, useContext, useEffect, useMemo, useState, type PropsWithChildren } from "react";
 import { api } from "../api/client";
 import type { PublicUser } from "../api/types";
+import { clearPlayerSessionSnapshots } from "../player/sessionSnapshot";
 
 const tokenKey = "score_session_token";
 
@@ -48,11 +49,12 @@ export function AuthProvider({ children }: PropsWithChildren) {
 
   const logout = useCallback(async () => {
     const currentToken = token;
+    const clearReadingSession = clearPlayerSessionSnapshots(user?.id).catch(() => undefined);
     setToken(null);
     setUser(null);
-    await SecureStore.deleteItemAsync(tokenKey);
+    await Promise.all([SecureStore.deleteItemAsync(tokenKey), clearReadingSession]);
     if (currentToken) await api.logout(currentToken).catch(() => undefined);
-  }, [token]);
+  }, [token, user?.id]);
 
   const value = useMemo(() => ({ user, token, loading, login, logout }), [user, token, loading, login, logout]);
 

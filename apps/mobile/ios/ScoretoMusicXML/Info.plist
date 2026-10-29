@@ -8,6 +8,11 @@
     <string>$(DEVELOPMENT_LANGUAGE)</string>
     <key>CFBundleDisplayName</key>
     <string>Conversor de Partituras</string>
+    <key>CFBundleLocalizations</key>
+    <array>
+      <string>en</string>
+      <string>pt-BR</string>
+    </array>
     <key>CFBundleExecutable</key>
     <string>$(EXECUTABLE_NAME)</string>
     <key>CFBundleIdentifier</key>
@@ -46,7 +51,7 @@
       <true/>
     </dict>
     <key>NSCameraUsageDescription</key>
-    <string>Tire fotos de partituras para converter em MusicXML.</string>
+    <string>Usamos a câmera para escanear partituras e ajustar as páginas.</string>
     <key>NSPhotoLibraryAddUsageDescription</key>
     <string>O app pode salvar arquivos temporarios exportados quando voce escolher compartilhar.</string>
     <key>NSPhotoLibraryUsageDescription</key>

@@ -1,0 +1,11 @@
+{
+  "valid": true,
+  "files": [
+    {
+      "file": "/Users/reifison/Desktop/Apps/score-to-musicxml/output/mozart-clarinets-2026-10-18/Clarinet-II-reviewed.musicxml",
+      "schema": "MusicXML 4.0 W3C",
+      "valid": true,
+      "errors": []
+    }
+  ]
+}

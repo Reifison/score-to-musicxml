@@ -199,6 +199,60 @@ const toolkit = (overrides: Partial<{
 
 describe("MidiExportService", () => {
   const selectedRoot = path.resolve(process.cwd(), "../../output/omr/selected-homologation-2026-10-07");
+  const carcassiQualificationXml = path.resolve(
+    process.cwd(),
+    "../../tmp/omr-homologation-2026-10-17/run-20261017-03/carcassi-final.musicxml"
+  );
+  it.skipIf(!existsSync(carcassiQualificationXml))("valida os ataques do MusicXML Carcassi com o timemap racional", async () => {
+    const musicXml = await fs.readFile(carcassiQualificationXml, "utf8");
+    const report = await new MidiExportService().inspect(musicXml);
+
+    expect(report).toMatchObject({
+      status: "passed",
+      checkedNotes: 1440,
+      checkedDurations: 32,
+      sourceEventCoverage: {
+        status: "verified",
+        totalSourcePitchedNotes: 720,
+        mappedSourcePitchedNotes: 720,
+        expectedPerformedAttacks: 1440,
+        checkedPitches: 1440,
+        checkedOnsets: 1440,
+        checkedDurations: 0,
+        durationStatus: "not_checked",
+        skippedSourceNotes: 0,
+        skippedPerformedEvents: 0
+      }
+    });
+    expect(report.issues).toEqual(expect.arrayContaining([
+      expect.objectContaining({ code: "MIDI_FLOAT_TIMING_CANONICALIZED", repairedAttacks: "1", repairedOffsets: "1" })
+    ]));
+  });
+
+  const carcassiLinuxXml = path.resolve(process.cwd(), "../../tmp/omr-qualification-2026-10-17/linux/carcassi-final.musicxml");
+  it.skipIf(!existsSync(carcassiLinuxXml))("confere o Carcassi Linux imutável incluindo a segunda passagem da repetição", async () => {
+    const musicXml = await fs.readFile(carcassiLinuxXml, "utf8");
+    const report = await new MidiExportService().inspect(musicXml);
+    expect(report).toMatchObject({
+      status: "passed",
+      xmlSHA256: "4d9d941a96da868d8568a22b32aa0012115df5db0d202f0e125f4e7adba3b832",
+      sourceEventCoverage: {
+        status: "verified",
+        totalSourcePitchedNotes: 727,
+        mappedSourcePitchedNotes: 727,
+        expectedPerformedAttacks: 1454,
+        checkedPitches: 1454,
+        checkedOnsets: 1454,
+        skippedSourceNotes: 0,
+        skippedPerformedEvents: 0,
+        skippedReasons: []
+      }
+    });
+    expect(report.issues).toEqual(expect.arrayContaining([
+      expect.objectContaining({ code: "MIDI_FLOAT_TIMING_CANONICALIZED", repairedAttacks: "85", repairedOffsets: "85" })
+    ]));
+  });
+
   it("corrige a ligadura sem destino em uma partitura mínima com primeira e segunda casa", async () => {
     const musicXml = await fs.readFile(new URL("./fixtures/midi/learned-skipped-first-ending.musicxml", import.meta.url), "utf8");
     const service = new MidiExportService();

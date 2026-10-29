@@ -1,0 +1,4 @@
+CFBundleDisplayName = "Conversor de Partituras";
+NSCameraUsageDescription = "Usamos a câmera para escanear partituras e ajustar as páginas.";
+NSPhotoLibraryUsageDescription = "Selecione fotos de partituras para converter em MusicXML.";
+NSPhotoLibraryAddUsageDescription = "O app pode salvar arquivos temporários exportados quando você escolher compartilhá-los.";

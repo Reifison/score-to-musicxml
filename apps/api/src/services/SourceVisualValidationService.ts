@@ -5,7 +5,7 @@ import sharp from "sharp";
 import { z } from "zod";
 import type { ConversionCoverage } from "../domain.js";
 import { assertConversionActive, runCommand } from "./SubprocessRunner.js";
-import type { SourceVisualReview, VisualCorrectionProposal, VisualEvidenceAsset, VisualNoteValue, VisualSourceSegment } from "./SourceVisualReviewTypes.js";
+import type { SourceVisualReview, VisualCorrectionProposal, VisualEvidenceAsset, VisualNoteValue, VisualSourceSegment, VisualUnmappedSourceMeasure } from "./SourceVisualReviewTypes.js";
 import { parseVisualMusicXml, type VisualParsedEvent, type VisualParsedMeasure } from "./VisualMusicXml.js";
 import { readAudiverisSourceAnchors } from "./AudiverisSourceAnchors.js";
 
@@ -18,6 +18,8 @@ import { readAudiverisSourceAnchors } from "./AudiverisSourceAnchors.js";
  * source image independently before any comparison happens here. A measure
  * with no trustworthy box may set contextOnly:true and rectangle to the whole
  * page; its events can be compared, but no measure coordinates are asserted.
+ * keyFifths is optional evidence of an explicit simple <key> in the reader's
+ * own notation; its absence means unknown, preserving legacy reader responses.
  */
 const rectangleSchema = z.object({ left: z.number().min(0).max(1), top: z.number().min(0).max(1),
   width: z.number().positive().max(1), height: z.number().positive().max(1) }).strict()
@@ -34,7 +36,7 @@ const eventSchema = z.object({ onset: z.number().finite().min(0).max(10000), dur
   });
 const responseSchema = z.object({ version: z.literal(1), page: z.number().int().positive(), inputImageSHA256: z.string().regex(/^[a-f0-9]{64}$/),
   coverageComplete: z.boolean(), diagnostics: z.array(z.object({ code: z.enum(["HOMR_EMPTY_MEASURE", "HOMR_UNSUPPORTED_STRUCTURE"]), message: z.string().max(256).optional() }).strict()).max(8).optional(), reader: z.object({ name: z.string().min(1).max(64), version: z.string().min(1).max(64), model: z.string().min(1).max(128) }).strict().optional(), measures: z.array(z.object({ partIndex: z.number().int().min(0).max(63), measureIndex: z.number().int().min(0).max(9999),
-    rectangle: rectangleSchema, contextOnly: z.boolean().optional(), readable: z.boolean(), events: z.array(eventSchema).max(512) }).strict()
+    rectangle: rectangleSchema, contextOnly: z.boolean().optional(), readable: z.boolean(), keyFifths: z.number().int().min(-7).max(7).optional(), events: z.array(eventSchema).max(512) }).strict()
     .refine((measure) => !measure.contextOnly || (measure.rectangle.left === 0 && measure.rectangle.top === 0
       && measure.rectangle.width === 1 && measure.rectangle.height === 1),
     { message: "contextOnly requires the full-page rectangle" })).max(2000) }).strict();
@@ -99,6 +101,9 @@ const comparableValue = (value: VisualNoteValue): string => JSON.stringify({
   dots: value.dots ?? 0
 });
 
+const keyAffectedSteps = (fifths: number): Set<string> => new Set((fifths < 0
+  ? ["B", "E", "A", "D", "G", "C", "F"] : ["F", "C", "G", "D", "A", "E", "B"]).slice(0, Math.abs(fifths)));
+
 export class SourceVisualValidationService {
   private readonly options: Required<Pick<SourceVisualValidationOptions, "maxPages" | "maxMeasures" | "timeoutMs">> & Pick<SourceVisualValidationOptions, "readerExecutable">;
 
@@ -118,9 +123,10 @@ export class SourceVisualValidationService {
     let cropBytes = 0;
     const limitations: string[] = [];
     const diagnostics: NonNullable<SourceVisualReview["diagnostics"]> = [];
-    const warn = (code: string, message: string, page?: number): void => {
+    const warn = (code: string, message: string, page?: number,
+      context?: { measure: string; partId: string }): void => {
       limitations.push(message);
-      diagnostics.push({ code, ...(page !== undefined ? { page } : {}), message });
+      diagnostics.push({ code, ...(page !== undefined ? { page } : {}), ...(context ?? {}), message });
     };
     if (this.options.readerExecutable) {
       warn("VISUAL_READER_ACCURACY_UNHOMOLOGATED",
@@ -158,13 +164,14 @@ export class SourceVisualValidationService {
       if (segment) segment.page = page;
     }
     const proposals: VisualCorrectionProposal[] = [];
+    const sourceMeasures: VisualUnmappedSourceMeasure[] = [];
     let reader: SourceVisualReview["reader"] = this.options.readerExecutable ? { name: path.basename(this.options.readerExecutable), sourceFirst: true } : null;
     const finish = (status: SourceVisualReview["status"]): { review: SourceVisualReview; assets: VisualEvidenceAsset[] } => ({
       review: { version: 1, status, sourceSHA256, xmlSHA256,
         reader,
         checkedMeasures: segments.filter((item) => item.status !== "unknown").length,
         unknownMeasures: segments.filter((item) => item.status === "unknown").length,
-        segments, proposals, limitations, diagnostics, accuracyVerified: false, trainingEligible: false, history: [] }, assets });
+        segments, sourceMeasures, proposals, limitations, diagnostics, accuracyVerified: false, trainingEligible: false, history: [] }, assets });
     if (input.coverage.totalPages > this.options.maxPages) {
       warn("VISUAL_PAGE_LIMIT", `A revisão visual automática está limitada a ${this.options.maxPages} páginas; nenhuma página foi marcada como conferida.`);
       return finish("skipped");
@@ -302,11 +309,32 @@ export class SourceVisualValidationService {
         for (const item of response.measures) readerByPart.set(item.partIndex, (readerByPart.get(item.partIndex) ?? 0) + 1);
         const expectedByPart = new Map<number, number>();
         for (const item of mapped) expectedByPart.set(item.partIndex, (expectedByPart.get(item.partIndex) ?? 0) + 1);
-        if (response.measures.length !== mapped.length || [...expectedByPart].some(([part, count]) => readerByPart.get(part) !== count)) {
-          warn("VISUAL_MEASURE_COUNT_MISMATCH", `Página ${candidate.page}: a quantidade de compassos lida na fonte diverge do MusicXML; associação por posição bloqueada.`, candidate.page);
+        const cardinalityMismatch = response.measures.length !== mapped.length
+          || [...expectedByPart].some(([part, count]) => readerByPart.get(part) !== count)
+          || [...readerByPart].some(([part, count]) => expectedByPart.get(part) !== count);
+        const nonSequentialSource = [...readerByPart].some(([part, count]) =>
+          Array.from({ length: count }, (_, index) => index).some((index) =>
+            !response.measures.some((item) => item.partIndex === part && item.measureIndex === index)));
+        if (cardinalityMismatch || nonSequentialSource) {
+          const counts = [...new Set([...expectedByPart.keys(), ...readerByPart.keys()])]
+            .sort((a, b) => a - b).map((part) => `parte ${part + 1}: fonte ${readerByPart.get(part) ?? 0}, XML ${expectedByPart.get(part) ?? 0}`).join("; ");
+          warn("VISUAL_MEASURE_COUNT_MISMATCH", `Página ${candidate.page}: ${counts}; associação por posição bloqueada.`, candidate.page);
+          for (const source of response.measures) {
+            const contextOnly = Boolean(source.contextOnly) || isFullPageRectangle(source.rectangle);
+            sourceMeasures.push({ id: `visual-source-page${candidate.page}-part${source.partIndex}-m${source.measureIndex}`,
+              page: candidate.page, partIndex: source.partIndex, sourceMeasureIndex: source.measureIndex,
+              association: "ambiguous", sourceAsset: imageName, sourceImageSHA256: imageSHA256,
+              contextOnly, readable: source.readable, ...(contextOnly ? {} : { rectangle: source.rectangle }),
+              ...(source.keyFifths === undefined ? {} : { keyFifths: source.keyFifths }) });
+          }
+          if ([...readerByPart].some(([part, count]) => count > (expectedByPart.get(part) ?? 0))) {
+            warn("VISUAL_SOURCE_MEASURE_UNMAPPED",
+              `Página ${candidate.page}: a fonte contém mais compassos que o XML; todos os compassos lidos nesta página ficam sem associação individual até revisão manual.`, candidate.page);
+          }
           continue;
         }
         const pageOffsets = new Map<number, number>();
+        const sourceKeys = new Map<number, number>();
         let pageContextOnly = false;
         for (const item of mapped) {
           const currentOffset = pageOffsets.get(item.partIndex) ?? 0;
@@ -315,6 +343,7 @@ export class SourceVisualValidationService {
           const segment = pageSegments.find((entry) => entry.partIndex === item.partIndex && entry.measureIndex === item.measureIndex);
           const encoded = measures.find((entry) => entry.partIndex === item.partIndex && entry.measureIndex === item.measureIndex);
           if (!segment || !encoded || !sourceMeasure) continue;
+          if (sourceMeasure.keyFifths !== undefined) sourceKeys.set(sourceMeasure.partIndex, sourceMeasure.keyFifths);
           if (!sourceMeasure.readable) {
             segment.reason = "O leitor não confirmou leitura completa do compasso; os eventos permanecem desconhecidos.";
             warn("VISUAL_MEASURE_UNREADABLE", `Página ${candidate.page}: o leitor não confirmou leitura completa do compasso ${sourceMeasure.measureIndex + 1}.`, candidate.page);
@@ -336,8 +365,35 @@ export class SourceVisualValidationService {
             segment.rectangle = sourceMeasure.rectangle;
             segment.cropAsset = cropped.name;
           }
+          const observedKey = sourceKeys.get(sourceMeasure.partIndex);
+          const keyMismatch = observedKey !== undefined && observedKey !== encoded.keyFifths;
+          if (keyMismatch) {
+            warn("VISUAL_KEY_SIGNATURE_MISMATCH",
+              `Página ${candidate.page}: armadura lida da fonte (${observedKey}) diverge do XML (${encoded.keyFifths}) no compasso associado ${encoded.measure}; revisão manual necessária.`,
+              candidate.page, { measure: encoded.measure, partId: encoded.partId });
+          }
           const found = this.compareMeasure(encoded, sourceMeasure.events, segment);
-          if (found === null) { segment.reason = "Eventos sobrepostos ou identidade temporal ambígua."; continue; }
+          if (found === null) {
+            segment.status = keyMismatch ? "suspected" : "unknown";
+            segment.reason = keyMismatch
+              ? "Armadura divergente; os eventos sobrepostos não puderam ser associados com segurança."
+              : "Eventos sobrepostos ou identidade temporal ambígua.";
+            continue;
+          }
+          if (keyMismatch) {
+            for (const proposal of found) {
+              proposal.applicable = false;
+              proposal.reason = "A armadura da fonte diverge do XML; a altura requer revisão conjunta da armadura e das notas.";
+            }
+            const affected = new Set([...keyAffectedSteps(observedKey!), ...keyAffectedSteps(encoded.keyFifths)]);
+            if (found.some((proposal) => proposal.differences.includes("pitch")
+              && Boolean((proposal.after?.step && affected.has(proposal.after.step))
+                || (proposal.before?.step && affected.has(proposal.before.step))))) {
+              warn("VISUAL_KEY_AFFECTED_PITCH_MISMATCH",
+                `Página ${candidate.page}: altura em grau afetado pela armadura diverge no compasso associado ${encoded.measure}; revisão manual necessária.`,
+                candidate.page, { measure: encoded.measure, partId: encoded.partId });
+            }
+          }
           proposals.push(...found);
           if (found.some((proposal) => proposal.differences.some((difference) => ["duration", "printed_type", "dots"].includes(difference)))) {
             const rhythmMessage = encoded.rhythmNotationValid
@@ -349,8 +405,9 @@ export class SourceVisualValidationService {
             warn("VISUAL_CONTEXT_ONLY_PROPOSALS_MANUAL",
               `Página ${candidate.page}: propostas do compasso ${sourceMeasure.measureIndex + 1} não podem ser aplicadas sem recorte localizado da partitura.`, candidate.page);
           }
-          segment.status = found.length ? "suspected" : "compared";
-          segment.reason = found.length ? "Leitura visual e MusicXML divergem neste compasso."
+          segment.status = found.length || keyMismatch ? "suspected" : "compared";
+          segment.reason = keyMismatch ? "Armadura da fonte e do MusicXML divergem neste compasso; revisão manual necessária."
+            : found.length ? "Leitura visual e MusicXML divergem neste compasso."
             : sourceMeasure.contextOnly ? "Comparado com a página inteira; posição visual exata do compasso não confirmada." : undefined;
         }
         if (pageContextOnly) warn("VISUAL_FULL_PAGE_CONTEXT", "A leitura foi comparada com a página inteira; a posição visual exata do compasso não foi confirmada.", candidate.page);

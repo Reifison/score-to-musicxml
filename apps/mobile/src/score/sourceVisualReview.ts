@@ -1,3 +1,4 @@
+import { t, getLanguage, getLocale } from "../i18n";
 import type { SourceVisualReview, VisualNoteValue } from "../api/types";
 
 const noteNames: Record<NonNullable<VisualNoteValue["step"]>, string> = {
@@ -24,18 +25,20 @@ const noteTypes: Record<string, string> = {
   "128th": "quartifusa"
 };
 
+const englishNoteTypes: Record<string, string> = { maxima: "maxima", long: "longa", breve: "double whole note", whole: "whole note", half: "half note", quarter: "quarter note", eighth: "eighth note", "16th": "sixteenth note", "32nd": "thirty-second note", "64th": "sixty-fourth note", "128th": "128th note" };
+
 export function formatVisualNoteValue(value: VisualNoteValue | null): { title: string; detail: string } {
-  if (!value) return { title: "Valor não identificado", detail: "A leitura não registrou nota ou pausa." };
+  if (!value) return { title: t("Valor não identificado", "Value not identified"), detail: t("A leitura não registrou nota ou pausa.", "Recognition did not record a note or rest.") };
 
   const pitch = value.kind === "rest"
-    ? "Pausa"
-    : `${value.step ? noteNames[value.step] : "Nota sem altura"}${value.step ? accidentalLabel(value.alter ?? 0) : ""}${value.octave === undefined ? "" : value.octave}`;
-  const type = value.type ? noteTypes[value.type.toLowerCase()] ?? value.type : "tipo não identificado";
+    ? t("Pausa", "Rest")
+    : `${value.step ? (getLanguage() === "en" ? value.step : noteNames[value.step]) : t("Nota sem altura", "Note with unknown pitch")}${value.step ? accidentalLabel(value.alter ?? 0) : ""}${value.octave === undefined ? "" : value.octave}`;
+  const type = value.type ? getLanguage() === "en" ? englishNoteTypes[value.type.toLowerCase()] ?? value.type : noteTypes[value.type.toLowerCase()] ?? value.type : t("tipo não identificado", "unknown note value");
   const dots = Math.max(0, value.dots ?? 0);
-  const dotLabel = dots ? ` · ${dots} ${dots === 1 ? "ponto" : "pontos"}` : "";
+  const dotLabel = dots ? t(dots === 1 ? " · {{dots}} ponto" : " · {{dots}} pontos", dots === 1 ? " · {{dots}} dot" : " · {{dots}} dots", {dots}) : "";
   return {
     title: `${pitch} · ${type}${dotLabel}`,
-    detail: `Duração: ${formatNumber(value.duration)} tempos de semínima${dotLabel}`
+    detail: t("Duração: {{duration}} tempos de semínima{{dots}}", value.duration === 1 ? "Duration: {{duration}} quarter-note beat{{dots}}" : "Duration: {{duration}} quarter-note beats{{dots}}", {duration: formatNumber(value.duration), dots: dotLabel})
   };
 }
 
@@ -44,11 +47,11 @@ export function visualReviewPendingCount(review: SourceVisualReview | undefined)
 }
 
 export function visualReviewPageLabel(page: number): string {
-  return page > 0 ? `Página ${page}` : "Página não confirmada";
+  return page > 0 ? t("Página {{page}}", "Page {{page}}", {page}) : t("Página não confirmada", "Page not confirmed");
 }
 
 export function visualReviewLocation(value: { page: number; partId: string; measure: string }): string {
-  return `${visualReviewPageLabel(value.page)} · Parte ${value.partId || "sem nome"} · compasso ${value.measure}`;
+  return t("{{page}} · Parte {{part}} · compasso {{measure}}", "{{page}} · Part {{part}} · measure {{measure}}", {page: visualReviewPageLabel(value.page), part: value.partId || t("sem nome", "unnamed"), measure: value.measure});
 }
 
 export function unknownVisualSourcePages(review: SourceVisualReview) {
@@ -72,5 +75,5 @@ function accidentalLabel(alter: number): string {
 }
 
 function formatNumber(value: number): string {
-  return new Intl.NumberFormat("pt-BR", { maximumFractionDigits: 2 }).format(value);
+  return new Intl.NumberFormat(getLocale(), { maximumFractionDigits: 2 }).format(value);
 }

@@ -47,6 +47,7 @@ export type WebAudioMidiEngineOptions = {
 
 type Listener = (snapshot: PlaybackSnapshot) => void;
 type TelemetryListener = (snapshot: PlaybackTelemetrySnapshot) => void;
+export type PlaybackLoopRange = { startMs: number; endMs: number };
 
 const defaultClock = (): number =>
   typeof globalThis.performance?.now === "function" ? globalThis.performance.now() : Date.now();
@@ -60,7 +61,7 @@ export class WebAudioMidiEngine {
   private nextEventIndex = 0;
   private listeners = new Set<Listener>();
   private telemetryListeners = new Set<TelemetryListener>();
-  private scheduledEventKeys = new Set<number>();
+  private scheduledEventKeys = new Set<string>();
   private telemetry: PlaybackTelemetrySnapshot = {
     expectedEvents: 0,
     scheduledEvents: 0,
@@ -79,9 +80,15 @@ export class WebAudioMidiEngine {
   private intervalHandle: unknown;
   private state: PlaybackState = "idle";
   private currentPositionMs = 0;
+  /** Monotonic clock position while the visible score position wraps in a loop. */
+  private timelinePositionMs = 0;
   private totalDurationMs = 0;
   private anchorPositionMs = 0;
   private anchorTime = 0;
+  private loopRange: PlaybackLoopRange | null = null;
+  private loopPlaybackActive = false;
+  private loopScheduleCycle = 0;
+  private loopNextEventIndex = 0;
   private rate: number;
   private readonly baseTempoBpm: number;
   private disposed = false;
@@ -118,6 +125,9 @@ export class WebAudioMidiEngine {
       .sort((a, b) => a.startMs - b.startMs);
     this.resetTelemetry(this.events.length);
     this.nextEventIndex = 0;
+    this.timelinePositionMs = 0;
+    this.loopRange = null;
+    this.loopPlaybackActive = false;
     const eventDurationMs = this.events.reduce(
       (duration, event) => Math.max(duration, event.startMs + event.durationMs),
       0
@@ -141,7 +151,13 @@ export class WebAudioMidiEngine {
     if (this.state === "playing") return;
     this.rate = this.validateRate(rate);
     this.currentPositionMs = Math.min(Math.max(0, startMs), this.totalDurationMs);
-    if (this.state === "ended" || this.currentPositionMs >= this.totalDurationMs) this.currentPositionMs = 0;
+    if (this.state === "ended" || this.currentPositionMs >= this.totalDurationMs) {
+      this.currentPositionMs = this.loopRange?.startMs ?? 0;
+    } else if (this.loopRange && this.currentPositionMs >= this.loopRange.endMs) {
+      this.currentPositionMs = this.loopRange.startMs;
+    }
+    this.timelinePositionMs = this.currentPositionMs;
+    this.loopPlaybackActive = Boolean(this.loopRange);
     if (this.totalDurationMs === 0) {
       this.state = "ended";
       this.emit();
@@ -184,6 +200,7 @@ export class WebAudioMidiEngine {
     this.stopScheduler();
     this.synth?.stopAll();
     this.currentPositionMs = 0;
+    this.timelinePositionMs = 0;
     this.nextEventIndex = 0;
     this.resetSchedulingLedger();
     this.setActiveVoices(0);
@@ -196,6 +213,9 @@ export class WebAudioMidiEngine {
     if (!Number.isFinite(positionMs)) throw new TypeError("A posição deve ser um número finito.");
     const wasPlaying = this.state === "playing";
     this.currentPositionMs = Math.min(Math.max(0, positionMs), this.totalDurationMs);
+    if (this.loopRange && this.currentPositionMs >= this.loopRange.endMs) this.currentPositionMs = this.loopRange.startMs;
+    this.timelinePositionMs = this.currentPositionMs;
+    this.loopPlaybackActive = Boolean(this.loopRange);
     this.synth?.stopAll();
     this.nextEventIndex = this.findFirstEventAtOrAfter(this.currentPositionMs);
     this.resetSchedulingLedger();
@@ -213,6 +233,37 @@ export class WebAudioMidiEngine {
     this.emitTelemetry();
   }
 
+  /** Repeats a half-open score-time range. Null disables looping. */
+  setLoopRange(range: PlaybackLoopRange | null): void {
+    if (range && (!Number.isFinite(range.startMs) || !Number.isFinite(range.endMs) || range.startMs < 0 || range.endMs <= range.startMs || range.endMs > this.totalDurationMs)) {
+      throw new RangeError("O trecho de repetição deve estar dentro da duração da partitura.");
+    }
+    const wasPlaying = this.state === "playing";
+    if (wasPlaying) this.updatePosition();
+    this.loopRange = range ? { ...range } : null;
+    if (range && this.currentPositionMs >= range.endMs) this.currentPositionMs = range.startMs;
+    const positionMs = this.currentPositionMs;
+    this.loopPlaybackActive = Boolean(range);
+    this.timelinePositionMs = positionMs;
+    if (range && this.state === "ended") this.state = "paused";
+    this.synth?.stopAll();
+    this.nextEventIndex = this.findFirstEventAtOrAfter(positionMs);
+    this.loopNextEventIndex = this.findFirstEventAtOrAfter(positionMs);
+    this.loopScheduleCycle = 0;
+    this.resetSchedulingLedger();
+    if (wasPlaying) {
+      this.anchorPositionMs = this.timelinePositionMs;
+      this.anchorTime = this.context?.currentTime ?? 0;
+      this.tick();
+    }
+    this.emit();
+    this.emitTelemetry();
+  }
+
+  getLoopRange(): PlaybackLoopRange | null {
+    return this.loopRange ? { ...this.loopRange } : null;
+  }
+
   setRate(nextRate: number): void {
     const validatedRate = this.validateRate(nextRate);
     if (validatedRate === this.rate) return;
@@ -222,7 +273,7 @@ export class WebAudioMidiEngine {
       this.nextEventIndex = this.findFirstEventAtOrAfter(this.currentPositionMs);
       this.resetSchedulingLedger();
       this.rate = validatedRate;
-      this.anchorPositionMs = this.currentPositionMs;
+      this.anchorPositionMs = this.timelinePositionMs;
       this.anchorTime = this.context?.currentTime ?? 0;
       this.tick();
     } else {
@@ -253,7 +304,7 @@ export class WebAudioMidiEngine {
       this.synth?.stopAll();
       this.nextEventIndex = this.findFirstEventAtOrAfter(this.currentPositionMs);
       this.resetSchedulingLedger();
-      this.anchorPositionMs = this.currentPositionMs;
+      this.anchorPositionMs = this.timelinePositionMs;
       this.anchorTime = this.context?.currentTime ?? 0;
       this.tick();
     }
@@ -365,10 +416,17 @@ export class WebAudioMidiEngine {
 
   private beginPlayback(): void {
     if (!this.context || !this.synth) return;
+    if (this.loopRange && this.currentPositionMs >= this.loopRange.endMs) {
+      this.currentPositionMs = this.loopRange.startMs;
+    }
     this.state = "playing";
-    this.anchorPositionMs = this.currentPositionMs;
+    this.timelinePositionMs = this.currentPositionMs;
+    this.loopPlaybackActive = Boolean(this.loopRange);
+    this.anchorPositionMs = this.timelinePositionMs;
     this.anchorTime = this.context.currentTime;
     this.nextEventIndex = this.findFirstEventAtOrAfter(this.currentPositionMs);
+    this.loopNextEventIndex = this.nextEventIndex;
+    this.loopScheduleCycle = 0;
     this.resetSchedulingLedger();
     this.lastSchedulerTickAt = null;
     this.tick();
@@ -381,52 +439,34 @@ export class WebAudioMidiEngine {
     if (this.state !== "playing" || !this.context || !this.synth) return;
     this.recordSchedulerTick();
     this.updatePosition();
-    const reachedEnd = this.currentPositionMs >= this.totalDurationMs;
+    const reachedEnd = !this.loopPlaybackActive && this.currentPositionMs >= this.totalDurationMs;
     // When a tick arrives after the end, still advance the cursor through the
     // overdue events. This prevents a stall from silently dropping them from
     // diagnostics before playback is finalized.
-    const horizonMs = reachedEnd
+    const normalHorizonMs = reachedEnd
       ? this.totalDurationMs
-      : this.currentPositionMs + this.lookAheadSeconds * 1000 * this.rate;
-    const horizonDistanceMs = Math.max(0, horizonMs - this.currentPositionMs);
+      : this.timelinePositionMs + this.lookAheadSeconds * 1000 * this.rate;
+    const horizonMs = this.loopPlaybackActive && this.loopRange && this.timelinePositionMs < this.loopRange.startMs
+      ? Math.min(normalHorizonMs, this.loopRange.endMs)
+      : normalHorizonMs;
+    const horizonDistanceMs = Math.max(0, horizonMs - this.timelinePositionMs);
     this.telemetry.minScheduleHorizonMs = this.telemetry.minScheduleHorizonMs === null
       ? horizonDistanceMs
       : Math.min(this.telemetry.minScheduleHorizonMs, horizonDistanceMs);
     // Events are sorted by start time, so each scheduler pass only advances a
     // cursor through newly visible events. This is important on iPhone where a
     // full-array scan plus React work can starve a short look-ahead window.
-    while (this.nextEventIndex < this.events.length) {
-      const event = this.events[this.nextEventIndex];
-      if (event.startMs > horizonMs) break;
-      this.nextEventIndex += 1;
-      const eventEnd = event.startMs + event.durationMs;
-      if (eventEnd <= this.currentPositionMs) {
-        // AudioContext cannot schedule in the past. Count the event explicitly
-        // instead of silently losing it when a JS/UI stall exceeds look-ahead.
-        this.telemetry.underrunEvents += 1;
-        continue;
+    if (this.loopPlaybackActive && this.loopRange && this.timelinePositionMs >= this.loopRange.startMs) {
+      this.scheduleLoopEvents(horizonMs);
+    } else {
+      while (this.nextEventIndex < this.events.length) {
+        const event = this.events[this.nextEventIndex];
+        if (event.startMs > horizonMs) break;
+        if (this.loopPlaybackActive && this.loopRange && event.startMs >= this.loopRange.endMs) break;
+        this.nextEventIndex += 1;
+        const eventEnd = Math.min(event.startMs + event.durationMs, this.loopPlaybackActive && this.loopRange ? this.loopRange.endMs : Number.POSITIVE_INFINITY);
+        this.scheduleEvent(event, this.nextEventIndex - 1, 0, event.startMs, eventEnd, this.timelinePositionMs);
       }
-
-      const eventIndex = this.nextEventIndex - 1;
-      if (this.scheduledEventKeys.has(eventIndex)) {
-        this.telemetry.duplicateEvents += 1;
-      } else {
-        this.scheduledEventKeys.add(eventIndex);
-      }
-
-      const effectiveStart = Math.max(event.startMs, this.currentPositionMs);
-      const now = this.context.currentTime;
-      const intendedStart = this.anchorTime + (event.startMs - this.anchorPositionMs) / 1000 / this.rate;
-      // A note already in progress after seek/resume is intentionally started
-      // at the current audio time; only notes that should have started during
-      // this playback anchor count as late.
-      if (event.startMs >= this.anchorPositionMs && (now - intendedStart) * 1000 > 1) {
-        this.telemetry.lateEvents += 1;
-      }
-      const startsAt = now + (effectiveStart - this.currentPositionMs) / 1000 / this.rate;
-      const durationSeconds = (eventEnd - effectiveStart) / 1000 / this.rate;
-      this.synth!.schedule({ midi: event.pitch, velocity: event.velocity }, startsAt, durationSeconds);
-      this.telemetry.scheduledEvents += 1;
     }
     if (reachedEnd) {
       this.finishPlayback();
@@ -457,12 +497,93 @@ export class WebAudioMidiEngine {
     return firstOverlap;
   }
 
+  private findFirstEventStartingAtOrAfter(positionMs: number): number {
+    let low = 0;
+    let high = this.events.length;
+    while (low < high) {
+      const middle = low + Math.floor((high - low) / 2);
+      if (this.events[middle].startMs < positionMs) low = middle + 1;
+      else high = middle;
+    }
+    return low;
+  }
+
   private updatePosition(): void {
     if (this.state !== "playing" || !this.context) return;
-    this.currentPositionMs = Math.min(
-      this.totalDurationMs,
-      this.anchorPositionMs + (this.context.currentTime - this.anchorTime) * 1000 * this.rate
-    );
+    const nextTimelinePosition = this.anchorPositionMs + (this.context.currentTime - this.anchorTime) * 1000 * this.rate;
+    this.timelinePositionMs = this.loopPlaybackActive && this.loopRange
+      ? nextTimelinePosition
+      : Math.min(this.totalDurationMs, nextTimelinePosition);
+    this.currentPositionMs = this.loopPlaybackActive && this.loopRange && this.timelinePositionMs >= this.loopRange.endMs
+      ? this.loopRange.startMs + ((this.timelinePositionMs - this.loopRange.startMs) % (this.loopRange.endMs - this.loopRange.startMs))
+      : this.timelinePositionMs;
+  }
+
+  private scheduleLoopEvents(horizonMs: number): void {
+    const range = this.loopRange;
+    if (!range) return;
+    // Include notes already sounding at A (for example a tie entering the
+    // measure), but start their loop occurrence exactly at the A boundary.
+    const firstIndex = this.findFirstEventAtOrAfter(range.startMs);
+    const afterLastIndex = this.findFirstEventStartingAtOrAfter(range.endMs);
+    if (firstIndex >= afterLastIndex) return;
+    const cycleLength = range.endMs - range.startMs;
+    const currentCycle = Math.max(0, Math.floor((this.timelinePositionMs - range.startMs) / cycleLength));
+    if (this.loopScheduleCycle < currentCycle) {
+      this.loopScheduleCycle = currentCycle;
+      this.loopNextEventIndex = this.findFirstEventAtOrAfter(this.currentPositionMs);
+    }
+    this.loopNextEventIndex = Math.max(firstIndex, Math.min(this.loopNextEventIndex, afterLastIndex));
+
+    while (true) {
+      if (this.loopNextEventIndex >= afterLastIndex) {
+        this.loopScheduleCycle += 1;
+        this.loopNextEventIndex = firstIndex;
+      }
+      const eventIndex = this.loopNextEventIndex;
+      const event = this.events[eventIndex];
+      if (!event) return;
+      const cycleStartMs = range.startMs + this.loopScheduleCycle * cycleLength;
+      const performedStartMs = Math.max(event.startMs, range.startMs);
+      const performedEndMs = Math.min(event.startMs + event.durationMs, range.endMs);
+      if (performedEndMs <= performedStartMs) {
+        this.loopNextEventIndex += 1;
+        continue;
+      }
+      const virtualStartMs = cycleStartMs + (performedStartMs - range.startMs);
+      if (virtualStartMs > horizonMs) return;
+      this.loopNextEventIndex += 1;
+      const virtualEndMs = cycleStartMs + (performedEndMs - range.startMs);
+      this.scheduleEvent(event, eventIndex, this.loopScheduleCycle, virtualStartMs, virtualEndMs, this.timelinePositionMs);
+    }
+  }
+
+  private scheduleEvent(
+    event: MidiPlaybackEvent,
+    eventIndex: number,
+    cycle: number,
+    virtualStartMs: number,
+    virtualEndMs: number,
+    currentVirtualPositionMs: number
+  ): void {
+    if (virtualEndMs <= currentVirtualPositionMs) {
+      this.telemetry.underrunEvents += 1;
+      return;
+    }
+    const key = `${cycle}:${eventIndex}`;
+    if (this.scheduledEventKeys.has(key)) return;
+    this.scheduledEventKeys.add(key);
+    const effectiveStart = Math.max(virtualStartMs, currentVirtualPositionMs);
+    const now = this.context?.currentTime ?? 0;
+    const intendedStart = this.anchorTime + (virtualStartMs - this.anchorPositionMs) / 1000 / this.rate;
+    // A note already in progress after seek/resume is intentionally started at the current audio time.
+    if (virtualStartMs >= this.anchorPositionMs && (now - intendedStart) * 1000 > 1) {
+      this.telemetry.lateEvents += 1;
+    }
+    const startsAt = now + (effectiveStart - currentVirtualPositionMs) / 1000 / this.rate;
+    const durationSeconds = (virtualEndMs - effectiveStart) / 1000 / this.rate;
+    this.synth?.schedule({ midi: event.pitch, velocity: event.velocity }, startsAt, durationSeconds);
+    this.telemetry.scheduledEvents += 1;
   }
 
   private stopScheduler(): void {
@@ -530,6 +651,7 @@ export class WebAudioMidiEngine {
 
   private finishPlayback(): void {
     this.currentPositionMs = this.totalDurationMs;
+    this.timelinePositionMs = this.totalDurationMs;
     // Cancel the release tails that may outlive the score boundary and release
     // the synthesizer's owned voice set before reporting playback as ended.
     this.synth?.stopAll(this.context?.currentTime);

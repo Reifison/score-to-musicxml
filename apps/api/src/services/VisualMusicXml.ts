@@ -22,6 +22,8 @@ export type VisualParsedMeasure = {
   simpleRhythm: boolean;
   /** Printed note type, dots and tuplet ratio agree with the encoded duration when present. */
   rhythmNotationValid: boolean;
+  /** Effective standard key signature at this measure; zero when omitted from MusicXML. */
+  keyFifths: number;
 };
 
 const children = (node: Node, name?: string): Element[] => Array.from(node.childNodes).filter((child): child is Element =>
@@ -146,7 +148,7 @@ export function parseVisualMusicXml(xml: string): VisualParsedMeasure[] {
         }
       }
       result.push({ partIndex, partId, measureIndex, measure: measure.getAttribute("number") ?? String(measureIndex + 1),
-        events, simpleRhythm, rhythmNotationValid });
+        events, simpleRhythm, rhythmNotationValid, keyFifths });
     }
   }
   return result;

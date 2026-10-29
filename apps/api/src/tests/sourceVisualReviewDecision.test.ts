@@ -94,6 +94,41 @@ describe("source visual review decisions", () => {
     expect((await ctx.audits.list()).filter((entry) => entry.metadata?.decision === "automatic_delivery")).toHaveLength(1);
   });
 
+  it("mantém entrega automática após desfazer, aceitar e recusar uma proposta", async () => {
+    const ctx = await setup();
+    const service = new ScoreService(ctx.scores, ctx.audits, ctx.storage);
+    const delivered = await service.getFor(owner, ctx.score.id);
+    expect(delivered).toMatchObject({ reviewStatus: "approved", canDownloadMusicXml: true,
+      validation: { visualReview: { proposals: [{ status: "rejected" }] } } });
+
+    const undone = await service.decideVisualProposalFor(owner, ctx.score.id, delivered.reviewRevision!, ctx.proposal.id, "undo");
+    expect(undone).toMatchObject({ reviewStatus: "approved", canDownloadMusicXml: true,
+      validation: { reviewAcceptance: { method: "automatic_delivery_v1", revision: undone.reviewRevision },
+        visualReview: { proposals: [{ status: "pending" }] } } });
+    expect(await ctx.storage.readExport(undone.musicxmlFilename!)).toBe(baseXml);
+    expect((await service.getFor(owner, ctx.score.id)).validation?.visualReview?.proposals[0].status).toBe("pending");
+
+    const accepted = await service.decideVisualProposalFor(owner, ctx.score.id, undone.reviewRevision!, ctx.proposal.id, "accept");
+    expect(accepted).toMatchObject({ reviewStatus: "approved", canDownloadMusicXml: true,
+      validation: { visualReview: { proposals: [{ status: "accepted" }] } } });
+    expect(parseVisualMusicXml(await ctx.storage.readExport(accepted.musicxmlFilename!))[0].events[0].step).toBe("D");
+    expect((await service.downloadFor(owner, ctx.score.id)).musicXml.toString("utf8")).toBe(await ctx.storage.readExport(accepted.musicxmlFilename!));
+
+    const undoneAccepted = await service.decideVisualProposalFor(owner, ctx.score.id, accepted.reviewRevision!, ctx.proposal.id, "undo");
+    expect(undoneAccepted.validation?.visualReview?.proposals[0].status).toBe("pending");
+    expect(await ctx.storage.readExport(undoneAccepted.musicxmlFilename!)).toBe(baseXml);
+    const rejected = await service.decideVisualProposalFor(owner, ctx.score.id, undoneAccepted.reviewRevision!, ctx.proposal.id, "reject");
+    expect(rejected.validation?.visualReview?.proposals[0].status).toBe("rejected");
+    expect(rejected.reviewStatus).toBe("approved");
+    expect(await ctx.storage.readExport(ctx.filename)).toBe(baseXml);
+    expect((await service.versionsFor(owner, ctx.score.id)).map((version) => version.id)).toEqual(expect.arrayContaining([
+      `revision:${undone.reviewRevision}`, `revision:${accepted.reviewRevision}`,
+      `revision:${undoneAccepted.reviewRevision}`, `revision:${rejected.reviewRevision}`
+    ]));
+    await expect(service.decideVisualProposalFor(owner, ctx.score.id, delivered.reviewRevision!, ctx.proposal.id, "undo"))
+      .rejects.toMatchObject({ code: "REVIEW_REVISION_CHANGED" });
+  });
+
   it("runs source visual comparison inside conversion and carries a proposal into the versioned decision flow", async () => {
     const directory = await fs.mkdtemp(path.join(os.tmpdir(), "source-visual-conversion-"));
     directories.push(directory);

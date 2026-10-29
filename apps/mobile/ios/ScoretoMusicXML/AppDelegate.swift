@@ -10,6 +10,17 @@ public class AppDelegate: ExpoAppDelegate {
   var reactNativeFactory: RCTReactNativeFactory?
   var appLaunchOptions: [UIApplication.LaunchOptionsKey: Any]?
 
+  private var sceneLaunchFinished = false
+
+  func completeSceneLaunch() {
+#if DEBUG
+    guard !sceneLaunchFinished else { return }
+    sceneLaunchFinished = true
+    _ = super.application(UIApplication.shared, didFinishLaunchingWithOptions: appLaunchOptions)
+#endif
+  }
+
+
   public override func application(
     _ application: UIApplication,
     didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]? = nil
@@ -25,7 +36,12 @@ public class AppDelegate: ExpoAppDelegate {
 
     // SceneDelegate creates the window and starts React Native after UIKit connects a scene.
 
+    // Expo dev launcher requires the connected scene window before launch subscribers.
+#if DEBUG
+    return true
+#else
     return super.application(application, didFinishLaunchingWithOptions: launchOptions)
+#endif
   }
 
   // Linking API
@@ -95,6 +111,7 @@ class SceneDelegate: UIResponder, UIWindowSceneDelegate {
     if let existingController {
       window.rootViewController = existingController
       window.makeKeyAndVisible()
+      appDelegate.completeSceneLaunch()
       self.scene(scene, openURLContexts: connectionOptions.urlContexts)
       for activity in connectionOptions.userActivities {
         self.scene(scene, continue: activity)
@@ -126,6 +143,7 @@ class SceneDelegate: UIResponder, UIWindowSceneDelegate {
       self.scene(scene, continue: activity)
     }
     factory.startReactNative(withModuleName: "main", in: window, launchOptions: launchOptions)
+    appDelegate.completeSceneLaunch()
     appDelegate.appLaunchOptions = nil
   }
 

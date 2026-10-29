@@ -4,7 +4,11 @@ import { prisma } from "../db/prisma.js";
 import type { AuditLog, ConversionAttempt, ConversionCoverage, EntitlementSummary, Score, Session, User } from "../domain.js";
 import { AppError } from "../errors/AppError.js";
 import { scoreAvailability } from "../services/MusicalReview.js";
+import { preparingProgress, terminalProgress, validConversionProgress } from "../services/ConversionProgress.js";
+import { validConversionPreview } from "../services/FirstPagePreview.js";
 import type {
+  ApplePurchaseNotification,
+  ApplePurchaseRecord,
   AuditRepository,
   CreateScoreInput,
   CreateUserInput,
@@ -25,6 +29,8 @@ function mapScore(score: Awaited<ReturnType<typeof prisma.score.findFirst>>): Sc
     confidence: null,
     warnings: Array.isArray(score.warnings) ? score.warnings.map(String) : null,
     coverage: score.coverage as ConversionCoverage | null,
+    conversionProgress: score.conversionProgress as Score["conversionProgress"],
+    conversionPreview: score.conversionPreview as Score["conversionPreview"],
     validation: score.validation as Score["validation"],
     canPlay: score.reviewStatus === "approved" && score.resultStatus === "complete" && score.scoreTypeSelected && Boolean(score.coverage && score.musicxmlFilename),
     canExportMidi: score.reviewStatus === "approved" && score.resultStatus === "complete" && score.scoreTypeSelected && Boolean(score.coverage && score.musicxmlFilename),
@@ -198,7 +204,7 @@ class PrismaScoreRepository implements ScoreRepository {
   }
 
   async softDelete(id: string, input: { deletedAt: Date; purgeAt: Date }): Promise<Score> {
-    const score = await prisma.score.update({ where: { id }, data: input });
+    const score = await prisma.score.update({ where: { id }, data: { ...input, conversionPreview: Prisma.JsonNull } });
     return mapScore(score)!;
   }
 
@@ -229,7 +235,7 @@ class PrismaScoreRepository implements ScoreRepository {
       if (current && ["queued", "processing"].includes(current.status)) throw new AppError(409, "Conversão em andamento.", "CONVERSION_IN_PROGRESS");
       const attempt = await tx.conversionAttempt.create({ data: { scoreId, kind: "manual" } });
       const score = await tx.score.findUniqueOrThrow({ where: { id: scoreId } });
-      await tx.score.update({ where: { id: scoreId }, data: { ...(scoreType ? { scoreType, scoreTypeSelected: true } : {}), ...(!score.musicxmlFilename ? { conversionStatus: "queued" } : {}) } });
+      await tx.score.update({ where: { id: scoreId }, data: { conversionPreview: Prisma.JsonNull, conversionProgress: preparingProgress(attempt.id), ...(scoreType ? { scoreType, scoreTypeSelected: true } : {}), ...(!score.musicxmlFilename ? { conversionStatus: "queued" } : {}) } });
       return mapAttempt(attempt)!;
     });
   }
@@ -260,8 +266,31 @@ class PrismaScoreRepository implements ScoreRepository {
       if (score.deletedAt) return null;
       const claimToken = randomUUID();
       await tx.conversionAttempt.update({ where: { id }, data: { status: "processing", startedAt: new Date(), claimToken } });
-      if (!score.musicxmlFilename) await tx.score.update({ where: { id: found.scoreId }, data: { conversionStatus: "processing", errorMessage: null, lastErrorCode: null } });
+      await tx.score.update({ where: { id: found.scoreId }, data: { conversionPreview: Prisma.JsonNull, conversionProgress: preparingProgress(id),
+        ...(!score.musicxmlFilename ? { conversionStatus: "processing", errorMessage: null, lastErrorCode: null } : {}) } });
       return claimToken;
+    });
+  }
+
+  async updateConversionProgress(scoreId: string, attemptId: string, claimToken: string, progress: NonNullable<Score["conversionProgress"]>): Promise<boolean> {
+    if (!validConversionProgress(progress, attemptId)) return false;
+    return prisma.$transaction(async (tx) => {
+      await lockScore(tx, scoreId);
+      const current = await currentAttempt(tx, scoreId);
+      if (current?.id !== attemptId || current.status !== "processing" || current.claimToken !== claimToken) return false;
+      const updated = await tx.score.updateMany({ where: { id: scoreId, deletedAt: null }, data: { conversionProgress: progress } });
+      return updated.count === 1;
+    });
+  }
+
+  async publishConversionPreview(scoreId: string, attemptId: string, claimToken: string, preview: NonNullable<Score["conversionPreview"]>): Promise<boolean> {
+    if (!validConversionPreview(preview, attemptId)) return false;
+    return prisma.$transaction(async (tx) => {
+      await lockScore(tx, scoreId);
+      const current = await currentAttempt(tx, scoreId);
+      if (current?.id !== attemptId || current.status !== "processing" || current.claimToken !== claimToken) return false;
+      const updated = await tx.score.updateMany({ where: { id: scoreId, deletedAt: null }, data: { conversionPreview: preview } });
+      return updated.count === 1;
     });
   }
 
@@ -274,6 +303,9 @@ class PrismaScoreRepository implements ScoreRepository {
         const current = await currentAttempt(tx, candidate.scoreId);
         if (current?.id !== candidate.id || current.status !== "processing" || !current.startedAt || current.startedAt >= before) return 0;
         await tx.conversionAttempt.update({ where: { id: candidate.id }, data: { status: "queued", startedAt: null, claimToken: null } });
+        const score = await tx.score.findUniqueOrThrow({ where: { id: candidate.scoreId } });
+        await tx.score.update({ where: { id: candidate.scoreId }, data: { conversionPreview: Prisma.JsonNull, conversionProgress: preparingProgress(candidate.id),
+          ...(!score.musicxmlFilename ? { conversionStatus: "queued" } : {}) } });
         return 1;
       });
     }
@@ -295,7 +327,8 @@ class PrismaScoreRepository implements ScoreRepository {
       const current = await currentAttempt(tx, scoreId);
       if (current?.id !== attemptId || current.status !== "processing" || current.claimToken !== claimToken) return null;
       await tx.conversionAttempt.update({ where: { id: attemptId }, data: { status: input.resultStatus, coverage: input.coverage as Prisma.InputJsonValue, musicxmlFilename: input.musicxmlFilename, finishedAt: new Date() } });
-      const score = await tx.score.update({ where: { id: scoreId }, data: { conversionStatus: "converted", resultStatus: input.resultStatus, coverage: input.coverage as Prisma.InputJsonValue, musicxmlFilename: input.musicxmlFilename, warnings: input.warnings, confidence: null, errorMessage: null, lastErrorCode: null, convertedAt: new Date(), reviewStatus: "needs_review", reviewRevision: input.reviewRevision ?? null, validation: input.validation ? input.validation as Prisma.InputJsonValue : Prisma.JsonNull, reviewedAt: null, reviewedById: null } });
+      const existing = await tx.score.findUniqueOrThrow({ where: { id: scoreId } });
+      const score = await tx.score.update({ where: { id: scoreId }, data: { conversionPreview: Prisma.JsonNull, conversionProgress: terminalProgress(attemptId, existing.conversionProgress as Score["conversionProgress"], input.coverage), conversionStatus: "converted", resultStatus: input.resultStatus, coverage: input.coverage as Prisma.InputJsonValue, musicxmlFilename: input.musicxmlFilename, warnings: input.warnings, confidence: null, errorMessage: null, lastErrorCode: null, convertedAt: new Date(), reviewStatus: "needs_review", reviewRevision: input.reviewRevision ?? null, validation: input.validation ? input.validation as Prisma.InputJsonValue : Prisma.JsonNull, reviewedAt: null, reviewedById: null } });
       return mapScore(score)!;
     });
   }
@@ -333,11 +366,11 @@ class PrismaScoreRepository implements ScoreRepository {
     return prisma.$transaction(async (tx) => {
       await lockScore(tx, scoreId);
       const score = await tx.score.findUnique({ where: { id: scoreId } });
-      if (!score || score.deletedAt || score.conversionStatus !== "converted" || score.reviewStatus !== "needs_review" || score.reviewRevision !== baseRevision || !score.musicxmlFilename) return null;
+      if (!score || score.deletedAt || score.conversionStatus !== "converted" || !["needs_review", "approved"].includes(score.reviewStatus) || score.reviewRevision !== baseRevision || !score.musicxmlFilename) return null;
       if (await tx.conversionAttempt.count({ where: { scoreId, status: { in: ["queued", "processing"] } } })) return null;
       return mapScore(await tx.score.update({ where: { id: scoreId }, data: {
         musicxmlFilename: input.musicxmlFilename, reviewRevision: input.reviewRevision, validation: input.validation as Prisma.InputJsonValue,
-        warnings: input.warnings, reviewStatus: "needs_review", reviewedAt: null, reviewedById: null
+        warnings: input.warnings, reviewStatus: input.deliveryApproved ? "approved" : "needs_review", reviewedAt: input.deliveryApproved ? new Date() : null, reviewedById: null
       } }));
     });
   }
@@ -350,7 +383,7 @@ class PrismaScoreRepository implements ScoreRepository {
       await tx.conversionAttempt.update({ where: { id: attemptId }, data: { status: "failed", errorCode, errorMessage: message, finishedAt: new Date() } });
       const existing = await tx.score.findUniqueOrThrow({ where: { id: scoreId } });
       const retryAttempt = automaticRetry && current.kind === "initial" ? await tx.conversionAttempt.create({ data: { scoreId, kind: "automatic" } }) : null;
-      const score = await tx.score.update({ where: { id: scoreId }, data: { conversionStatus: existing.musicxmlFilename ? "converted" : retryAttempt ? "queued" : "failed", errorMessage: message, lastErrorCode: errorCode } });
+      const score = await tx.score.update({ where: { id: scoreId }, data: { conversionPreview: Prisma.JsonNull, conversionProgress: retryAttempt ? preparingProgress(retryAttempt.id) : terminalProgress(attemptId, existing.conversionProgress as Score["conversionProgress"]), conversionStatus: existing.musicxmlFilename ? "converted" : retryAttempt ? "queued" : "failed", errorMessage: message, lastErrorCode: errorCode } });
       return { score: mapScore(score)!, retryAttempt: mapAttempt(retryAttempt) };
     });
   }
@@ -408,44 +441,67 @@ class PrismaEntitlementRepository implements EntitlementRepository {
     });
   }
 
-  async recordApplePurchase(input: {
-    userId: string;
-    productId: string;
-    originalTransactionId: string;
-    purchasedAt: Date;
-    restored?: boolean;
-  }, freeScanLimit: number): Promise<EntitlementSummary> {
-    const entitlement = await prisma.entitlement.upsert({
-      where: { userId: input.userId },
-      create: {
-        userId: input.userId,
-        plan: "paid",
-        source: "apple",
-        appleOriginalTransactionId: input.originalTransactionId,
-        appleProductId: input.productId,
-        purchasedAt: input.purchasedAt
-      },
-      update: {
-        plan: "paid",
-        source: "apple",
-        appleOriginalTransactionId: input.originalTransactionId,
-        appleProductId: input.productId,
-        googlePurchaseToken: null,
-        googleProductId: null,
-        purchasedAt: input.purchasedAt,
-        grantedAt: null,
-        grantedById: null,
-        grantReason: null
+  private async appleTransaction<T>(operation: (tx: Prisma.TransactionClient) => Promise<T>): Promise<T> {
+    for (let attempt = 0; ; attempt++) {
+      try {
+        return await prisma.$transaction(operation, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
+      } catch (error) {
+        if (attempt < 3 && error instanceof Prisma.PrismaClientKnownRequestError && (error.code === "P2034" || error.code === "P2002")) continue;
+        throw error;
       }
+    }
+  }
+
+  async recordApplePurchase(input: ApplePurchaseRecord, freeScanLimit: number): Promise<EntitlementSummary> {
+    const environment = input.environment ?? "sandbox";
+    return this.appleTransaction(async (tx) => {
+      const claim = await tx.applePurchase.upsert({
+        where: { environment_originalTransactionId: { environment, originalTransactionId: input.originalTransactionId } },
+        create: { userId: input.userId, environment, originalTransactionId: input.originalTransactionId, productId: input.productId, purchasedAt: input.purchasedAt },
+        update: {}
+      });
+      if (claim.userId && claim.userId !== input.userId) throw new AppError(409, "Esta compra Apple já está vinculada a outra conta.", "APPLE_PURCHASE_ALREADY_CLAIMED");
+      if (claim.revoked) throw new AppError(402, "Compra Apple revogada ou reembolsada.", "APPLE_PURCHASE_REVOKED");
+      if (!claim.userId) await tx.applePurchase.update({ where: { id: claim.id }, data: { userId: input.userId, purchasedAt: input.purchasedAt } });
+      const current = await tx.entitlement.findUnique({ where: { userId: input.userId } });
+      if (environment === "sandbox" && current?.plan === "paid" && (current.source !== "apple" || current.appleEnvironment === "production")) return entitlementSummary(current, freeScanLimit);
+      const data = { plan: "paid" as const, source: "apple" as const, appleOriginalTransactionId: input.originalTransactionId,
+        appleEnvironment: environment, appleProductId: input.productId, purchasedAt: input.purchasedAt,
+        googlePurchaseToken: null, googleProductId: null, grantedAt: null, grantedById: null, grantReason: null };
+      const entitlement = await tx.entitlement.upsert({ where: { userId: input.userId }, create: { userId: input.userId, ...data }, update: data });
+      return entitlementSummary(entitlement, freeScanLimit);
     });
-    return entitlementSummary(entitlement, freeScanLimit);
+  }
+
+  async applyApplePurchaseNotification(input: ApplePurchaseNotification, freeScanLimit: number): Promise<{ entitlement: EntitlementSummary; userId: string } | null> {
+    return this.appleTransaction(async (tx) => {
+      const key = { environment: input.environment, originalTransactionId: input.originalTransactionId };
+      const claim = await tx.applePurchase.upsert({ where: { environment_originalTransactionId: key },
+        create: { ...key, productId: input.productId }, update: {} });
+      if (claim.lastNotificationId === input.notificationId || (claim.lastNotificationSignedAt && claim.lastNotificationSignedAt >= input.signedAt)) return null;
+      await tx.applePurchase.update({ where: { id: claim.id }, data: { revoked: input.revoked, lastNotificationId: input.notificationId, lastNotificationSignedAt: input.signedAt } });
+      if (!claim.userId) return null;
+      const current = await tx.entitlement.findUnique({ where: { userId: claim.userId } });
+      if (!current || (current.source !== "apple" && current.source !== "free")) return null;
+      if (input.revoked && (current.appleEnvironment !== input.environment || current.appleOriginalTransactionId !== input.originalTransactionId)) return null;
+      if (!input.revoked && current.appleEnvironment === "production" && input.environment === "sandbox") return null;
+      const active = await tx.applePurchase.findFirst({
+        where: { userId: claim.userId, revoked: false, ...(input.environment === "production" ? { environment: "production" } : {}) },
+        orderBy: [{ environment: "asc" }, { purchasedAt: "desc" }]
+      });
+      const data = active
+        ? { plan: "paid" as const, source: "apple" as const, appleEnvironment: active.environment, appleOriginalTransactionId: active.originalTransactionId, appleProductId: active.productId, purchasedAt: active.purchasedAt }
+        : { plan: "free" as const, source: "free" as const, appleEnvironment: null, appleOriginalTransactionId: null, appleProductId: null, purchasedAt: null };
+      const entitlement = await tx.entitlement.update({ where: { userId: claim.userId }, data });
+      return { entitlement: entitlementSummary(entitlement, freeScanLimit), userId: claim.userId };
+    });
   }
 
   async recordGooglePurchase(input: { userId: string; productId: string; purchaseToken: string; purchasedAt: Date }, freeScanLimit: number): Promise<EntitlementSummary> {
     const entitlement = await prisma.entitlement.upsert({
       where: { userId: input.userId },
       create: { userId: input.userId, plan: "paid", source: "google_play", googlePurchaseToken: input.purchaseToken, googleProductId: input.productId, purchasedAt: input.purchasedAt },
-      update: { plan: "paid", source: "google_play", googlePurchaseToken: input.purchaseToken, googleProductId: input.productId, purchasedAt: input.purchasedAt, appleOriginalTransactionId: null, appleProductId: null, grantedAt: null, grantedById: null, grantReason: null }
+      update: { plan: "paid", source: "google_play", googlePurchaseToken: input.purchaseToken, googleProductId: input.productId, purchasedAt: input.purchasedAt, appleOriginalTransactionId: null, appleEnvironment: null, appleProductId: null, grantedAt: null, grantedById: null, grantReason: null }
     });
     return entitlementSummary(entitlement, freeScanLimit);
   }
@@ -465,6 +521,7 @@ class PrismaEntitlementRepository implements EntitlementRepository {
         plan: "paid",
         source: "admin_grant",
         appleOriginalTransactionId: null,
+        appleEnvironment: null,
         appleProductId: null,
         googlePurchaseToken: null,
         googleProductId: null,
@@ -496,29 +553,8 @@ class PrismaEntitlementRepository implements EntitlementRepository {
     return entitlementSummary(entitlement, freeScanLimit);
   }
 
-  async revokeApplePurchase(originalTransactionId: string, freeScanLimit: number): Promise<{ entitlement: EntitlementSummary; userId: string } | null> {
-    const existing = await prisma.entitlement.findFirst({
-      where: {
-        appleOriginalTransactionId: originalTransactionId,
-        appleProductId: { not: null },
-        source: "apple"
-      }
-    });
-    if (!existing) return null;
-
-    const entitlement = await prisma.entitlement.update({
-      where: { userId: existing.userId },
-      data: {
-        plan: "free",
-        source: "free",
-        appleOriginalTransactionId: null,
-        appleProductId: null,
-        purchasedAt: null,
-        googlePurchaseToken: null,
-        googleProductId: null
-      }
-    });
-    return { entitlement: entitlementSummary(entitlement, freeScanLimit), userId: entitlement.userId };
+  async revokeApplePurchase(originalTransactionId: string, freeScanLimit: number, environment: "sandbox" | "production"): Promise<{ entitlement: EntitlementSummary; userId: string } | null> {
+    return this.applyApplePurchaseNotification({ originalTransactionId, productId: "premium_unlock", environment, revoked: true, notificationId: randomUUID(), signedAt: new Date() }, freeScanLimit);
   }
 
   async revokeGooglePurchase(purchaseToken: string, freeScanLimit: number): Promise<{ entitlement: EntitlementSummary; userId: string } | null> {

@@ -19,6 +19,7 @@ export interface PerformedEvent {
   restsOn?: string[];
   restsOff?: string[];
   qstamp?: number;
+  qfrac?: [number, number];
 }
 
 export class UnsupportedMidiEventValidationError extends Error {
@@ -74,6 +75,46 @@ type MeiStructuralNote = {
 };
 
 type SkippedReason = { code: string; count: number; message: string };
+
+/** The engine can serialize a rational onset on either side of an integer tick. */
+function eventMidiTick(event: PerformedEvent, ppq: number): number {
+  if (!event.qfrac) {
+    if (typeof event.qstamp !== "number" || !Number.isFinite(event.qstamp)) {
+      throw new UnsupportedMidiEventValidationError("O timemap não informa um início verificável.");
+    }
+    return Math.floor(event.qstamp * ppq);
+  }
+  const [numerator, denominator] = event.qfrac;
+  if (!Number.isSafeInteger(numerator) || numerator < 0 || !Number.isSafeInteger(denominator) || denominator <= 0 ||
+      typeof event.qstamp !== "number" || !Number.isFinite(event.qstamp)) {
+    throw new UnsupportedMidiEventValidationError("A fração temporal do timemap é inválida.");
+  }
+  const exact = BigInt(numerator) * BigInt(ppq);
+  const tick = exact / BigInt(denominator);
+  if (tick > BigInt(Number.MAX_SAFE_INTEGER)) throw new UnsupportedMidiEventValidationError("O início não cabe no MIDI.");
+  const rational = numerator / denominator;
+  const tolerance = Number.EPSILON * Math.max(1, Math.abs(rational)) * 8;
+  if (Math.abs(event.qstamp - rational) > tolerance) {
+    throw new UnsupportedMidiEventValidationError("Os tempos decimal e racional do timemap divergem.");
+  }
+  return Number(tick);
+}
+
+function isIntegerTickBoundary(event: PerformedEvent, ppq: number, canonicalTick: number): boolean {
+  if (!event.qfrac || typeof event.qstamp !== "number") return false;
+  const [numerator, denominator] = event.qfrac;
+  // Integer and dyadic quarter positions have exact binary representation.
+  // They do not establish the floating-point boundary error seen at thirds
+  // and sixths, even if a supplied MIDI attack happens to be one tick early.
+  let a = BigInt(numerator);
+  let b = BigInt(denominator);
+  while (b !== 0n) [a, b] = [b, a % b];
+  const reducedDenominator = BigInt(denominator) / a;
+  if ((reducedDenominator & (reducedDenominator - 1n)) === 0n) return false;
+  if ((BigInt(numerator) * BigInt(ppq)) % BigInt(denominator) !== 0n) return false;
+  const scaled = event.qstamp * ppq;
+  return Math.abs(scaled - canonicalTick) <= Number.EPSILON * Math.max(1, Math.abs(canonicalTick)) * 16;
+}
 
 /**
  * Checks performed attacks against the written MusicXML pitches without using
@@ -208,10 +249,14 @@ export function inspectMidiSourceEvents(
   }
 
   const onsets = new Map<string, number>();
+  const onsetTicks = new Map<string, number>();
   const offsets = new Map<string, number>();
   for (const event of timemap) {
     if (typeof event.qstamp !== "number" || !Number.isFinite(event.qstamp)) continue;
-    for (const id of event.on ?? []) onsets.set(id, event.qstamp);
+    for (const id of event.on ?? []) {
+      onsets.set(id, event.qstamp);
+      onsetTicks.set(id, eventMidiTick(event, ppq));
+    }
     for (const id of event.off ?? []) offsets.set(id, event.qstamp);
   }
   const tiedDestinations = new Set<string>();
@@ -236,8 +281,8 @@ export function inspectMidiSourceEvents(
   for (const note of meiNotes) {
     if (mappedMeiIds.has(note.id)) continue;
     for (const id of expandedIds(note.id, expansionMap)) {
-      const onset = onsets.get(id);
-      if (onset !== undefined) ambiguousTicks.add(Math.floor((onset * ppq) + 1e-9));
+      const tick = onsetTicks.get(id);
+      if (tick !== undefined) ambiguousTicks.add(tick);
     }
   }
 
@@ -259,10 +304,15 @@ export function inspectMidiSourceEvents(
         eventlessMappedNotes += 1;
         continue;
       }
-      // Verovio serializes fractional timemap positions by truncating them to
-      // MIDI ticks. This is a deterministic quantization of the engine's own
-      // qstamp, not a proximity search over MIDI pitches.
-      const tick = Math.floor((onset * ppq) + 1e-9);
+      // Direct validation always requires the canonical tick. The export
+      // service may first repair a proven non-dyadic renderer boundary using
+      // the rational timemap and complete source-event identity; raw MIDI at
+      // either 16099 or 30739 still fails here against canonical 16100/30740.
+      const tick = onsetTicks.get(id);
+      if (tick === undefined) {
+        eventlessMappedNotes += 1;
+        continue;
+      }
       if (ambiguousTicks.has(tick)) {
         ambiguousPerformedEvents += 1;
         addReason("EVENT_IDENTITY_AMBIGUOUS", 1,
@@ -583,6 +633,186 @@ function collectMeiLayerNotes(
   }
 }
 
+export interface MidiTimingCanonicalization {
+  midi: Buffer;
+  repairedAttacks: number;
+  repairedOffsets: number;
+  affectedGroupIds: string[];
+}
+
+/**
+ * Verovio's MIDI writer casts a double onset to an integer tick, while its
+ * fractional timemap retains the musical time. At exact rational tick
+ * boundaries the cast can land one tick early. Only a complete source/MEI
+ * identity map and a unique time-group/pitch multiset may authorize that
+ * single-direction correction. The final source-event validator still checks
+ * the resulting MIDI at the canonical tick with no proximity matching.
+ */
+export function canonicalizeVerovioMidiTiming(
+  midi: Buffer,
+  musicXml: string,
+  mei: string,
+  timemap: PerformedEvent[],
+  expansionMap: Record<string, string[]>
+): MidiTimingCanonicalization {
+  const unchanged = (): MidiTimingCanonicalization => ({ midi, repairedAttacks: 0, repairedOffsets: 0, affectedGroupIds: [] });
+  if (!timemap.length || timemap.every((event) => !event.qfrac)) return unchanged();
+  if (timemap.some((event) => !event.qfrac)) {
+    throw new UnsupportedMidiEventValidationError("O timemap racional está incompleto.");
+  }
+  const sourceParsed = parseXml(musicXml);
+  const meiParsed = parseXml(mei);
+  if (!sourceParsed.valid || !meiParsed.valid || localName(sourceParsed.document.documentElement) !== "score-partwise") {
+    throw new UnsupportedMidiEventValidationError("A identidade das notas para corrigir o tempo MIDI não é verificável.");
+  }
+  const addReason = () => undefined;
+  const sourceNotes = directChildren(sourceParsed.document.documentElement, "part")
+    .flatMap((part, index) => parseSourcePitchNotes(part, index, addReason).notes);
+  const meiNotes = parseMeiStructuralNotes(Array.from(meiParsed.document.getElementsByTagName("measure")));
+  const sourceById = new Map<string, SourcePitchNote>();
+  const meiById = new Map(meiNotes.map((note) => [note.id, note]));
+  for (const note of sourceNotes) {
+    if (!note.id || sourceById.has(note.id) || !meiById.has(note.id) ||
+        !sameStructuralFingerprint(note, meiById.get(note.id) as MeiStructuralNote)) {
+      throw new UnsupportedMidiEventValidationError("A identidade estrutural de uma nota MIDI é ambígua.");
+    }
+    sourceById.set(note.id, note);
+  }
+  if (sourceNotes.length === 0 || sourceById.size !== meiNotes.length) {
+    throw new UnsupportedMidiEventValidationError("A cobertura de notas MusicXML/MEI para o MIDI está incompleta.");
+  }
+  const renderedToSource = new Map<string, SourcePitchNote>();
+  for (const note of sourceNotes) {
+    for (const renderedId of expandedIds(note.id as string, expansionMap)) {
+      if (renderedToSource.has(renderedId)) {
+        throw new UnsupportedMidiEventValidationError("A expansão MIDI possui identidade de nota duplicada.");
+      }
+      renderedToSource.set(renderedId, note);
+    }
+  }
+  const ppq = midi.readUInt16BE(12);
+  const onsetQ = new Map<string, number>();
+  const offsetQ = new Map<string, number>();
+  for (const event of timemap) {
+    eventMidiTick(event, ppq);
+    for (const id of event.on ?? []) onsetQ.set(id, event.qstamp as number);
+    for (const id of event.off ?? []) offsetQ.set(id, event.qstamp as number);
+  }
+  const tiedDestinations = new Set<string>();
+  for (const tie of Array.from(meiParsed.document.getElementsByTagName("tie"))) {
+    const startId = tie.getAttribute("startid")?.replace(/^#/, "");
+    const endId = tie.getAttribute("endid")?.replace(/^#/, "");
+    if (!startId || !endId) continue;
+    const starts = expandedIds(startId, expansionMap);
+    for (const end of expandedIds(endId, expansionMap)) {
+      const endOnset = onsetQ.get(end);
+      if (endOnset === undefined || starts.some((start) => {
+        const startOffset = offsetQ.get(start);
+        return startOffset !== undefined && Math.abs(startOffset - endOnset) < 1e-6;
+      })) tiedDestinations.add(end);
+    }
+  }
+  type ExpectedGroup = { tick: number; repairable: boolean; pitches: Map<number, number>; ids: string[] };
+  const groups = new Map<number, ExpectedGroup>();
+  const addPitch = (counts: Map<number, number>, pitch: number) => counts.set(pitch, (counts.get(pitch) ?? 0) + 1);
+  for (const event of timemap) {
+    const tick = eventMidiTick(event, ppq);
+    for (const id of event.on ?? []) {
+      const source = renderedToSource.get(id);
+      if (!source) throw new UnsupportedMidiEventValidationError("Um ataque não possui nota de origem identificada.");
+      if (tiedDestinations.has(id)) continue;
+      let group = groups.get(tick);
+      if (!group) {
+        group = { tick, repairable: true, pitches: new Map(), ids: [] };
+        groups.set(tick, group);
+      }
+      group.repairable &&= isIntegerTickBoundary(event, ppq, tick);
+      group.ids.push(id);
+      addPitch(group.pitches, source.pitch);
+    }
+  }
+  const parsed = parseMidi(midi);
+  const attacks = parsed.flatMap((track) => track.notes).filter((note) => !note.off);
+  const byTick = groupBy(attacks, (note) => String(note.tick));
+  const samePitches = (notes: NoteEvent[], expected: Map<number, number>): boolean => {
+    if (notes.length !== [...expected.values()].reduce((sum, count) => sum + count, 0)) return false;
+    const actual = new Map<number, number>();
+    for (const note of notes) addPitch(actual, note.pitch);
+    return actual.size === expected.size && [...expected].every(([pitch, count]) => actual.get(pitch) === count);
+  };
+  if (attacks.length !== [...groups.values()].reduce((sum, group) => sum + group.ids.length, 0)) {
+    throw new MidiEventMismatchError("A quantidade de ataques MIDI diverge das notas executadas.");
+  }
+  if ([...groups.values()].every((group) => samePitches(byTick.get(String(group.tick)) ?? [], group.pitches))) return unchanged();
+  const candidateOwner = new Map<number, ExpectedGroup>();
+  for (const group of groups.values()) {
+    for (const tick of group.repairable ? [group.tick - 1, group.tick] : [group.tick]) {
+      if (tick < 0) continue;
+      if (candidateOwner.has(tick) && (byTick.get(String(tick))?.length ?? 0) > 0) {
+        throw new UnsupportedMidiEventValidationError("Dois grupos de notas disputam o mesmo tick MIDI.");
+      }
+      candidateOwner.set(tick, group);
+    }
+  }
+  const repairs = new Map<string, number>();
+  const shifts = new Map<string, number>();
+  const affectedGroupIds = new Set<string>();
+  const claimed = new Set<string>();
+  for (const group of groups.values()) {
+    const raw = [
+      ...(group.repairable && group.tick > 0 ? byTick.get(String(group.tick - 1)) ?? [] : []),
+      ...(byTick.get(String(group.tick)) ?? [])
+    ];
+    if (!samePitches(raw, group.pitches)) {
+      throw new MidiEventMismatchError("Altura, multiplicidade ou início de um grupo MIDI diverge do MusicXML.");
+    }
+    for (const note of raw) {
+      const key = `${note.track}:${note.index}`;
+      if (claimed.has(key)) throw new UnsupportedMidiEventValidationError("Um ataque MIDI foi associado duas vezes.");
+      claimed.add(key);
+      const shift = group.tick - note.tick;
+      shifts.set(key, shift);
+      if (shift) {
+        repairs.set(key, group.tick);
+        // A chord/unison group's sound is proven as a multiset; individual
+        // same-pitch members cannot be attributed to distinct MIDI messages.
+        for (const id of group.ids) affectedGroupIds.add(id);
+      }
+    }
+  }
+  if (claimed.size !== attacks.length) throw new MidiEventMismatchError("O MIDI contém ataques fora dos grupos de origem.");
+  let repairedOffsets = 0;
+  for (const [trackIndex, track] of parsed.entries()) {
+    const active = new Map<string, number[]>();
+    for (const note of track.notes) {
+      const voiceKey = `${note.channel}:${note.pitch}`;
+      const queue = active.get(voiceKey) ?? [];
+      const eventKey = `${trackIndex}:${note.index}`;
+      if (!note.off) {
+        queue.push(shifts.get(eventKey) ?? 0);
+        active.set(voiceKey, queue);
+        continue;
+      }
+      if (!queue.length || queue.some((shift) => shift !== queue[0])) {
+        throw new UnsupportedMidiEventValidationError("O par note-on/note-off de uma altura sobreposta é ambíguo.");
+      }
+      const shift = queue.shift() as number;
+      if (shift) {
+        repairs.set(eventKey, note.tick + shift);
+        repairedOffsets += 1;
+      }
+    }
+    if ([...active.values()].some((queue) => queue.length)) {
+      throw new UnsupportedMidiEventValidationError("Uma nota MIDI não possui note-off correspondente.");
+    }
+  }
+  const repairedAttacks = [...shifts.values()].filter(Boolean).length;
+  if (repairedAttacks !== repairedOffsets) {
+    throw new UnsupportedMidiEventValidationError("A correção temporal não preserva todos os pares de notas.");
+  }
+  return { midi: serializeMidi(midi, parsed, repairs), repairedAttacks, repairedOffsets, affectedGroupIds: [...affectedGroupIds] };
+}
+
 /** Repairs a tie only when the performed route skips its written destination and a unique MIDI note can be identified. */
 export function validateAndRepairSkippedTieDestinations(
   midi: Buffer,
@@ -625,12 +855,16 @@ export function validateAndRepairSkippedTieDestinations(
   const played = timemap.filter((event): event is PerformedEvent & { measureOn: string; qstamp: number } =>
     typeof event.measureOn === "string" && typeof event.qstamp === "number" && Number.isFinite(event.qstamp));
   const onsets = new Map<string, number>();
+  const onsetTicks = new Map<string, number>();
   const offsets = new Map<string, number>();
   const restOnsets = new Map<string, number>();
   const restOffsets = new Map<string, number>();
   for (const event of timemap) {
     if (typeof event.qstamp !== "number" || !Number.isFinite(event.qstamp)) continue;
-    for (const id of event.on ?? []) onsets.set(id, event.qstamp);
+    for (const id of event.on ?? []) {
+      onsets.set(id, event.qstamp);
+      onsetTicks.set(id, eventMidiTick(event, midi.readUInt16BE(12)));
+    }
     for (const id of event.off ?? []) offsets.set(id, event.qstamp);
     for (const id of event.restsOn ?? []) restOnsets.set(id, event.qstamp);
     for (const id of event.restsOff ?? []) restOffsets.set(id, event.qstamp);
@@ -723,8 +957,10 @@ export function validateAndRepairSkippedTieDestinations(
     for (const id of renderedNoteIds) {
       if (suppressed.has(id)) continue;
       const onset = onsets.get(id) as number;
-      const tick = Math.round(onset * ppq);
-      if (Math.abs(tick / ppq - onset) > 1e-6) throw new UnsupportedMidiEventValidationError("O início de uma nota não cabe na resolução do MIDI.");
+      const nearestTick = Math.round(onset * ppq);
+      if (Math.abs(nearestTick / ppq - onset) > 1e-6) throw new UnsupportedMidiEventValidationError("O início de uma nota não cabe na resolução do MIDI.");
+      const tick = onsetTicks.get(id);
+      if (tick === undefined) throw new UnsupportedMidiEventValidationError("O início da nota não possui tick verificável.");
       expected.set(tick, (expected.get(tick) ?? 0) + 1);
     }
     const actual = new Map<number, number>();
@@ -880,7 +1116,12 @@ function serializeMidi(original: Buffer, tracks: ParsedTrack[], repairs: Map<str
     const body: Buffer[] = [];
     let previous = 0;
     const ordered = track.events.map((event) => ({ ...event, tick: repairs.get(`${trackIndex}:${event.order}`) ?? event.tick }));
-    ordered.sort((a, b) => a.tick - b.tick || a.order - b.order);
+    const isEndOfTrack = (event: TrackEvent) => event.bytes.length >= 3 &&
+      event.bytes[0] === 0xff && event.bytes[1] === 0x2f && event.bytes[2] === 0x00;
+    const lastMusicalTick = ordered.filter((event) => !isEndOfTrack(event))
+      .reduce((latest, event) => Math.max(latest, event.tick), 0);
+    for (const event of ordered) if (isEndOfTrack(event)) event.tick = Math.max(event.tick, lastMusicalTick);
+    ordered.sort((a, b) => a.tick - b.tick || Number(isEndOfTrack(a)) - Number(isEndOfTrack(b)) || a.order - b.order);
     for (const event of ordered) {
       body.push(writeVlq(event.tick - previous), Buffer.from(event.bytes));
       previous = event.tick;

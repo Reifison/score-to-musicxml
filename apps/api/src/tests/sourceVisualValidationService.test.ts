@@ -49,6 +49,72 @@ ${extras}
 process.stdout.write(JSON.stringify(response));`;
 
 describe("SourceVisualValidationService", () => {
+  it("records source measures on a count mismatch without assigning editable XML indices", async () => {
+    const sample = await fixture(reader(sourceEvents("D"),
+      "response.measures.push({...response.measures[0],measureIndex:1});"));
+    const result = await new SourceVisualValidationService({ readerExecutable: sample.readerExecutable }).evaluate(sample.input);
+    expect(result.review.proposals).toEqual([]);
+    expect(result.review.segments[0].status).toBe("unknown");
+    expect(result.review.sourceMeasures).toHaveLength(2);
+    expect(result.review.sourceMeasures?.map((item) => item.sourceMeasureIndex)).toEqual([0, 1]);
+    expect(result.review.sourceMeasures?.every((item) => !Object.hasOwn(item, "measureIndex"))).toBe(true);
+    expect(result.review.diagnostics).toContainEqual(expect.objectContaining({ code: "VISUAL_SOURCE_MEASURE_UNMAPPED", page: 1 }));
+    expect(result.review.diagnostics?.filter((item) => item.code === "VISUAL_MEASURE_COUNT_MISMATCH"
+      || item.code === "VISUAL_SOURCE_MEASURE_UNMAPPED").every((item) => !Object.hasOwn(item, "measure"))).toBe(true);
+    expect(result.review.accuracyVerified).toBe(false);
+  });
+
+  it("compares explicit source key signatures and affected pitches without applying edits", async () => {
+    const encoded = xml.replace('number="1"', 'number="0" implicit="yes"').replace("<step>C</step>", "<step>B</step>");
+    const sample = await fixture(reader(sourceEvents("B"),
+      "response.measures[0].keyFifths=-1;response.measures[0].events[0].alter=-1;"));
+    const input = { ...sample.input, musicXml: encoded, candidates: [{ ...sample.input.candidates[0], xml: encoded }] };
+    const result = await new SourceVisualValidationService({ readerExecutable: sample.readerExecutable }).evaluate(input);
+    expect(result.review.segments[0].status).toBe("suspected");
+    expect(result.review.proposals).toHaveLength(1);
+    expect(result.review.proposals[0]).toMatchObject({ applicable: false, differences: ["pitch"] });
+    expect(result.review.diagnostics).toContainEqual(expect.objectContaining({ code: "VISUAL_KEY_SIGNATURE_MISMATCH", page: 1, measure: "0", partId: "P1" }));
+    expect(result.review.diagnostics).toContainEqual(expect.objectContaining({ code: "VISUAL_KEY_AFFECTED_PITCH_MISMATCH", page: 1, measure: "0", partId: "P1" }));
+  });
+
+  it("accepts a real key change and an incomplete pickup when source and XML align", async () => {
+    const first = xml.match(/<measure number="1">[\s\S]*?<\/measure>/)?.[0];
+    expect(first).toBeDefined();
+    const keyedFirst = first!.replace('number="1"', 'number="0" implicit="yes"')
+      .replace("<divisions>4</divisions>", "<divisions>4</divisions><key><fifths>-1</fifths></key><time><beats>4</beats><beat-type>4</beat-type></time>");
+    const second = first!.replace('number="1"', 'number="2"')
+      .replace("<divisions>4</divisions>", "<divisions>4</divisions><key><fifths>0</fifths></key>");
+    const encoded = xml.replace(first!, keyedFirst + second);
+    const sample = await fixture(reader(sourceEvents(),
+      "response.measures[0].keyFifths=-1;response.measures.push({...response.measures[0],measureIndex:1,keyFifths:0});"));
+    const input = { ...sample.input, musicXml: encoded, candidates: [{ ...sample.input.candidates[0], xml: encoded }] };
+    const result = await new SourceVisualValidationService({ readerExecutable: sample.readerExecutable }).evaluate(input);
+    expect(result.review.checkedMeasures).toBe(2);
+    expect(result.review.proposals).toEqual([]);
+    expect(result.review.diagnostics?.some((item) => item.code === "VISUAL_KEY_SIGNATURE_MISMATCH")).toBe(false);
+  });
+
+  it("does not apply a later XML key signature to earlier measures", async () => {
+    const first = xml.match(/<measure number="1">[\s\S]*?<\/measure>/)?.[0];
+    expect(first).toBeDefined();
+    const second = first!.replace('number="1"', 'number="2"')
+      .replace("<divisions>4</divisions>", "<divisions>4</divisions><key><fifths>-1</fifths></key>");
+    const encoded = xml.replace(first!, first! + second);
+    const sample = await fixture(reader(sourceEvents(),
+      "response.measures[0].keyFifths=-1;response.measures.push({...response.measures[0],measureIndex:1});"));
+    const input = { ...sample.input, musicXml: encoded, candidates: [{ ...sample.input.candidates[0], xml: encoded }] };
+    const result = await new SourceVisualValidationService({ readerExecutable: sample.readerExecutable }).evaluate(input);
+    expect(result.review.segments.map((item) => item.status)).toEqual(["suspected", "compared"]);
+    expect(result.review.diagnostics?.filter((item) => item.code === "VISUAL_KEY_SIGNATURE_MISMATCH")).toHaveLength(1);
+  });
+
+  it("keeps legacy reader responses without key evidence comparable", async () => {
+    const sample = await fixture(reader(sourceEvents()));
+    const result = await new SourceVisualValidationService({ readerExecutable: sample.readerExecutable }).evaluate(sample.input);
+    expect(result.review.checkedMeasures).toBe(1);
+    expect(result.review.diagnostics?.some((item) => item.code === "VISUAL_KEY_SIGNATURE_MISMATCH")).toBe(false);
+  });
+
   it("preserves a bounded reader failure reason without promoting incomplete coverage or exposing stderr", async () => {
     const sample = await fixture(reader([], "response.coverageComplete=false;response.measures=[];response.diagnostics=[{code:'HOMR_EMPTY_MEASURE',message:'Bearer secret /private/path'}];"));
     const result = await new SourceVisualValidationService({ readerExecutable: sample.readerExecutable }).evaluate(sample.input);

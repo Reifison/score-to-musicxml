@@ -21,6 +21,15 @@ describe("resolvePlayerWebViewConfig", () => {
     expect(() => resolvePlayerWebViewConfig("http://192.168.1.10:5173/mobile/player", false)).toThrow(/HTTPS/);
   });
 
+  it("localiza erros de configuração em inglês quando o app está em inglês", () => {
+    expect(() => resolvePlayerWebViewConfig("not-a-url", false, "en"))
+      .toThrow("The player URL is not configured correctly.");
+    expect(() => resolvePlayerWebViewConfig("https://user:secret@example.com", false, "en"))
+      .toThrow("The player URL cannot contain credentials, query parameters, or fragments.");
+    expect(() => resolvePlayerWebViewConfig("http://app.example.com", false, "en"))
+      .toThrow("The app player requires an HTTPS connection.");
+  });
+
   it("rejeita URL com token, query, hash, credencial ou caminho diferente", () => {
     const invalid = [
       "https://app.example.com/mobile/player?token=secret",

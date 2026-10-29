@@ -3,6 +3,19 @@ export type ScoreStatus = "uploaded" | "queued" | "processing" | "converted" | "
 export type ScoreType = "melody" | "piano" | "guitar_solo" | "guitar_duo";
 export type ConversionResultStatus = "complete" | "partial";
 export type ReviewStatus = "unverified" | "needs_review" | "approved";
+export type RecognitionQualityIssue = {
+  code: string;
+  message: string;
+  page?: number;
+  measure?: string;
+};
+export type RecognitionQuality = {
+  status: "needs_review" | "unverified";
+  sourceComparison: "compared" | "partial" | "unavailable" | "skipped";
+  checkedMeasures: number;
+  accuracyVerified: false;
+  issues: RecognitionQualityIssue[];
+};
 export type VisualNoteValue = {
   kind: "note" | "rest";
   step?: "A" | "B" | "C" | "D" | "E" | "F" | "G";
@@ -152,6 +165,41 @@ export type ConversionAttempt = {
   finishedAt: string | null;
 };
 
+export type ScoreVersion = {
+  id: string;
+  label: string;
+  createdAt: string;
+  kind: "conversion" | "correction";
+  revision: string | null;
+  isCurrent: boolean;
+  status: "complete" | "partial" | "needs_review" | "approved" | "unverified";
+  coverage: { totalPages: number; processedPages: number; missingPages: number[] } | null;
+  available: boolean;
+  attemptId?: string;
+};
+
+export type ConversionProgress = {
+  attemptId: string;
+  stage: "preparing" | "recognizing" | "validating" | "complete" | "interrupted";
+  totalPages: number | null;
+  currentPage: number | null;
+  completedPages: number[];
+  failedPages: number[];
+  excludedPages: number[];
+  reusedPages: number[];
+  updatedAt: string;
+};
+
+export type ConversionPreview = {
+  attemptId: string;
+  revision: string;
+  page: 1;
+  totalPages: number;
+  createdAt: string;
+  warnings: string[];
+  xmlSHA256?: string;
+};
+
 export type User = {
   id: string;
   name: string;
@@ -176,6 +224,8 @@ export type Score = {
   scoreTypeSelected?: boolean;
   resultStatus?: ConversionResultStatus | null;
   coverage?: ConversionCoverage | null;
+  conversionProgress?: ConversionProgress | null;
+  conversionPreview?: ConversionPreview | null;
   lastErrorCode?: string | null;
   attempts?: ConversionAttempt[];
   canPlay?: boolean;
@@ -185,6 +235,7 @@ export type Score = {
   reviewRevision?: string | null;
   reviewAcceptance?: ReviewAcceptance | null;
   validation?: MusicalValidation | null;
+  recognitionQuality?: RecognitionQuality | null;
   reviewedAt?: string | null;
   errorMessage: string | null;
   warnings: string[] | null;

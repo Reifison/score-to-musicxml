@@ -1,3 +1,4 @@
+import { t, useTranslation } from "../i18n";
 import * as SplashScreen from "expo-splash-screen";
 import { useEffect, useRef, useState } from "react";
 import {
@@ -23,6 +24,7 @@ type StartupSplashProps = {
 
 /** The native launch screen hands its centered logo to this musical opening. */
 export function StartupSplash({ ready, onFinish }: StartupSplashProps) {
+  const { isReady: languageReady } = useTranslation();
   const { height, width } = useWindowDimensions();
   const [reduceMotion, setReduceMotion] = useState<boolean | null>(null);
   const [active, setActive] = useState(AppState.currentState === "active");
@@ -136,7 +138,7 @@ export function StartupSplash({ ready, onFinish }: StartupSplashProps) {
   return (
     <Animated.View
       accessible
-      accessibilityLabel="Conversor de Partituras. Abrindo o aplicativo."
+      accessibilityLabel={languageReady ? t("Conversor de Partituras. Abrindo o aplicativo.", "Sheet Music Converter. Opening the app.") : undefined}
       accessibilityRole="progressbar"
       accessibilityViewIsModal
       onLayout={() => setLaidOut(true)}
@@ -197,7 +199,7 @@ export function StartupSplash({ ready, onFinish }: StartupSplashProps) {
           )}
         </View>
         <Animated.View style={[styles.copy, { opacity: reveal, marginTop: compact ? 14 : 28 }]}>
-          <Text style={[styles.name, compact && styles.nameCompact]}>Conversor de Partituras</Text>
+          {languageReady ? <Text style={[styles.name, compact && styles.nameCompact]}>{t("Conversor de Partituras", "Sheet Music Converter")}</Text> : null}
         </Animated.View>
       </View>
     </Animated.View>

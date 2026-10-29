@@ -6,6 +6,13 @@ export type ScoreStatus = "uploaded" | "queued" | "processing" | "converted" | "
 export type ScoreType = "melody" | "piano" | "guitar_solo" | "guitar_duo";
 export type ConversionResultStatus = "complete" | "partial";
 export type ReviewStatus = "unverified" | "needs_review" | "approved";
+export type RecognitionQuality = {
+  status: "needs_review" | "unverified";
+  sourceComparison: "compared" | "partial" | "unavailable" | "skipped";
+  checkedMeasures: number;
+  accuracyVerified: false;
+  issues: Array<{ code: string; message: string; page?: number; measure?: string }>;
+};
 export type MusicalValidation = {
   version: 1;
   visualReview?: SourceVisualReview;
@@ -43,6 +50,26 @@ export type MusicalValidation = {
 };
 export type ConversionAttemptKind = "initial" | "automatic" | "manual";
 export type ConversionAttemptStatus = "queued" | "processing" | "complete" | "partial" | "failed";
+export type ConversionProgress = {
+  attemptId: string;
+  stage: "preparing" | "recognizing" | "validating" | "complete" | "interrupted";
+  totalPages: number | null;
+  currentPage: number | null;
+  completedPages: number[];
+  failedPages: number[];
+  excludedPages: number[];
+  reusedPages: number[];
+  updatedAt: string;
+};
+export type ConversionPreview = {
+  attemptId: string;
+  revision: string;
+  page: 1;
+  totalPages: number;
+  createdAt: string;
+  warnings: string[];
+  xmlSHA256: string;
+};
 export type PageContentRole = "musical" | "nonmusical" | "uncertain";
 export type PageClassification = {
   method: "staff_evidence_v1" | "verified_manual_v1" | "unavailable";
@@ -131,6 +158,8 @@ export type Score = {
   scoreTypeSelected?: boolean;
   resultStatus?: ConversionResultStatus | null;
   coverage?: ConversionCoverage | null;
+  conversionProgress?: ConversionProgress | null;
+  conversionPreview?: ConversionPreview | null;
   lastErrorCode?: string | null;
   attempts?: ConversionAttempt[];
   canPlay?: boolean;
@@ -139,6 +168,7 @@ export type Score = {
   reviewStatus?: ReviewStatus;
   reviewRevision?: string | null;
   validation?: MusicalValidation | null;
+  recognitionQuality?: RecognitionQuality;
   reviewedAt?: Date | null;
   reviewedById?: string | null;
   uploadStatus: ScoreStatus;

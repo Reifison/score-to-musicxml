@@ -2,13 +2,15 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { env } from "../config/env.js";
-import type { ConversionAttempt, ConversionCoverage, Score } from "../domain.js";
+import type { ConversionAttempt, ConversionCoverage, ConversionPreview, ConversionProgress, Score } from "../domain.js";
 import { AppError } from "../errors/AppError.js";
 import type { ScoreConversionQueue } from "../queues/ScoreConversionQueue.js";
 import type { AuditRepository, ScoreRepository } from "../repositories/contracts.js";
 import { basenameWithoutExtension } from "../utils/filenames.js";
 import { FileStorageService } from "./FileStorageService.js";
-import type { OmrAdapter, OmrResult } from "./OmrAdapter.js";
+import type { OmrAdapter, OmrPageProgress, OmrReadyPage, OmrResult } from "./OmrAdapter.js";
+import { inspectMusicXml } from "./MusicXmlCoverage.js";
+import { preparingProgress } from "./ConversionProgress.js";
 import { inspectMusicXmlRhythm } from "./MusicXmlRhythm.js";
 import { inspectMusicXmlValidation } from "./MusicXmlValidation.js";
 import { reviewRevision } from "./MusicalReview.js";
@@ -19,7 +21,7 @@ import { inspectMidiForReview, withMidiValidation } from "./MidiReviewPreflight.
 import { AutomaticDeliveryService } from "./AutomaticDeliveryService.js";
 import { NotesRhythmReferenceService, isCurrentNotesRhythmReference, referenceReuseVisualReview } from "./NotesRhythmReferenceService.js";
 
-const pipelineVersion = "notes-rhythm-v5";
+const pipelineVersion = "notes-rhythm-v7";
 
 function errorCode(error: unknown): string {
   if (error instanceof AppError) return error.code;
@@ -86,8 +88,42 @@ export class ScoreConversionService {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(new AppError(504, "Tempo máximo de conversão excedido.", "OMR_CONVERSION_TIMEOUT")), env.OMR_CONVERSION_TIMEOUT_MS);
     let exportStoredFilename: string | null = null;
+    let pagePreview: ConversionPreview | null = null;
+    let progress: ConversionProgress = preparingProgress(attempt.id);
+    const onProgress = async (snapshot: OmrPageProgress): Promise<void> => {
+      if (controller.signal.aborted) throw controller.signal.reason;
+      const next: ConversionProgress = { ...snapshot, attemptId: attempt.id, updatedAt: new Date().toISOString() };
+      if (!await this.scores.updateConversionProgress(scoreId, attempt.id, claimToken, next)) {
+        controller.abort(new AppError(409, "Esta conversão foi retomada por outra execução.", "OMR_ATTEMPT_SUPERSEDED"));
+        throw controller.signal.reason;
+      }
+      progress = next;
+    };
+    const onPageReady = async (page: OmrReadyPage): Promise<void> => {
+      if (page.page !== 1 || page.totalPages <= 1 || pagePreview) return;
+      if (controller.signal.aborted) throw controller.signal.reason;
+      try {
+        inspectMusicXml(page.result.musicXml, 1, score.scoreType ?? "melody");
+        pagePreview = await this.storage.saveFirstPagePreview(score.storedFilename, attempt.id, page.totalPages,
+          page.result.musicXml, page.result.warnings);
+        if (controller.signal.aborted) throw controller.signal.reason;
+        if (!await this.scores.publishConversionPreview(scoreId, attempt.id, claimToken, pagePreview)) {
+          controller.abort(new AppError(409, "Esta conversão foi retomada por outra execução.", "OMR_ATTEMPT_SUPERSEDED"));
+          throw controller.signal.reason;
+        }
+      } catch (error) {
+        if (controller.signal.aborted) throw controller.signal.reason;
+        // Preview availability must not discard a healthy page or its final
+        // conversion. The normal result still goes through every validator.
+        console.warn("First-page preview unavailable", { scoreId, attemptId: attempt.id, code: errorCode(error) });
+      }
+    };
     try {
+      await onProgress({ ...progress, stage: "preparing" });
       tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "score-omr-"));
+      // macOS exposes its temporary directory through /var -> /private/var.
+      // Use one canonical root for OMR evidence and checkpoint containment.
+      tempDir = await fs.realpath(tempDir);
       const workDir = tempDir;
       const inputPath = this.storage.resolveUploadPath(score.storedFilename);
       const lookup = await this.references.lookup({ sourcePath: inputPath, ownerUserId: score.userId,
@@ -102,12 +138,18 @@ export class ScoreConversionService {
       const result: OmrResult = reference ? { musicXml: reference.musicXml, coverage: reference.coverage,
         warnings: ["Notas e ritmo reaproveitados da revisão autorizada deste mesmo arquivo."],
         engine: { name: "notes-rhythm-reference", version: "1" } }
-        : await withConversionSignal(controller.signal, () => this.omr.convert(inputPath, score.originalFilename, workDir, { preprocessingProfile: score.preprocessingProfile, scoreType: score.scoreType ?? "melody", scoreTypeSelected: score.scoreTypeSelected === true, signal: controller.signal }));
+        : await withConversionSignal(controller.signal, () => this.omr.convert(inputPath, score.originalFilename, workDir, {
+          preprocessingProfile: score.preprocessingProfile, scoreType: score.scoreType ?? "melody", scoreTypeSelected: score.scoreTypeSelected === true,
+          experimentalAutomaticRecovery: env.EXPERIMENTAL_NATIVE_EVENT_RECOVERY,
+          signal: controller.signal, checkpointDirectory: this.storage.resolveConversionCheckpointDirectory(score.storedFilename), onProgress, onPageReady }));
       if (controller.signal.aborted) throw controller.signal.reason;
       const coverage = result.coverage;
       if (!validCoverage(coverage)) {
         throw new AppError(422, "O reconhecimento não informou cobertura verificável das páginas.", "OMR_COVERAGE_MISSING");
       }
+      await onProgress({ stage: "validating", totalPages: coverage.totalPages, currentPage: null,
+        completedPages: [...coverage.processedPages], failedPages: [...coverage.missingPages], excludedPages: [...(coverage.excludedPages ?? [])],
+        reusedPages: progress.reusedPages.filter((page) => coverage.processedPages.includes(page)) });
       const resultStatus = coverage.missingPages.length || coverage.uncertainPages?.length ? "partial" : "complete";
       const rhythm = inspectMusicXmlRhythm(result.musicXml);
       const finalValidation = inspectMusicXmlValidation(result.musicXml);
@@ -136,7 +178,7 @@ export class ScoreConversionService {
       await this.storage.saveConversionEvidence(exportStoredFilename, {
         sourcePath: inputPath, workDir, revision,
         metadata: { parentExportFilename: score.musicxmlFilename, attemptId: attempt.id, engine: result.engine ?? { name: env.OMR_ENGINE, version: null },
-          pipelineVersion, conversionMode, referenceReuse: referenceReuse ?? null, preprocessingProfile: score.preprocessingProfile, scoreType: score.scoreType,
+          pipelineVersion, conversionMode, reusedPages: progress.reusedPages, referenceReuse: referenceReuse ?? null, preprocessingProfile: score.preprocessingProfile, scoreType: score.scoreType,
           validation, coverage, diagnosticCodes: [...new Set([...validation.issues.map((issue) => issue.code), ...(validation.visualReview?.diagnostics ?? []).map((item) => item.code)])], accuracyVerified: false },
         candidates: result.evidence ?? [], visualAssets: visual.assets
       });
@@ -156,7 +198,7 @@ export class ScoreConversionService {
       await this.auditSafely({ actorId: score.userId, action: "conversion_completed", entity: "score", entityId: scoreId,
         metadata: { attemptId: attempt.id, outputBase: `${basenameWithoutExtension(score.originalFilename)}.musicxml`, resultStatus, missingPages: coverage.missingPages,
           rhythmCheckedMeasures: rhythm.checkedMeasures, rhythmSkippedMeasures: rhythm.skippedMeasures, rhythmIssueCount: rhythm.issues.length,
-          pipelineVersion, conversionMode, referenceReuse: referenceReuse ?? null, visualStatus: visual.review.status,
+          pipelineVersion, conversionMode, reusedPages: progress.reusedPages, referenceReuse: referenceReuse ?? null, visualStatus: visual.review.status,
           midiValidationStatus: midiValidation.status, midiCheckedNotes: midiValidation.checkedNotes,
           visualCheckedMeasures: visual.review.checkedMeasures, visualUnknownMeasures: visual.review.unknownMeasures,
           visualProposalCount: visual.review.proposals.length,
@@ -166,8 +208,9 @@ export class ScoreConversionService {
       return await new AutomaticDeliveryService(this.scores, this.audits, this.storage, this.midiInspector)
         .finalize(scoreId).catch(() => updated) ?? updated;
     } catch (error) {
-      const code = controller.signal.aborted ? "OMR_CONVERSION_TIMEOUT" : errorCode(error);
-      const message = (error instanceof Error ? error.message : "Erro desconhecido na conversão.").slice(0, 1000);
+      const reason: unknown = controller.signal.aborted ? controller.signal.reason : error;
+      const code = errorCode(reason);
+      const message = (reason instanceof Error ? reason.message : "Erro desconhecido na conversão.").slice(0, 1000);
       const failed = await this.scores.failAttempt(scoreId, attempt.id, claimToken, code, message, attempt.kind === "initial" && isTemporaryConversionError(code));
       if (!failed) {
         const current = (await this.scores.findById(scoreId)) ?? score;
@@ -175,11 +218,14 @@ export class ScoreConversionService {
         return current;
       }
       if (exportStoredFilename) await this.storage.deleteExport(exportStoredFilename).catch(() => undefined);
-      await this.auditSafely({ actorId: score.userId, action: "conversion_failed", entity: "score", entityId: scoreId, metadata: { attemptId: attempt.id, code, message: message.slice(0, 300) } });
+      await this.auditSafely({ actorId: score.userId, action: "conversion_failed", entity: "score", entityId: scoreId, metadata: {
+        attemptId: attempt.id, code, message: message.slice(0, 300), totalPages: progress.totalPages,
+        currentPage: progress.currentPage, completedPages: progress.completedPages, reusedPages: progress.reusedPages } });
       if (failed.retryAttempt) await this.queue?.enqueue(scoreId, failed.retryAttempt.id).catch(() => undefined);
       return failed.score;
     } finally {
       clearTimeout(timer);
+      if (pagePreview) await this.storage.deleteFirstPagePreview(score.storedFilename, pagePreview).catch(() => undefined);
       if (tempDir) await fs.rm(tempDir, { recursive: true, force: true });
     }
   }

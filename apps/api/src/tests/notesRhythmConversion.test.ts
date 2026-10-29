@@ -71,7 +71,7 @@ describe("private notes/rhythm reference in conversion pipeline", () => {
       midiValidation: { status: "passed", xmlSHA256: sha(ctx.musicXml) },
       reviewAcceptance: { accuracyVerified: false, trainingEligible: false } });
     const evidence = await ctx.storage.readConversionEvidence(converted.musicxmlFilename!);
-    expect(evidence).toMatchObject({ pipelineVersion: "notes-rhythm-v5", conversionMode: "reference_reuse",
+    expect(evidence).toMatchObject({ pipelineVersion: "notes-rhythm-v7", conversionMode: "reference_reuse",
       engine: { name: "notes-rhythm-reference" }, candidates: [], outputSha256: sha(ctx.musicXml) });
     expect((await ctx.audits.list()).find((item) => item.action === "conversion_completed")?.metadata)
       .toMatchObject({ conversionMode: "reference_reuse", referenceReuse: { referenceScoreId: ctx.reference.sourceScoreId } });

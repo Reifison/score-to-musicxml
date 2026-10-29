@@ -44,6 +44,17 @@ async function writeImage(filePath: string, bands: number): Promise<void> {
   await sharp(Buffer.from(svg)).png().toFile(filePath);
 }
 
+async function writeFineScannedPage(filePath: string, color: string): Promise<void> {
+  const width = 3110;
+  const height = 4400;
+  const lines = Array.from({ length: 9 }, (_system, systemIndex) => Array.from({ length: 5 }, (_line, lineIndex) => {
+    const y = 400 + systemIndex * 360 + lineIndex * 24;
+    return `<line x1="300" y1="${y}" x2="2800" y2="${y}" stroke="${color}" stroke-width="1"/>`;
+  }).join("")).join("");
+  const svg = `<svg width="${width}" height="${height}" xmlns="http://www.w3.org/2000/svg"><rect width="100%" height="100%" fill="white"/>${lines}</svg>`;
+  await sharp(Buffer.from(svg)).png().toFile(filePath);
+}
+
 async function writeShortLines(filePath: string, lineCount: number): Promise<void> {
   const lines = Array.from({ length: lineCount }, (_value, index) => `<rect x="100" y="${100 + index * 12}" width="180" height="2" fill="black"/>`).join("");
   const svg = `<svg width="1000" height="700" xmlns="http://www.w3.org/2000/svg"><rect width="100%" height="100%" fill="white"/>${lines}</svg>`;
@@ -52,6 +63,32 @@ async function writeShortLines(filePath: string, lineCount: number): Promise<voi
 
 async function writeShadowBand(filePath: string): Promise<void> {
   const svg = '<svg width="1000" height="700" xmlns="http://www.w3.org/2000/svg"><rect width="100%" height="100%" fill="white"/><rect x="0" y="180" width="1000" height="180" fill="#555"/></svg>';
+  await sharp(Buffer.from(svg)).png().toFile(filePath);
+}
+
+async function writeSkewedStaff(filePath: string, angleDegrees: number, options: { lineCount?: number; color?: string; systems?: number } = {}): Promise<void> {
+  const width = 1000;
+  const height = 1500;
+  const slope = Math.tan(angleDegrees * Math.PI / 180);
+  const lineCount = options.lineCount ?? 5;
+  const systems = options.systems ?? 3;
+  const lines = Array.from({ length: systems }, (_system, systemIndex) => Array.from({ length: lineCount }, (_line, lineIndex) => {
+    const centerY = 220 + systemIndex * 300 + lineIndex * 12;
+    const y1 = centerY - slope * 400;
+    const y2 = centerY + slope * 400;
+    return `<line x1="100" y1="${y1}" x2="900" y2="${y2}" stroke="${options.color ?? "black"}" stroke-width="2"/>`;
+  }).join("")).join("");
+  const svg = `<svg width="${width}" height="${height}" xmlns="http://www.w3.org/2000/svg"><rect width="100%" height="100%" fill="white"/>${lines}</svg>`;
+  await sharp(Buffer.from(svg)).png().toFile(filePath);
+}
+
+async function writeSkewedBlock(filePath: string): Promise<void> {
+  const svg = '<svg width="1000" height="700" xmlns="http://www.w3.org/2000/svg"><rect width="100%" height="100%" fill="white"/><polygon points="80,180 920,160 920,320 80,340" fill="#555"/></svg>';
+  await sharp(Buffer.from(svg)).png().toFile(filePath);
+}
+
+async function writeSkewedCoverText(filePath: string): Promise<void> {
+  const svg = '<svg width="1000" height="900" xmlns="http://www.w3.org/2000/svg"><rect width="100%" height="100%" fill="white"/><g transform="rotate(-1.5 500 300)"><text x="150" y="280" font-size="72">Coral Santo Antônio</text><text x="250" y="350" font-size="28">Concerto de domingo</text></g></svg>';
   await sharp(Buffer.from(svg)).png().toFile(filePath);
 }
 
@@ -82,6 +119,23 @@ describe("SourceImageLayout", () => {
     } finally { await fs.rm(dir, { recursive: true, force: true }); }
   });
 
+  it("preserva pautas finas em digitalização grande e mantém impressão muito clara como desconhecida", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "source-layout-fine-scan-"));
+    const fineStaff = path.join(dir, "fine-staff.png");
+    const faintPrint = path.join(dir, "faint-print.png");
+    try {
+      await Promise.all([writeFineScannedPage(fineStaff, "#111111"), writeFineScannedPage(faintPrint, "#cccccc")]);
+      const staff = await analyzeSourceImageLayout(fineStaff);
+      expect(staff.layout).toMatchObject({ method: "horizontal_staff_bands_v1", status: "observed" });
+      expect(staff.layout.staffBands).toHaveLength(9);
+
+      const faint = await analyzeSourceImageLayout(faintPrint);
+      expect(faint.layout.status).toBe("unknown");
+      expect(faint.layout.staffBands).toEqual([]);
+      expect(faint.layout.positiveSkewEvidence).toBeUndefined();
+    } finally { await fs.rm(dir, { recursive: true, force: true }); }
+  });
+
   it("não converte uma faixa larga de sombra em várias pautas falsas", async () => {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), "source-layout-shadow-band-"));
     const imagePath = path.join(dir, "shadow.png");
@@ -90,6 +144,49 @@ describe("SourceImageLayout", () => {
       const result = await analyzeSourceImageLayout(imagePath);
       expect(result.layout.status).toBe("unknown");
       expect(result.layout.staffBands).toEqual([]);
+    } finally { await fs.rm(dir, { recursive: true, force: true }); }
+  });
+
+  it.each([1.5, -2.25])("encontra evidência positiva para pautas longas inclinadas em %s graus sem criar bandas mapeadas", async (angle) => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "source-layout-skew-"));
+    const imagePath = path.join(dir, "skewed.png");
+    try {
+      await writeSkewedStaff(imagePath, angle);
+      const result = await analyzeSourceImageLayout(imagePath);
+      expect(result.layout.status).toBe("unknown");
+      expect(result.layout.staffBands).toEqual([]);
+      expect(result.layout.positiveSkewEvidence).toMatchObject({
+        staffLineCount: 15,
+        staffBandCount: expect.any(Number),
+        minimumDarkRatio: expect.any(Number),
+        minimumContinuityRatio: expect.any(Number)
+      });
+      expect(Math.abs(result.layout.positiveSkewEvidence!.angleDegrees - angle)).toBeLessThanOrEqual(0.25);
+      expect(result.layout.positiveSkewEvidence!.staffBandCount).toBeGreaterThan(0);
+    } finally { await fs.rm(dir, { recursive: true, force: true }); }
+  });
+
+  it("não promove quatro linhas, linhas inclinadas fracas ou um bloco inclinado", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "source-layout-skew-negative-"));
+    const fourLines = path.join(dir, "four-lines.png");
+    const weakLines = path.join(dir, "weak-lines.png");
+    const block = path.join(dir, "block.png");
+    const coverText = path.join(dir, "cover-text.png");
+    const blank = path.join(dir, "blank.png");
+    try {
+      await Promise.all([
+        writeSkewedStaff(fourLines, 1.5, { lineCount: 4 }),
+        writeSkewedStaff(weakLines, -1.5, { color: "#cccccc" }),
+        writeSkewedBlock(block),
+        writeSkewedCoverText(coverText),
+        sharp(Buffer.from('<svg width="1000" height="700" xmlns="http://www.w3.org/2000/svg"><rect width="100%" height="100%" fill="white"/></svg>')).png().toFile(blank)
+      ]);
+      for (const imagePath of [fourLines, weakLines, block, coverText, blank]) {
+        const result = await analyzeSourceImageLayout(imagePath);
+        expect(result.layout.status).toBe("unknown");
+        expect(result.layout.staffBands).toEqual([]);
+        expect(result.layout.positiveSkewEvidence).toBeUndefined();
+      }
     } finally { await fs.rm(dir, { recursive: true, force: true }); }
   });
 

@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import path from "node:path";
 import os from "node:os";
 import fs from "node:fs/promises";
@@ -13,6 +14,7 @@ import { MidiObservabilityService, type MidiMetric } from "../services/MidiObser
 import { MusicXmlExportService } from "../services/MusicXmlExportService.js";
 import type { OmrAdapter } from "../services/OmrAdapter.js";
 import { QueueReconciler } from "../services/QueueReconciler.js";
+import { parseVisualMusicXml } from "../services/VisualMusicXml.js";
 
 const pdf = Buffer.from("%PDF-1.4\n1 0 obj\n<<>>\nendobj\n%%EOF");
 const png = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=", "base64");
@@ -173,7 +175,7 @@ describe("API", () => {
 
   it("bloqueia PDF com conteúdo ativo antes de persistir upload", async () => {
     const cookie = await login(ctx.app, "user@example.com");
-    const activePdf = Buffer.from("%PDF-1.4\n1 0 obj\n<< /OpenAction 2 0 R >>\nendobj\n%%EOF");
+    const activePdf = Buffer.from("%PDF-1.4\n1 0 obj\n<< /Type /Catalog /OpenAction 2 0 R >>\nendobj\n2 0 obj\n<< /S /JavaScript /JS (app.alert\\(1\\)) >>\nendobj\ntrailer\n<< /Root 1 0 R >>\n%%EOF");
     await request(ctx.app).post("/api/scores").set("Cookie", cookie).attach("file", activePdf, "ativo.pdf").expect(400);
     const scores = await ctx.repos.scores.list({ userId: ctx.user.id });
     expect(scores).toHaveLength(0);
@@ -194,6 +196,30 @@ describe("API", () => {
       .send({ originalFilename: "Minha Partitura" })
       .expect(200);
     expect(renamed.body.score.originalFilename).toBe("Minha Partitura.pdf");
+  });
+
+  it("preserva alertas musicais na lista, detalhes e respostas de renomear e favoritar", async () => {
+    const cookie = await login(ctx.app, "user@example.com");
+    const created = await request(ctx.app).post("/api/scores").set("Cookie", cookie).field("scoreType", "melody")
+      .attach("file", pdf, "partitura.pdf").expect(201);
+    const id = created.body.score.id;
+    const score = (await ctx.repos.scores.findById(id))!;
+    await ctx.repos.scores.update(id, { reviewStatus: "approved", validation: {
+      ...score.validation!, issues: [{ code: "RHYTHM_SHORT", severity: "warning", measure: "4", message: "3.5/4" }]
+    } });
+    const listed = await request(ctx.app).get("/api/scores").set("Cookie", cookie).expect(200);
+    const detail = await request(ctx.app).get(`/api/scores/${id}`).set("Cookie", cookie).expect(200);
+    const favorite = await request(ctx.app).patch(`/api/scores/${id}/favorite`).set("Cookie", cookie)
+      .send({ isFavorite: true }).expect(200);
+    const renamed = await request(ctx.app).patch(`/api/scores/${id}`).set("Cookie", cookie)
+      .send({ originalFilename: "Renomeada" }).expect(200);
+    for (const output of [listed.body.scores[0], detail.body.score, favorite.body.score, renamed.body.score]) {
+      expect(output.resultStatus).toBe("complete");
+      expect(output.recognitionQuality).toMatchObject({ status: "needs_review", accuracyVerified: false });
+      expect(output.recognitionQuality.issues).toEqual(expect.arrayContaining([
+        expect.objectContaining({ code: "RHYTHM_SHORT", measure: "4" })
+      ]));
+    }
   });
 
   it("impede acesso e download de partitura de outro usuário", async () => {
@@ -248,6 +274,19 @@ describe("API", () => {
     expect(next.body.score.validation.visualReview.proposals[0].status).toBe("rejected");
     expect(next.body.score.validation.visualReview.trainingEligible).toBe(false);
     await request(ctx.app).post(url).set("Cookie", cookie).send(body).expect(409);
+    const correctionId = `revision:${next.body.score.reviewRevision}`;
+    const correctedXml = (await request(ctx.app).get(`/api/scores/${score.id}/versions/${correctionId}/musicxml`)
+      .set("Cookie", cookie).buffer(true).parse(bufferParser).expect(200)).body as Buffer;
+    expect((await request(ctx.app).get(`/api/scores/${score.id}/versions`).set("Cookie", cookie).expect(200)).body.versions)
+      .toEqual(expect.arrayContaining([expect.objectContaining({ id: correctionId, kind: "correction", isCurrent: true })]));
+    await request(ctx.app).post(`/api/scores/${score.id}/retry`).set("Cookie", cookie).send({}).expect(202);
+    const afterRetry = (await request(ctx.app).get(`/api/scores/${score.id}/versions`).set("Cookie", cookie).expect(200)).body.versions;
+    expect(afterRetry).toHaveLength(3);
+    expect(afterRetry.find((version: { id: string }) => version.id === correctionId))
+      .toMatchObject({ isCurrent: false, kind: "correction", available: true });
+    const previousCorrection = (await request(ctx.app).get(`/api/scores/${score.id}/versions/${correctionId}/musicxml`)
+      .set("Cookie", cookie).buffer(true).parse(bufferParser).expect(200)).body as Buffer;
+    expect(previousCorrection).toEqual(correctedXml);
   });
 
   it("limits source-page images to valid pages after checking ownership", async () => {
@@ -355,7 +394,7 @@ describe("API", () => {
 
   it("não remove acesso concedido por admin ao processar revogação Apple", async () => {
     await ctx.repos.entitlements.grantAdminAccess({ userId: ctx.user.id, grantedById: ctx.admin.id, reason: "Teste" }, 3);
-    const revoked = await ctx.repos.entitlements.revokeApplePurchase("test-original-transaction", 3);
+    const revoked = await ctx.repos.entitlements.revokeApplePurchase("test-original-transaction", 3, "sandbox");
     expect(revoked).toBeNull();
     const summary = await ctx.repos.entitlements.getSummary(ctx.user.id, 3);
     expect(summary).toMatchObject({ plan: "paid", source: "admin_grant" });
@@ -427,5 +466,105 @@ describe("API", () => {
       await fs.rm(exportPath, { force: true });
       await fs.rm(outsideDir, { recursive: true, force: true });
     }
+  });
+
+  it("lists immutable versions across retries and protects old exports", async () => {
+    const cookie = await login(ctx.app, "user@example.com");
+    const created = await request(ctx.app).post("/api/scores").set("Cookie", cookie)
+      .field("scoreType", "melody").attach("file", pdf, "historico.pdf").expect(201);
+    const scoreId = created.body.score.id as string;
+    const initial = (await request(ctx.app).get(`/api/scores/${scoreId}/versions`).set("Cookie", cookie).expect(200)).body.versions;
+    expect(initial).toHaveLength(1);
+    expect(initial[0]).toMatchObject({ id: expect.stringMatching(/^attempt:/), kind: "conversion", isCurrent: true,
+      available: true, status: "approved", coverage: { totalPages: 1, processedPages: 1, missingPages: [] } });
+    const oldVersionId = initial[0].id as string;
+    const oldXml = (await request(ctx.app).get(`/api/scores/${scoreId}/versions/${oldVersionId}/musicxml`)
+      .set("Cookie", cookie).buffer(true).parse(bufferParser).expect(200)).body as Buffer;
+
+    await request(ctx.app).post(`/api/scores/${scoreId}/retry`).set("Cookie", cookie).send({}).expect(202);
+    const versions = (await request(ctx.app).get(`/api/scores/${scoreId}/versions`).set("Cookie", cookie).expect(200)).body.versions;
+    expect(versions).toHaveLength(2);
+    expect(versions.filter((version: { isCurrent: boolean }) => version.isCurrent)).toHaveLength(1);
+    expect(versions.find((version: { id: string }) => version.id === oldVersionId)).toMatchObject({ available: true, isCurrent: false });
+    const oldAgain = (await request(ctx.app).get(`/api/scores/${scoreId}/versions/${oldVersionId}/musicxml`)
+      .set("Cookie", cookie).buffer(true).parse(bufferParser).expect(200)).body as Buffer;
+    expect(oldAgain).toEqual(oldXml);
+
+    await request(ctx.app).get(`/api/scores/${scoreId}/versions/attempt:unknown/musicxml`).set("Cookie", cookie).expect(404);
+    await request(ctx.app).get(`/api/scores/${scoreId}/versions/..%2Fprivate/musicxml`).set("Cookie", cookie).expect(404);
+    await request(ctx.app).get(`/api/scores/${scoreId}/versions`).expect(401);
+    const other = await ctx.repos.users.create({ name: "Other", email: "other-history@example.com",
+      passwordHash: await ctx.services.auth.hashPassword("Password123!"), role: "user", isActive: true });
+    const otherCookie = await login(ctx.app, other.email);
+    await request(ctx.app).get(`/api/scores/${scoreId}/versions`).set("Cookie", otherCookie).expect(403);
+    await request(ctx.app).get(`/api/scores/${scoreId}/versions/${oldVersionId}/musicxml`).set("Cookie", otherCookie).expect(403);
+
+    const firstAttempt = (await ctx.repos.scores.listAttempts(scoreId)).find((attempt) => attempt.id === oldVersionId.slice(8))!;
+    await fs.rm(ctx.services.storage.resolveExportPath(firstAttempt.musicxmlFilename!));
+    const unavailable = (await request(ctx.app).get(`/api/scores/${scoreId}/versions`).set("Cookie", cookie).expect(200)).body.versions;
+    expect(unavailable.find((version: { id: string }) => version.id === oldVersionId).available).toBe(false);
+    await request(ctx.app).get(`/api/scores/${scoreId}/versions/${oldVersionId}/musicxml`).set("Cookie", cookie).expect(410);
+    await fs.writeFile(ctx.services.storage.resolveExportPath(firstAttempt.musicxmlFilename!), "<score-partwise/>");
+    const changed = await request(ctx.app).get(`/api/scores/${scoreId}/versions/${oldVersionId}/musicxml`).set("Cookie", cookie).expect(410);
+    expect(changed.body.code).toBe("SCORE_VERSION_CHANGED");
+
+    await request(ctx.app).delete(`/api/scores/${scoreId}`).set("Cookie", cookie).expect(204);
+    await request(ctx.app).get(`/api/scores/${scoreId}/versions`).set("Cookie", cookie).expect(404);
+    await request(ctx.app).get(`/api/scores/${scoreId}/versions/${versions[0].id}/musicxml`).set("Cookie", cookie).expect(404);
+  });
+
+  it("permite desfazer e aceitar proposta após entrega automática sem bloquear o MusicXML", async () => {
+    const cookie = await login(ctx.app, "user@example.com");
+    const created = await request(ctx.app).post("/api/scores").set("Cookie", cookie)
+      .field("scoreType", "melody").attach("file", pdf, "corrigir-automaticamente.pdf").expect(201);
+    const scoreId = created.body.score.id as string;
+    const stored = (await ctx.repos.scores.findById(scoreId))!;
+    const oldXml = await ctx.services.storage.readExport(stored.musicxmlFilename!);
+    const review = structuredClone(stored.validation!.visualReview!);
+    review.xmlSHA256 = createHash("sha256").update(oldXml).digest("hex");
+    review.proposals = [{ id: "pitch-c-to-d", status: "pending", segmentId: "visual-p0-m0", page: 1,
+      partId: "P1", partIndex: 0, measureIndex: 0, measure: "1", noteIndex: 0,
+      before: { kind: "note", step: "C", alter: 0, octave: 4, duration: 4, type: "whole", dots: 0 },
+      after: { kind: "note", step: "D", alter: 0, octave: 4, duration: 4, type: "whole", dots: 0 },
+      applicable: true, reason: "Divergência local da fonte", differences: ["pitch"] }];
+    await ctx.repos.scores.update(scoreId, { reviewStatus: "needs_review", reviewedAt: null, reviewedById: null,
+      validation: { ...stored.validation!, visualReview: review } });
+
+    const delivered = (await request(ctx.app).get(`/api/scores/${scoreId}`).set("Cookie", cookie).expect(200)).body.score;
+    expect(delivered).toMatchObject({ reviewStatus: "approved", canDownloadMusicXml: true,
+      validation: { visualReview: { proposals: [{ status: "rejected" }] } } });
+    const url = `/api/scores/${scoreId}/visual-review/decision`;
+    const undone = (await request(ctx.app).post(url).set("Cookie", cookie)
+      .send({ revision: delivered.reviewRevision, proposalId: "pitch-c-to-d", decision: "undo" }).expect(200)).body.score;
+    expect(undone).toMatchObject({ reviewStatus: "approved", canDownloadMusicXml: true,
+      validation: { visualReview: { proposals: [{ status: "pending" }] } } });
+    const stillPending = (await request(ctx.app).get(`/api/scores/${scoreId}`).set("Cookie", cookie).expect(200)).body.score;
+    expect(stillPending.validation.visualReview.proposals[0].status).toBe("pending");
+    const acceptedResponse = await request(ctx.app).post(url).set("Cookie", cookie)
+      .send({ revision: undone.reviewRevision, proposalId: "pitch-c-to-d", decision: "accept" });
+    expect(acceptedResponse.status, JSON.stringify(acceptedResponse.body)).toBe(200);
+    const accepted = acceptedResponse.body.score;
+    expect(accepted).toMatchObject({ reviewStatus: "approved", canDownloadMusicXml: true,
+      validation: { visualReview: { proposals: [{ status: "accepted" }] } } });
+    const currentXml = (await request(ctx.app).get(`/api/scores/${scoreId}/download`).set("Cookie", cookie)
+      .buffer(true).parse(bufferParser).expect(200)).body as Buffer;
+    expect(currentXml.toString("utf8")).toContain("<step>D</step>");
+    const oldVersionId = `attempt:${delivered.attempts[0].id}`;
+    const oldAgain = (await request(ctx.app).get(`/api/scores/${scoreId}/versions/${oldVersionId}/musicxml`)
+      .set("Cookie", cookie).buffer(true).parse(bufferParser).expect(200)).body as Buffer;
+    expect(oldAgain.toString("utf8")).toBe(oldXml);
+    const undoneAccepted = (await request(ctx.app).post(url).set("Cookie", cookie)
+      .send({ revision: accepted.reviewRevision, proposalId: "pitch-c-to-d", decision: "undo" }).expect(200)).body.score;
+    expect(undoneAccepted).toMatchObject({ reviewStatus: "approved", canDownloadMusicXml: true,
+      validation: { visualReview: { proposals: [{ status: "pending" }] } } });
+    const rejected = (await request(ctx.app).post(url).set("Cookie", cookie)
+      .send({ revision: undoneAccepted.reviewRevision, proposalId: "pitch-c-to-d", decision: "reject" }).expect(200)).body.score;
+    expect(rejected).toMatchObject({ reviewStatus: "approved", canDownloadMusicXml: true,
+      validation: { visualReview: { proposals: [{ status: "rejected" }] } } });
+    const restoredXml = (await request(ctx.app).get(`/api/scores/${scoreId}/download`).set("Cookie", cookie)
+      .buffer(true).parse(bufferParser).expect(200)).body as Buffer;
+    expect(parseVisualMusicXml(restoredXml.toString("utf8"))[0].events[0].step).toBe("C");
+    await request(ctx.app).post(url).set("Cookie", cookie)
+      .send({ revision: delivered.reviewRevision, proposalId: "pitch-c-to-d", decision: "undo" }).expect(409);
   });
 });

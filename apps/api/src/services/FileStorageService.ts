@@ -1,13 +1,18 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import type { SourceImageTransform } from "./SourceImageTransform.js";
+import type { AutomaticReconciliationResult } from "./AutomaticCandidateReconciliation.js";
+import type { NativeEventRecoveryReport } from "./NativeMeasureEventRecovery.js";
 import { createHash } from "node:crypto";
 import { constants, createReadStream } from "node:fs";
 import { nanoid } from "nanoid";
 import { paths } from "../config/env.js";
 import { AppError } from "../errors/AppError.js";
 import { extensionOf } from "../utils/filenames.js";
-import type { MusicalValidation } from "../domain.js";
+import type { ConversionPreview, MusicalValidation } from "../domain.js";
+import { FirstPagePreviewStorage } from "./FirstPagePreviewStorage.js";
 import type { VisualEvidenceAsset } from "./SourceVisualReviewTypes.js";
+import { redactedAudiverisProcessLog } from "./AudiverisProcessDiagnostics.js";
 
 const evidenceAssetPattern = /^(candidate-[1-9][0-9]*\.(musicxml|png|jpg|jpeg|webp|tif|tiff|bmp)|artifact-[1-9][0-9]*\.(mxl|omr|xml|musicxml|log)|visual-(page|crop|segment)-[1-9][0-9]*\.png|review-version-[1-9][0-9]*\.musicxml)$/;
 
@@ -60,8 +65,31 @@ export class FileStorageService {
     }
   }
 
+  /** Probe the exact regular file without following a symlink or loading its contents. */
+  async isExportAvailable(storedFilename: string): Promise<boolean> {
+    try {
+      const handle = await fs.open(this.resolveExportPath(storedFilename), constants.O_RDONLY | constants.O_NOFOLLOW);
+      try { return (await handle.stat()).isFile(); }
+      finally { await handle.close(); }
+    } catch { return false; }
+  }
+
   async deleteUpload(storedFilename: string): Promise<void> {
     await fs.rm(this.resolveUploadPath(storedFilename), { force: true });
+    await fs.rm(this.resolveConversionCheckpointDirectory(storedFilename), { recursive: true, force: true });
+    await fs.rm(`${this.resolveUploadPath(storedFilename)}.previews`, { recursive: true, force: true });
+  }
+
+  async saveFirstPagePreview(storedFilename: string, attemptId: string, totalPages: number, musicXml: string, warnings: string[]): Promise<ConversionPreview> {
+    return new FirstPagePreviewStorage(this.resolveUploadPath(storedFilename)).save(attemptId, totalPages, musicXml, warnings);
+  }
+
+  async readFirstPagePreview(storedFilename: string, preview: ConversionPreview): Promise<Buffer> {
+    return new FirstPagePreviewStorage(this.resolveUploadPath(storedFilename)).read(preview);
+  }
+
+  async deleteFirstPagePreview(storedFilename: string, preview: ConversionPreview): Promise<void> {
+    return new FirstPagePreviewStorage(this.resolveUploadPath(storedFilename)).delete(preview);
   }
 
   async deleteExport(storedFilename: string | null): Promise<void> {
@@ -104,7 +132,7 @@ export class FileStorageService {
     sourcePath: string; workDir: string; revision: string;
     metadata: Record<string, unknown>;
     visualAssets?: VisualEvidenceAsset[];
-    candidates: Array<{ page: number; candidate: number; candidateIds?: number[]; selected: boolean; reason: string; xml: string; sourceImagePath?: string; sourceImagePaths?: Array<{ candidate: number; path: string; sha256: string }>; validation: unknown }>;
+    candidates: Array<{ page: number; candidate: number; candidateIds?: number[]; selected: boolean; exportValid?: boolean; reason: string; xml: string; sourceImagePath?: string; sourceImagePaths?: Array<{ candidate: number; path: string; sha256: string }>; sourceTransform?: SourceImageTransform; automaticReconciliation?: Omit<AutomaticReconciliationResult, "musicXml">; automaticEventRecovery?: NativeEventRecoveryReport; validation: unknown }>;
   }): Promise<void> {
     const directory = this.evidenceDirectory(storedFilename);
     await fs.mkdir(directory, { mode: 0o700 });
@@ -150,8 +178,12 @@ export class FileStorageService {
         preparedInputs.push({ candidate: alias.candidate, sha256: alias.sha256, image: image?.filename ?? null });
       }
       candidates.push({ page: candidate.page, candidate: candidate.candidate, candidateIds: candidate.candidateIds ?? [candidate.candidate],
-        engineRuns: 1, sourceReference: false, preparedInputs, selected: candidate.selected, reason: candidate.reason,
+        engineRuns: candidate.automaticReconciliation || candidate.automaticEventRecovery ? 0 : 1, sourceReference: false, preparedInputs, selected: candidate.selected, reason: candidate.reason,
+        ...(candidate.exportValid !== undefined ? { exportValid: candidate.exportValid } : {}),
         xml: { filename: xmlFilename, sha256: digest(candidate.xml) }, image, validation: candidate.validation,
+        ...(candidate.sourceTransform ? { sourceTransform: candidate.sourceTransform } : {}),
+        ...(candidate.automaticReconciliation ? { automaticReconciliation: candidate.automaticReconciliation } : {}),
+        ...(candidate.automaticEventRecovery ? { automaticEventRecovery: candidate.automaticEventRecovery } : {}),
         sourceMapping: { page: candidate.page, coordinates: null } });
     }
     // Keep the native engine outputs as well as normalized candidates; never follow symlinks.
@@ -169,7 +201,21 @@ export class FileStorageService {
             continue;
           }
           const filename = `artifact-${artifacts.length + 1}${path.extname(entry.name).toLowerCase()}`;
-          artifacts.push({ filename, sha256: await copyWithHash(outputPath, filename), stage: "native-engine-output" });
+          if (path.extname(entry.name).toLowerCase() === ".log") {
+            // Native logs can include filenames, OCR and internal paths. Keep
+            // bounded diagnostic flags in the downloadable evidence instead.
+            let flags = "";
+            let tail = "";
+            for await (const chunk of createReadStream(outputPath, { encoding: "utf8" })) {
+              flags = redactedAudiverisProcessLog(flags + tail + chunk);
+              tail = String(chunk).slice(-1024);
+            }
+            const redacted = redactedAudiverisProcessLog(flags);
+            await fs.writeFile(path.join(directory, filename), redacted, { mode: 0o600, flag: "wx" });
+            artifacts.push({ filename, sha256: digest(redacted), stage: "native-engine-diagnostics-redacted" });
+          } else {
+            artifacts.push({ filename, sha256: await copyWithHash(outputPath, filename), stage: "native-engine-output" });
+          }
           nativeBytes += size;
         }
       }
@@ -253,6 +299,11 @@ export class FileStorageService {
 
   resolveUploadPath(storedFilename: string): string {
     return this.safeJoin(this.baseUploadsDir, storedFilename);
+  }
+
+  /** Private, score-owned resume data; removed with the retained original. */
+  resolveConversionCheckpointDirectory(storedFilename: string): string {
+    return `${this.resolveUploadPath(storedFilename)}.checkpoints`;
   }
 
   resolveExportPath(storedFilename: string): string {

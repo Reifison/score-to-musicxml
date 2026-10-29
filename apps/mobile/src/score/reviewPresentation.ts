@@ -1,3 +1,4 @@
+import { t } from "../i18n";
 import type { MidiValidationStatus, MusicalValidation, MusicalValidationIssue } from "../api/types";
 
 type MidiStatus = MidiValidationStatus | "not_checked" | undefined;
@@ -6,23 +7,23 @@ export function midiValidationSummary(status: MidiStatus): { title: string; desc
   switch (status) {
     case "passed":
       return {
-        title: "Execução em MIDI verificada",
-        description: "As verificações disponíveis da execução passaram. Elas não conferem todas as notas e durações nem a fidelidade à imagem original."
+        title: t("Execução em MIDI verificada", "MIDI playback checked"),
+        description: t("As verificações disponíveis da execução passaram. Elas não conferem todas as notas e durações nem a fidelidade à imagem original.", "The available playback checks passed. They do not check every note and duration or accuracy against the original image.")
       };
     case "failed":
       return {
-        title: "Problemas na verificação de MIDI",
-        description: "A verificação encontrou problemas no MusicXML. A reprodução e o MIDI ficam indisponíveis até a correção."
+        title: t("Problemas na verificação de MIDI", "MIDI check issues"),
+        description: t("A verificação encontrou problemas no MusicXML. A reprodução e o MIDI ficam indisponíveis até a correção.", "The check found issues in the MusicXML. Playback and MIDI are unavailable until they are corrected.")
       };
     case "unverified":
       return {
-        title: "Execução em MIDI não verificada",
-        description: "Não foi possível confirmar a execução em MIDI. Isso não confirma se as notas correspondem ao original."
+        title: t("Execução em MIDI não verificada", "MIDI playback not checked"),
+        description: t("Não foi possível confirmar a execução em MIDI. Isso não confirma se as notas correspondem ao original.", "MIDI playback could not be confirmed. This does not confirm whether the notes match the original.")
       };
     default:
       return {
-        title: "Verificação de MIDI não informada",
-        description: "Ainda não há um resultado dessa verificação para esta partitura."
+        title: t("Verificação de MIDI não informada", "MIDI check not reported"),
+        description: t("Ainda não há um resultado dessa verificação para esta partitura.", "There is no result for this check for this score yet.")
       };
   }
 }
@@ -49,18 +50,18 @@ export function hasReviewReservations(validation: MusicalValidation | null | und
 
 export function reviewApprovalLabel(validation: MusicalValidation | null | undefined, midiStatus?: MidiStatus): string {
   return hasReviewReservations(validation, midiStatus)
-    ? "Conferi a prévia: finalizar com ressalvas"
-    : "Conferi a prévia: finalizar";
+    ? t("Conferi a prévia: finalizar com ressalvas", "I checked the preview: finish with caveats")
+    : t("Conferi a prévia: finalizar", "I checked the preview: finish");
 }
 
 export function reviewIssueLocation(issue: MusicalValidationIssue): string {
   const page = Number.isSafeInteger(issue.page) && (issue.page ?? 0) > 0 ? issue.page : undefined;
   return [
-    page ? `Página ${page}` : "",
-    issue.partName || (issue.partId ? `Parte ${issue.partId}` : ""),
-    issue.measure ? `compasso ${issue.measure}${page ? " nesta página" : ""}` : "",
-    issue.staff ? `pauta ${issue.staff}` : "",
-    issue.voice ? `voz ${issue.voice}` : ""
+    page ? t("Página {{page}}", "Page {{page}}", {page}) : "",
+    issue.partName || (issue.partId ? t("Parte {{part}}", "Part {{part}}", {part: issue.partId}) : ""),
+    issue.measure ? t("compasso {{measure}}", "measure {{measure}}", {measure: issue.measure}) + (page ? t(" nesta página", " on this page") : "") : "",
+    issue.staff ? t("pauta {{staff}}", "staff {{staff}}", {staff: issue.staff}) : "",
+    issue.voice ? t("voz {{voice}}", "voice {{voice}}", {voice: issue.voice}) : ""
   ].filter(Boolean).join(" · ");
 }
 

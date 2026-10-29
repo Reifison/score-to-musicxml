@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """Source-first adapter for the locally installed, pinned HOMR reader.
 
-The request contains only a page image and its digest. This process never
-receives MusicXML from the conversion pipeline and never downloads model files.
+The request contains a page image and its digest, with an optional explicit
+request for the source reader's raw MusicXML. This process never receives
+candidate MusicXML from the conversion pipeline and never downloads model files.
 """
 
 from __future__ import annotations
@@ -176,6 +177,7 @@ def parse_musicxml(xml_bytes: bytes) -> list[dict[str, Any]]:
     total_events = 0
     for measure_index, measure in enumerate(measure_nodes):
         cursor = Fraction(0)
+        key_fifths: int | None = None
         last_base_note: dict[tuple[str, int], tuple[Fraction, Fraction]] = {}
         events: list[dict[str, Any]] = []
         for child in list(measure):
@@ -187,6 +189,16 @@ def parse_musicxml(xml_bytes: bytes) -> list[dict[str, Any]]:
                 staves_text = _text(child, "staves")
                 if staves_text is not None and _positive_integer(staves_text, "staff count") != 1:
                     raise UnsupportedMusicXml("Multiple staves are not supported by this reader adapter")
+                for key_node in _children(child, "key"):
+                    if key_fifths is not None or events or cursor != 0 or key_node.get("number") is not None or any(
+                        _local_name(item.tag) in {"key-step", "key-alter", "key-accidental"}
+                        for item in list(key_node)
+                    ):
+                        raise UnsupportedMusicXml("Complex or repeated key signature is unsupported")
+                    fifths_text = _text(key_node, "fifths", required=True)
+                    if fifths_text is None or not re.fullmatch(r"-?[0-7]", fifths_text):
+                        raise UnsupportedMusicXml("Key signature fifths are invalid")
+                    key_fifths = int(fifths_text)
                 continue
             if tag in {"print", "barline", "direction", "sound", "harmony", "figured-bass", "grouping"}:
                 continue
@@ -292,6 +304,7 @@ def parse_musicxml(xml_bytes: bytes) -> list[dict[str, Any]]:
             "contextOnly": True,
             "readable": True,
             "events": events,
+            **({"keyFifths": key_fifths} if key_fifths is not None else {}),
         })
     return output
 
@@ -327,8 +340,16 @@ def _load_request(path: Path) -> dict[str, Any]:
         request = json.loads(request_bytes.decode("utf-8"))
     except (UnicodeDecodeError, json.JSONDecodeError) as error:
         raise ReaderError("The reader request is invalid JSON") from error
-    if not isinstance(request, dict) or set(request) != {"version", "page", "imagePath", "imageSHA256"}:
+    required_fields = {"version", "page", "imagePath", "imageSHA256"}
+    optional_fields = {"includeMusicXml"}
+    if (
+        not isinstance(request, dict)
+        or not required_fields.issubset(request)
+        or set(request) - required_fields - optional_fields
+    ):
         raise ReaderError("The reader request contains unsupported fields")
+    if "includeMusicXml" in request and not isinstance(request["includeMusicXml"], bool):
+        raise ReaderError("The MusicXML response option must be a boolean")
     if request.get("version") != 1 or isinstance(request.get("version"), bool):
         raise ReaderError("The reader protocol version is unsupported")
     page = request.get("page")
@@ -449,7 +470,7 @@ def run_request(request_path: Path) -> dict[str, Any]:
         current_digest = hashlib.sha256(current_image_bytes).hexdigest()
         if current_digest != digest:
             raise ReaderError("The source image changed during local reading")
-    return {
+    response = {
         "version": 1,
         "page": request["page"],
         "inputImageSHA256": digest,
@@ -459,6 +480,12 @@ def run_request(request_path: Path) -> dict[str, Any]:
         "diagnostics": diagnostics,
         "measures": measures,
     }
+    if request.get("includeMusicXml") is True and coverage_complete:
+        try:
+            response["musicXml"] = xml_bytes.decode("utf-8")
+        except UnicodeDecodeError as error:
+            raise ReaderError("The local reader produced invalid UTF-8 MusicXML") from error
+    return response
 
 
 def _emit_json_only(request_path: Path) -> int:

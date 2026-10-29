@@ -1,3 +1,4 @@
+import { t, getLocale } from "../i18n";
 import type { Score } from "../api/types";
 import { coverageSummary } from "./coveragePresentation";
 import { scoreTypeLabel } from "./scoreTypes";
@@ -13,28 +14,28 @@ export function scoreExtension(score: Score) {
 
 export function scoreDetails(score: Score) {
   const type = score.scoreType
-    ? `${scoreTypeLabel(score.scoreType)}${score.scoreTypeSelected === false ? " (padrão)" : ""}`
-    : "Não informado";
+    ? `${scoreTypeLabel(score.scoreType)}${score.scoreTypeSelected === false ? t(" (padrão)", " (default)") : ""}`
+    : t("Não informado", "Not specified");
   const coverage = score.coverage
     ? score.coverage.excludedPages !== undefined || score.coverage.pages.some(page => page.contentRole)
       ? coverageSummary(score.coverage)
-      : `${score.coverage.processedPages.length} de ${score.coverage.totalPages} páginas${score.coverage.missingPages.length ? ` · ausentes: ${score.coverage.missingPages.join(", ")}` : ""}`
-    : "Desconhecida";
+      : t("{{processed}} de {{total}} páginas", "{{processed}} of {{total}} pages", {processed: score.coverage.processedPages.length, total: score.coverage.totalPages}) + (score.coverage.missingPages.length ? t(" · ausentes: {{pages}}", " · missing: {{pages}}", {pages: score.coverage.missingPages.join(", ")}) : "")
+    : t("Desconhecida", "Unknown");
   return [
-    { label: "Envio", value: new Date(score.createdAt).toLocaleString() },
-    { label: "Arquivo", value: score.mimeType },
-    { label: "Partitura", value: type },
-    { label: "Cobertura", value: coverage },
-    { label: "Tamanho", value: formatBytes(score.fileSize) },
+    { label: t("Envio", "Uploaded"), value: new Date(score.createdAt).toLocaleString(getLocale()) },
+    { label: t("Arquivo", "File"), value: score.mimeType },
+    { label: t("Partitura", "Score"), value: type },
+    { label: t("Cobertura", "Coverage"), value: coverage },
+    { label: t("Tamanho", "Size"), value: formatBytes(score.fileSize) },
   ];
 }
 
 export function musicXmlActionLabel(score: Score) {
-  return score.conversionStatus === "converted" ? "Baixar MusicXML" : "MusicXML ainda nao pronto";
+  return score.conversionStatus === "converted" ? t("Baixar MusicXML", "Download MusicXML") : t("MusicXML ainda não pronto", "MusicXML not ready yet");
 }
 
 function formatBytes(bytes: number) {
   if (bytes < 1024) return `${bytes} B`;
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
-  return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toLocaleString(getLocale(), { minimumFractionDigits: 1, maximumFractionDigits: 1 })} KB`;
+  return `${(bytes / 1024 / 1024).toLocaleString(getLocale(), { minimumFractionDigits: 1, maximumFractionDigits: 1 })} MB`;
 }

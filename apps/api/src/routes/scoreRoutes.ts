@@ -95,6 +95,30 @@ scoreRoutes.get("/:id", async (req, res) => {
   res.json({ score: await req.services.scores.getFor(req.user!, req.params.id) });
 });
 
+scoreRoutes.get("/:id/versions", downloadRateLimit, async (req, res) => {
+  const versions = await req.services.scores.versionsFor(req.user!, String(req.params.id));
+  setPrivateDownloadHeaders(res);
+  res.json({ versions });
+});
+
+scoreRoutes.get("/:id/versions/:versionId/musicxml", downloadRateLimit, async (req, res) => {
+  const download = await req.services.scores.versionMusicXmlFor(req.user!, String(req.params.id), String(req.params.versionId));
+  setPrivateDownloadHeaders(res);
+  res.setHeader("Content-Type", "application/vnd.recordare.musicxml+xml; charset=utf-8");
+  res.attachment(download.filename);
+  res.send(download.musicXml);
+});
+
+scoreRoutes.get("/:id/first-page-preview", downloadRateLimit, async (req, res) => {
+  const revision = z.string().regex(/^[a-f0-9]{64}$/).parse(req.query.revision);
+  const musicXml = await req.services.scores.firstPagePreviewFor(req.user!, String(req.params.id), revision);
+  setPrivateDownloadHeaders(res);
+  res.setHeader("Content-Type", "application/vnd.recordare.musicxml+xml; charset=utf-8");
+  res.setHeader("X-Score-Result-Status", "provisional");
+  res.setHeader("X-Score-Preview-Page", "1");
+  res.send(musicXml);
+});
+
 scoreRoutes.post("/:id/retry", async (req, res) => {
   const input = z.object({ scoreType: z.enum(["melody", "piano", "guitar_solo", "guitar_duo"]).optional() }).parse(req.body ?? {});
   res.status(202).json({ score: await req.services.scores.retryFor(req.user!, req.params.id, req.ip, input.scoreType) });

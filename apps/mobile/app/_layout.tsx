@@ -2,9 +2,12 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { Stack } from "expo-router";
 import * as SplashScreen from "expo-splash-screen";
 import { useState } from "react";
-import { Platform, StyleSheet, View, useWindowDimensions } from "react-native";
+import { StyleSheet, View } from "react-native";
 import { AuthProvider, useAuth } from "../src/auth/AuthProvider";
 import { StartupSplash } from "../src/components/StartupSplash";
+import { FeatureOnboarding } from "../src/onboarding/FeatureOnboarding";
+import { OnboardingProvider, useOnboarding } from "../src/onboarding/OnboardingProvider";
+import { LanguageProvider, useTranslation } from "../src/i18n";
 import { colors } from "../src/theme/styles";
 
 void SplashScreen.preventAutoHideAsync().catch(() => undefined);
@@ -14,30 +17,37 @@ export default function RootLayout() {
 
   return (
     <QueryClientProvider client={queryClient}>
-      <AuthProvider>
-        <AppStack />
-      </AuthProvider>
+      <LanguageProvider>
+        <AuthProvider>
+          <OnboardingProvider>
+            <AppStack />
+          </OnboardingProvider>
+        </AuthProvider>
+      </LanguageProvider>
     </QueryClientProvider>
   );
 }
 
 function AppStack() {
-  const { loading, user } = useAuth();
+  const { loading } = useAuth();
+  const { isReady: languageReady } = useTranslation();
+  const onboarding = useOnboarding();
   const [opening, setOpening] = useState(true);
-  const { width } = useWindowDimensions();
-  const hasAndroidRail = Platform.OS === "android" && width >= 600 && Boolean(user);
+  const contentHidden = opening || onboarding.visible;
 
   return (
     <View style={styles.root}>
       <View
-        accessibilityElementsHidden={opening}
-        importantForAccessibility={opening ? "no-hide-descendants" : "auto"}
-        pointerEvents={opening ? "none" : "auto"}
+        accessibilityElementsHidden={contentHidden}
+        importantForAccessibility={contentHidden ? "no-hide-descendants" : "auto"}
+        pointerEvents={contentHidden ? "none" : "auto"}
         style={styles.root}
       >
         <Stack
           screenOptions={{
-            contentStyle: { backgroundColor: colors.surface, paddingLeft: hasAndroidRail ? 88 : 0 },
+            contentStyle: { backgroundColor: colors.surface },
+            headerShown: false,
+            gestureEnabled: true,
             headerBackTitle: "Voltar",
             headerShadowVisible: false,
             headerStyle: { backgroundColor: colors.surface },
@@ -53,14 +63,20 @@ function AppStack() {
           <Stack.Screen name="trash" options={{ title: "Lixeira" }} />
           <Stack.Screen name="users" options={{ title: "Usuários" }} />
           <Stack.Screen name="logs" options={{ title: "Logs" }} />
-          <Stack.Screen name="score/[id]" options={{ title: "Detalhes" }} />
+          <Stack.Screen name="score/[id]" options={{ headerShown: false, contentStyle: { backgroundColor: colors.surface, paddingLeft: 0, paddingRight: 0 } }} />
         </Stack>
       </View>
-      {opening && <StartupSplash onFinish={() => setOpening(false)} ready={!loading} />}
+      {!opening && onboarding.visible ? (
+        <View accessibilityViewIsModal style={styles.onboarding}>
+          <FeatureOnboarding onFinish={onboarding.finish} />
+        </View>
+      ) : null}
+      {opening && <StartupSplash onFinish={() => setOpening(false)} ready={!loading && languageReady && onboarding.isReady} />}
     </View>
   );
 }
 
 const styles = StyleSheet.create({
-  root: { flex: 1, backgroundColor: colors.surface }
+  root: { flex: 1, backgroundColor: colors.surface },
+  onboarding: { ...StyleSheet.absoluteFillObject, backgroundColor: colors.surface }
 });

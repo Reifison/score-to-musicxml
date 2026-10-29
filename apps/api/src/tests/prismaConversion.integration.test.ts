@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type { PrismaClient } from "@prisma/client";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import type { ConversionCoverage } from "../domain.js";
+import type { ConversionCoverage, ConversionProgress } from "../domain.js";
 import type { CreateScoreInput, Repositories } from "../repositories/contracts.js";
 
 const qaUrl = "postgresql://qauser:qapassword@127.0.0.1:55432/score_qa";
@@ -57,16 +57,59 @@ describe.skipIf(process.env.SCORE_PRISMA_INTEGRATION !== "1")("Prisma conversion
     const migrations = await prisma.$queryRaw<Array<{ migration_name: string }>>`SELECT migration_name FROM "_prisma_migrations" WHERE finished_at IS NOT NULL`;
     expect(migrations.map((item) => item.migration_name)).toContain("20261006000000_conversion_reliability");
     expect(migrations.map((item) => item.migration_name)).toContain("20261006010000_conversion_attempt_fence");
+    expect(migrations.map((item) => item.migration_name)).toContain("20261017000000_conversion_page_progress");
+    expect(migrations.map((item) => item.migration_name)).toContain("20261017010000_first_page_preview");
     const columns = await prisma.$queryRaw<Array<{ table_name: string; column_name: string; udt_name: string }>>`
       SELECT table_name, column_name, udt_name FROM information_schema.columns
-      WHERE table_schema = 'public' AND ((table_name = 'Score' AND column_name IN ('scoreType', 'resultStatus', 'coverage'))
+      WHERE table_schema = 'public' AND ((table_name = 'Score' AND column_name IN ('scoreType', 'resultStatus', 'coverage', 'conversionProgress', 'conversionPreview'))
         OR (table_name = 'ConversionAttempt' AND column_name = 'claimToken'))`;
     expect(columns).toEqual(expect.arrayContaining([
       expect.objectContaining({ table_name: "Score", column_name: "scoreType", udt_name: "ScoreType" }),
       expect.objectContaining({ table_name: "Score", column_name: "resultStatus", udt_name: "ConversionResultStatus" }),
       expect.objectContaining({ table_name: "Score", column_name: "coverage", udt_name: "jsonb" }),
+      expect.objectContaining({ table_name: "Score", column_name: "conversionProgress", udt_name: "jsonb" }),
+      expect.objectContaining({ table_name: "Score", column_name: "conversionPreview", udt_name: "jsonb" }),
       expect.objectContaining({ table_name: "ConversionAttempt", column_name: "claimToken", udt_name: "text" })
     ]));
+  });
+
+  it("publica a primeira página somente pelo token atual e retira a prévia no resultado final", async () => {
+    const score = await repos.scores.create(scoreInput());
+    const attempt = (await repos.scores.listAttempts(score.id))[0];
+    const oldToken = (await repos.scores.claimAttempt(attempt.id))!;
+    const preview = { attemptId: attempt.id, revision: "a".repeat(64), xmlSHA256: "b".repeat(64),
+      page: 1 as const, totalPages: 2, createdAt: new Date().toISOString(), warnings: [] };
+    expect(await repos.scores.publishConversionPreview(score.id, attempt.id, oldToken, preview)).toBe(true);
+    expect((await repos.scores.findById(score.id))?.conversionPreview).toEqual(preview);
+    await repos.scores.requeueStaleAttempts(new Date(Date.now() + 1000));
+    expect((await repos.scores.findById(score.id))?.conversionPreview).toBeNull();
+    const token = (await repos.scores.claimAttempt(attempt.id))!;
+    expect(await repos.scores.publishConversionPreview(score.id, attempt.id, oldToken, preview)).toBe(false);
+    expect(await repos.scores.publishConversionPreview(score.id, attempt.id, token, preview)).toBe(true);
+    const result = await repos.scores.publishResult(score.id, attempt.id, token, {
+      resultStatus: "complete", coverage, musicxmlFilename: "final.musicxml", warnings: []
+    });
+    expect(result?.conversionPreview).toBeNull();
+    expect(result?.musicxmlFilename).toBe("final.musicxml");
+    expect(await repos.scores.publishConversionPreview(score.id, attempt.id, token, preview)).toBe(false);
+  });
+
+  it("persiste progresso público e rejeita o token antigo após retomada", async () => {
+    const score = await repos.scores.create(scoreInput());
+    const attempt = (await repos.scores.listAttempts(score.id))[0];
+    const oldToken = (await repos.scores.claimAttempt(attempt.id))!;
+    const progress: ConversionProgress = { attemptId: attempt.id, stage: "recognizing", totalPages: 2,
+      currentPage: 2, completedPages: [1], failedPages: [], excludedPages: [], reusedPages: [], updatedAt: new Date().toISOString() };
+    expect(await repos.scores.updateConversionProgress(score.id, attempt.id, oldToken, progress)).toBe(true);
+    expect((await repos.scores.findById(score.id))?.conversionProgress).toEqual(progress);
+    expect((await repos.scores.list({ userId: userId! })).find((item) => item.id === score.id)?.conversionProgress).toEqual(progress);
+    await repos.scores.requeueStaleAttempts(new Date(Date.now() + 1000));
+    const freshToken = (await repos.scores.claimAttempt(attempt.id))!;
+    expect(await repos.scores.updateConversionProgress(score.id, attempt.id, oldToken, progress)).toBe(false);
+    expect(await repos.scores.updateConversionProgress(score.id, attempt.id, freshToken, { ...progress, reusedPages: [1] })).toBe(true);
+    await repos.scores.failAttempt(score.id, attempt.id, freshToken, "OMR_CONVERSION_TIMEOUT", "timeout", false);
+    expect((await repos.scores.findById(score.id))?.conversionProgress).toMatchObject({ stage: "interrupted", completedPages: [1], reusedPages: [1] });
+    expect(await repos.scores.updateConversionProgress(score.id, attempt.id, freshToken, progress)).toBe(false);
   });
 
   it("cria upload, tentativa e débito de quota na mesma transação", async () => {

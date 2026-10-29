@@ -31,6 +31,9 @@ describe("iOS scene lifecycle regeneration", () => {
     expect(appDelegate).not.toContain("factory.startReactNative(");
     expect(appDelegate).toContain("bindReactNativeFactory(factory)");
     expect(appDelegate).toContain("appLaunchOptions = launchOptions");
+    expect(appDelegate).toContain("func completeSceneLaunch()");
+    expect(appDelegate).toContain("guard !sceneLaunchFinished else { return }");
+    expect(migrated).toContain("appDelegate.completeSceneLaunch()");
     expect(appDelegate).toContain("RCTLinkingManager.application(app, open: url, options: options)");
     expect(migrated).toContain("class SceneDelegate: UIResponder, UIWindowSceneDelegate");
     expect(sceneManifest.UISceneConfigurations.UIWindowSceneSessionRoleApplication[0].UISceneDelegateClassName)

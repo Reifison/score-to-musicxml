@@ -11,6 +11,9 @@ import { applyVisualCorrection } from "./VisualMusicXml.js";
 import { inspectMusicXmlValidation } from "./MusicXmlValidation.js";
 import { inspectMidiForReview, reviewAcceptanceFor, withMidiValidation } from "./MidiReviewPreflight.js";
 import { AutomaticDeliveryService } from "./AutomaticDeliveryService.js";
+import { recognitionQualityFor } from "./RecognitionQuality.js";
+import { hasCurrentFirstPagePreview } from "./FirstPagePreview.js";
+import { ScoreVersionHistoryService } from "./ScoreVersionHistoryService.js";
 
 export class ScoreService {
   constructor(
@@ -31,12 +34,18 @@ export class ScoreService {
         userId: filters.userId,
         favorite: filters.favorite
       });
-      return Promise.all(listed.map(async (score) => delivery && score.reviewStatus === "needs_review"
-        ? await delivery.finalize(score.id).catch(() => score) ?? score : score));
+      return Promise.all(listed.map(async (score) => {
+        const ready = delivery && score.reviewStatus === "needs_review"
+          ? await delivery.finalize(score.id).catch(() => score) ?? score : score;
+        return { ...ready, recognitionQuality: recognitionQualityFor(ready) };
+      }));
     }
     const listed = await this.scores.list({ userId: user.id, status: this.parseStatus(filters.status), favorite: filters.favorite });
-    return Promise.all(listed.map(async (score) => delivery && score.reviewStatus === "needs_review"
-      ? await delivery.finalize(score.id).catch(() => score) ?? score : score));
+    return Promise.all(listed.map(async (score) => {
+      const ready = delivery && score.reviewStatus === "needs_review"
+        ? await delivery.finalize(score.id).catch(() => score) ?? score : score;
+      return { ...ready, recognitionQuality: recognitionQualityFor(ready) };
+    }));
   }
 
   async listTrashFor(user: User, filters: { favorite?: boolean } = {}) {
@@ -54,7 +63,39 @@ export class ScoreService {
     if (this.automaticDelivery && score.reviewStatus === "needs_review") score = await new AutomaticDeliveryService(this.scores, this.audits, this.storage, this.midiExport)
       .finalize(scoreId).catch(() => score) ?? score;
     const attempts = await this.scores.listAttempts(score.id);
-    return { ...score, attempts, ...scoreAvailability(score) };
+    return { ...score, attempts, ...scoreAvailability(score), recognitionQuality: recognitionQualityFor(score) };
+  }
+
+  async versionsFor(user: User, scoreId: string) {
+    const score = await this.getFor(user, scoreId);
+    return new ScoreVersionHistoryService(this.storage).list(score, score.attempts);
+  }
+
+  async versionMusicXmlFor(user: User, scoreId: string, versionId: string) {
+    const score = await this.getFor(user, scoreId);
+    const musicXml = await new ScoreVersionHistoryService(this.storage).musicXml(score, score.attempts, versionId);
+    // A delete can race the disk read; recheck ownership and trash state before sending bytes.
+    await this.getFor(user, scoreId);
+    return { musicXml, filename: safeMusicXmlFilename(score.originalFilename) };
+  }
+
+  async firstPagePreviewFor(user: User, scoreId: string, revision: string): Promise<Buffer> {
+    const score = await this.getFor(user, scoreId);
+    const preview = score.conversionPreview;
+    if (!preview || !hasCurrentFirstPagePreview(score, score.attempts)) {
+      throw new AppError(409, "A prévia da primeira página não está disponível.", "FIRST_PAGE_PREVIEW_UNAVAILABLE");
+    }
+    if (preview.revision !== revision) throw new AppError(409, "A prévia mudou. Aguarde a atualização da conversão.", "FIRST_PAGE_PREVIEW_CHANGED");
+    let bytes: Buffer;
+    try { bytes = await this.storage.readFirstPagePreview(score.storedFilename, preview); }
+    catch { throw new AppError(410, "A prévia não está disponível. A conversão continua em andamento.", "FIRST_PAGE_PREVIEW_UNAVAILABLE"); }
+    // An async read may overlap a retry, final result, failure or deletion.
+    // Never send bytes from a publication that stopped being current meanwhile.
+    const current = await this.getFor(user, scoreId);
+    if (current.conversionPreview?.revision !== revision || !hasCurrentFirstPagePreview(current, current.attempts)) {
+      throw new AppError(409, "A prévia mudou. Aguarde a atualização da conversão.", "FIRST_PAGE_PREVIEW_CHANGED");
+    }
+    return bytes;
   }
 
   async approveReviewFor(user: User, scoreId: string, revision: string, ipAddress?: string) {
@@ -88,7 +129,7 @@ export class ScoreService {
   async decideVisualProposalFor(user: User, scoreId: string, revision: string, proposalId: string, decision: "accept" | "reject" | "undo", ipAddress?: string) {
     const score = await this.getFor(user, scoreId);
     const report = score.validation?.visualReview;
-    if (score.reviewStatus !== "needs_review" || !score.musicxmlFilename || !score.reviewRevision || score.reviewRevision !== revision || !report) {
+    if ((score.reviewStatus !== "needs_review" && score.reviewStatus !== "approved") || !score.musicxmlFilename || !score.reviewRevision || score.reviewRevision !== revision || !report) {
       throw new AppError(409, "A revisão mudou. Abra a versão atual antes de decidir.", "REVIEW_REVISION_CHANGED");
     }
     const oldXml = await this.storage.readExport(score.musicxmlFilename);
@@ -116,12 +157,16 @@ export class ScoreService {
     nextReport.history.push({ proposalId, decision, baseRevision: revision, revision: nextRevision, actorId: user.id, at: new Date().toISOString(),
       exportFilename: filename, previousExportFilename: score.musicxmlFilename });
     const validation = withMidiValidation({ ...inspectMusicXmlValidation(xml), visualReview: nextReport, requiresReview: true }, await inspectMidiForReview(xml, this.midiExport));
+    // Automatic delivery is an availability decision, not a certification of the
+    // source. Keep a human correction downloadable without a second approval gate.
+    if (this.automaticDelivery) validation.reviewAcceptance = { ...reviewAcceptanceFor(validation, nextRevision), method: "automatic_delivery_v1" };
     const warnings = validation.issues.map((issue) => issue.message);
     let published = false;
     try {
       await this.storage.saveExport(filename, xml);
       await this.storage.saveReviewDecisionEvidence(filename, { parentFilename: score.musicxmlFilename, revision: nextRevision, validation });
-      const result = await this.scores.publishReviewDecision(scoreId, revision, { musicxmlFilename: filename, reviewRevision: nextRevision, validation, warnings });
+      const result = await this.scores.publishReviewDecision(scoreId, revision, { musicxmlFilename: filename, reviewRevision: nextRevision, validation, warnings,
+        deliveryApproved: this.automaticDelivery });
       if (!result) throw new AppError(409, "Há uma conversão ou outra decisão em andamento. Atualize a revisão.", "REVIEW_REVISION_CHANGED");
       published = true;
     } finally {
@@ -187,7 +232,7 @@ export class ScoreService {
     if (!score.deletedAt) throw new AppError(409, "A partitura já está na sua lista.", "SCORE_NOT_IN_TRASH");
     const restored = await this.scores.restore(score.id);
     await this.audits.create({ actorId: user.id, action: "score_restored", entity: "score", entityId: score.id, ipAddress });
-    return restored;
+    return { ...restored, recognitionQuality: recognitionQualityFor(restored) };
   }
 
   async bulkDeleteFor(user: User, scoreIds: string[], ipAddress?: string) {
@@ -218,7 +263,8 @@ export class ScoreService {
 
   async setFavoriteFor(user: User, scoreId: string, isFavorite: boolean) {
     const score = await this.getFor(user, scoreId);
-    return this.scores.update(score.id, { isFavorite });
+    const updated = await this.scores.update(score.id, { isFavorite });
+    return { ...updated, recognitionQuality: recognitionQualityFor(updated) };
   }
 
   private async purgeExpired() {
@@ -255,7 +301,7 @@ export class ScoreService {
       ipAddress,
       metadata: { from: score.originalFilename, to: nextFilename }
     });
-    return updated;
+    return { ...updated, recognitionQuality: recognitionQualityFor(updated) };
   }
 
   async downloadFor(user: User, scoreId: string, ipAddress?: string, preview = false) {

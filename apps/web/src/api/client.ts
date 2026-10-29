@@ -1,4 +1,4 @@
-import type { Score, VisualCorrectionProposal } from "../types/domain.js";
+import type { Score, ScoreVersion, VisualCorrectionProposal } from "../types/domain.js";
 
 const isLocalHost = ["localhost", "127.0.0.1", "0.0.0.0"].includes(window.location.hostname);
 const API_URL = import.meta.env.VITE_API_URL ?? (isLocalHost ? "http://localhost:4000" : window.location.origin);
@@ -102,6 +102,39 @@ export async function fetchMusicXml(scoreId: string, preview = false): Promise<s
   return response.text();
 }
 
+export async function fetchScoreVersions(scoreId: string, signal?: AbortSignal): Promise<ScoreVersion[]> {
+  const response = await request(`${API_URL}/api/scores/${encodeURIComponent(scoreId)}/versions`, {
+    credentials: "include",
+    signal
+  }, "Não foi possível carregar o histórico desta partitura.");
+  const body = await response.json() as { versions: ScoreVersion[] };
+  return body.versions;
+}
+
+export async function fetchScoreVersionMusicXml(scoreId: string, versionId: string, signal?: AbortSignal): Promise<string> {
+  const path = `/api/scores/${encodeURIComponent(scoreId)}/versions/${encodeURIComponent(versionId)}/musicxml`;
+  const response = await request(`${API_URL}${path}`, {
+    credentials: "include",
+    headers: { Accept: "application/vnd.recordare.musicxml+xml" },
+    signal
+  }, "Não foi possível carregar esta versão.");
+  return response.text();
+}
+
+export async function fetchFirstPagePreview(scoreId: string, revision: string, signal?: AbortSignal): Promise<string> {
+  const query = new URLSearchParams({ revision });
+  const response = await request(
+    `${API_URL}/api/scores/${encodeURIComponent(scoreId)}/first-page-preview?${query.toString()}`,
+    {
+      headers: { Accept: "application/vnd.recordare.musicxml+xml" },
+      credentials: "include",
+      signal
+    },
+    "Não foi possível carregar a prévia."
+  );
+  return response.text();
+}
+
 export async function approveScoreReview(scoreId: string, revision: string): Promise<Score> {
   const response = await api<{ score: Score }>(`/api/scores/${encodeURIComponent(scoreId)}/review`, {
     method: "POST",
@@ -114,7 +147,8 @@ export async function decideVisualReviewProposal(
   scoreId: string,
   revision: string,
   proposalId: string,
-  decision: "accept" | "reject" | "undo"
+  decision: "accept" | "reject" | "undo",
+  signal?: AbortSignal
 ): Promise<Score> {
   const response = await api<{ score: Score }>(`/api/scores/${encodeURIComponent(scoreId)}/visual-review/decision`, {
     method: "POST",
@@ -122,7 +156,8 @@ export async function decideVisualReviewProposal(
       revision: string;
       proposalId: VisualCorrectionProposal["id"];
       decision: "accept" | "reject" | "undo";
-    })
+    }),
+    signal
   });
   return response.score;
 }
@@ -169,6 +204,12 @@ export async function downloadMusicXml(scoreId: string, filename: string): Promi
   await saveBlob(await response.blob(), filename);
 }
 
+export async function downloadScoreVersionMusicXml(scoreId: string, versionId: string, filename: string, signal?: AbortSignal): Promise<void> {
+  const musicXml = await fetchScoreVersionMusicXml(scoreId, versionId, signal);
+  if (signal?.aborted) throw createAbortError();
+  await saveBlob(new Blob([musicXml], { type: "application/vnd.recordare.musicxml+xml" }), filename);
+}
+
 export async function downloadMidi(scoreId: string, filename: string): Promise<void> {
   await saveBlob(await fetchMidi(scoreId), filename);
 }
@@ -182,4 +223,10 @@ async function saveBlob(blob: Blob, filename: string): Promise<void> {
   link.click();
   link.remove();
   window.setTimeout(() => window.URL.revokeObjectURL(objectUrl), 60_000);
+}
+
+function createAbortError() {
+  const error = new Error("The operation was aborted.");
+  error.name = "AbortError";
+  return error;
 }

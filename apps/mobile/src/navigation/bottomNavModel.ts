@@ -9,6 +9,30 @@ export type BottomNavItem = {
   href: "/" | "/scores" | "/profile" | "/users" | "/logs";
 };
 
+export type RailUtilityItem = {
+  key: "trash" | "settings";
+  icon: ComponentProps<typeof Ionicons>["name"];
+  label: string;
+  englishLabel: string;
+  href: "/trash" | "/settings";
+};
+
+export function railUtilityItems(): RailUtilityItem[] {
+  return [
+    { key: "trash", icon: "trash-outline", label: "Lixeira", englishLabel: "Trash", href: "/trash" },
+    { key: "settings", icon: "settings-outline", label: "Ajustes", englishLabel: "Settings", href: "/settings" }
+  ];
+}
+
+/** Hide large shortcut tiles when the same destinations are available in the rail. */
+export function homeTilesForNavigationMode<T extends { key: string }>(
+  tiles: readonly T[],
+  navigationMode: "rail" | "bottom"
+): T[] {
+  if (navigationMode === "bottom") return [...tiles];
+  return tiles.filter((tile) => tile.key !== "trash" && tile.key !== "settings");
+}
+
 export function bottomNavItemsForRole(role: Role | null | undefined): BottomNavItem[] {
   return [
     { key: "home", icon: "home-outline", label: "Início", href: "/" },
@@ -29,5 +53,11 @@ export function activeBottomNavKey(pathname: string): BottomNavItem["key"] | "" 
   if (pathname.startsWith("/profile")) return "profile";
   if (pathname.startsWith("/users")) return "users";
   if (pathname.startsWith("/logs")) return "logs";
+  return "";
+}
+
+export function activeRailUtilityKey(pathname: string): RailUtilityItem["key"] | "" {
+  if (pathname.startsWith("/trash")) return "trash";
+  if (pathname.startsWith("/settings")) return "settings";
   return "";
 }

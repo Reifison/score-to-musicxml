@@ -1,14 +1,17 @@
 import { Ionicons } from "@expo/vector-icons";
 import { useQuery } from "@tanstack/react-query";
 import { Redirect } from "expo-router";
-import { ActivityIndicator, FlatList, RefreshControl, StyleSheet, Text, View } from "react-native";
+import { ActivityIndicator, FlatList, RefreshControl, StyleSheet, View } from "react-native";
+import { AdaptiveText as Text } from "../src/adaptive/AdaptiveTypography";
 import { api } from "../src/api/client";
 import type { PublicUser } from "../src/api/types";
 import { useAuth } from "../src/auth/AuthProvider";
-import { BottomNav, bottomNavHeight } from "../src/components/BottomNav";
+import { AdaptiveScreen } from "../src/components/AdaptiveScreen";
+import { getLocale, useTranslation } from "../src/i18n";
 import { colors, sharedStyles } from "../src/theme/styles";
 
 export default function UsersScreen() {
+  const { t } = useTranslation();
   const { token, user } = useAuth();
   const isAdmin = user?.role === "admin";
 
@@ -22,55 +25,52 @@ export default function UsersScreen() {
 
   if (!isAdmin) {
     return (
-      <View style={sharedStyles.screen}>
+      <AdaptiveScreen title={t("Usuários", "Users")}>
         <View style={[sharedStyles.content, styles.center]}>
           <Ionicons color={colors.faint} name="lock-closed-outline" size={38} />
-          <Text style={sharedStyles.title}>Usuarios</Text>
-          <Text style={sharedStyles.subtitle}>Esta area esta disponivel apenas para administradores.</Text>
+          <Text style={sharedStyles.subtitle}>{t("Esta área está disponível apenas para administradores.", "This area is available to administrators only.")}</Text>
         </View>
-        <BottomNav />
-      </View>
+      </AdaptiveScreen>
     );
   }
 
   return (
-    <View style={sharedStyles.screen}>
+    <AdaptiveScreen title={t("Usuários", "Users")}>
       <FlatList
         contentContainerStyle={styles.content}
         data={usersQuery.data?.users ?? []}
         keyExtractor={(item) => item.id}
         ListHeaderComponent={
           <View style={styles.header}>
-            <Text style={sharedStyles.title}>Usuarios</Text>
-            <Text style={sharedStyles.subtitle}>Consulta segura dos usuarios cadastrados.</Text>
+            <Text style={sharedStyles.subtitle}>{t("Consulta segura dos usuários cadastrados.", "Secure view of registered users.")}</Text>
           </View>
         }
         ListEmptyComponent={
-          usersQuery.isLoading ? <ActivityIndicator color={colors.primary} /> : <Text style={sharedStyles.subtitle}>Nenhum usuario encontrado.</Text>
+          usersQuery.isLoading ? <ActivityIndicator color={colors.primary} /> : <Text style={sharedStyles.subtitle}>{t("Nenhum usuário encontrado.", "No users found.")}</Text>
         }
         refreshControl={<RefreshControl onRefresh={() => void usersQuery.refetch()} refreshing={usersQuery.isFetching} />}
         renderItem={({ item }) => <UserRow user={item} />}
       />
-      <BottomNav />
-    </View>
+    </AdaptiveScreen>
   );
 }
 
 function UserRow({ user }: { user: PublicUser }) {
+  const { t } = useTranslation();
   return (
     <View style={sharedStyles.panel}>
       <View style={styles.rowTop}>
         <View style={{ flex: 1, gap: 4 }}>
-          <Text numberOfLines={1} style={styles.name}>{user.name}</Text>
-          <Text numberOfLines={1} style={sharedStyles.subtitle}>{user.email}</Text>
+          <Text style={styles.name}>{user.name}</Text>
+          <Text style={sharedStyles.subtitle}>{user.email}</Text>
         </View>
         <View style={[styles.badge, user.isActive ? styles.activeBadge : styles.inactiveBadge]}>
-          <Text style={[styles.badgeText, user.isActive ? styles.activeText : styles.inactiveText]}>{user.isActive ? "Ativo" : "Inativo"}</Text>
+          <Text style={[styles.badgeText, user.isActive ? styles.activeText : styles.inactiveText]}>{user.isActive ? t("Ativo", "Active") : t("Inativo", "Inactive")}</Text>
         </View>
       </View>
       <View style={styles.metaRow}>
-        <Text style={styles.meta}>Perfil: {user.role === "admin" ? "Admin" : "Usuario"}</Text>
-        <Text style={styles.meta}>Criado: {new Date(user.createdAt).toLocaleDateString()}</Text>
+        <Text style={styles.meta}>{t("Perfil", "Role")}: {user.role === "admin" ? t("Admin", "Administrator") : t("Usuário", "User")}</Text>
+        <Text style={styles.meta}>{t("Criado", "Created")}: {new Date(user.createdAt).toLocaleDateString(getLocale())}</Text>
       </View>
     </View>
   );
@@ -95,12 +95,12 @@ const styles = StyleSheet.create({
   center: {
     alignItems: "center",
     justifyContent: "center",
-    paddingBottom: bottomNavHeight + 24
+    paddingBottom: 24
   },
   content: {
     gap: 14,
     padding: 20,
-    paddingBottom: bottomNavHeight + 24
+    paddingBottom: 24
   },
   header: {
     gap: 6
@@ -126,8 +126,9 @@ const styles = StyleSheet.create({
     fontWeight: "800"
   },
   rowTop: {
-    alignItems: "center",
+    alignItems: "flex-start",
     flexDirection: "row",
+    flexWrap: "wrap",
     gap: 12
   }
 });

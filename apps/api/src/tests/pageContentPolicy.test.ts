@@ -4,7 +4,7 @@ import path from "node:path";
 import sharp from "sharp";
 import { describe, expect, it, vi } from "vitest";
 import { AudiverisOmrAdapter } from "../services/OmrAdapter.js";
-import { classifyPageContent } from "../services/PageContentClassifier.js";
+import { classifyPageContent, sha256File } from "../services/PageContentClassifier.js";
 import { validCoverage } from "../services/ScoreConversionService.js";
 import type { ConversionCoverage } from "../domain.js";
 
@@ -17,15 +17,28 @@ async function fixture() {
   const staff = path.join(dir, "staff.png");
   const weak = path.join(dir, "weak.png");
   const mixed = path.join(dir, "mixed.png");
+  const skewed = path.join(dir, "skewed.png");
   await fs.writeFile(source, "%PDF policy test");
   const image = (color: string, lines: boolean) => Buffer.from(`<svg width="1000" height="700" xmlns="http://www.w3.org/2000/svg"><rect width="1000" height="700" fill="white"/>${lines ? Array.from({ length: 5 }, (_, index) => `<rect x="100" y="${200 + index * 12}" width="800" height="1" fill="${color}"/>`).join("") : `<text x="100" y="180" font-size="40" fill="black">COVER TEXT</text>`}</svg>`);
   await Promise.all([
     sharp(image("black", false)).png().toFile(cover),
     sharp(image("black", true)).png().toFile(staff),
     sharp(image("#cccccc", true)).png().toFile(weak),
-    sharp(Buffer.from(`<svg width="1000" height="700" xmlns="http://www.w3.org/2000/svg"><rect width="1000" height="700" fill="white"/><text x="100" y="120" font-size="50">Title and prose</text>${Array.from({ length: 5 }, (_, index) => `<rect x="100" y="${300 + index * 12}" width="800" height="1" fill="black"/>`).join("")}</svg>`)).png().toFile(mixed)
+    sharp(Buffer.from(`<svg width="1000" height="700" xmlns="http://www.w3.org/2000/svg"><rect width="1000" height="700" fill="white"/><text x="100" y="120" font-size="50">Title and prose</text>${Array.from({ length: 5 }, (_, index) => `<rect x="100" y="${300 + index * 12}" width="800" height="1" fill="black"/>`).join("")}</svg>`)).png().toFile(mixed),
+    sharp(Buffer.from(`<svg width="1000" height="700" xmlns="http://www.w3.org/2000/svg"><rect width="100%" height="100%" fill="white"/>${Array.from({ length: 3 }, (_system, system) => Array.from({ length: 5 }, (_line, index) => { const y = 170 + system * 170 + index * 10; return `<line x1="100" y1="${y + 10.48}" x2="900" y2="${y - 10.48}" stroke="black" stroke-width="2"/>`; }).join("")).join("")}</svg>`)).png().toFile(skewed)
   ]);
-  return { dir, source, cover, staff, weak, mixed };
+  return { dir, source, cover, staff, weak, mixed, skewed };
+}
+
+async function writeFineScannedStaff(filePath: string, color = "#111111"): Promise<void> {
+  const width = 3110;
+  const height = 4400;
+  const lines = Array.from({ length: 9 }, (_system, systemIndex) => Array.from({ length: 5 }, (_line, lineIndex) => {
+    const y = 400 + systemIndex * 360 + lineIndex * 24;
+    return `<line x1="300" y1="${y}" x2="2800" y2="${y}" stroke="${color}" stroke-width="1"/>`;
+  }).join("")).join("");
+  const svg = `<svg width="${width}" height="${height}" xmlns="http://www.w3.org/2000/svg"><rect width="100%" height="100%" fill="white"/>${lines}</svg>`;
+  await sharp(Buffer.from(svg)).png().toFile(filePath);
 }
 
 function mockAdapter(paths: string[], omr: (page: string) => Promise<string> = async () => xml) {
@@ -42,6 +55,24 @@ function mockAdapter(paths: string[], omr: (page: string) => Promise<string> = a
 }
 
 describe("page content policy", () => {
+  it("classifica pauta fina digitalizada como musical sem promover impressão clara", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "omr-page-policy-fine-scan-"));
+    const source = path.join(dir, "source.pdf");
+    const fineStaff = path.join(dir, "fine-staff.png");
+    const faintPrint = path.join(dir, "faint-print.png");
+    try {
+      await fs.writeFile(source, "%PDF fine-scan policy test");
+      await Promise.all([writeFineScannedStaff(fineStaff), writeFineScannedStaff(faintPrint, "#cccccc")]);
+      const staff = await classifyPageContent(source, fineStaff);
+      expect(staff.role).toBe("musical");
+      expect(staff.classification.sourceLayout).toMatchObject({ status: "observed", staffBands: expect.arrayContaining([expect.any(Object)]) });
+
+      const faint = await classifyPageContent(source, faintPrint);
+      expect(faint.role).toBe("uncertain");
+      expect(faint.classification.sourceLayout).toMatchObject({ status: "unknown", staffBands: [] });
+    } finally { await fs.rm(dir, { recursive: true, force: true }); }
+  });
+
   it("detecta pauta forte, mas não presume que capa ou pauta fraca são não musicais", async () => {
     const f = await fixture();
     try {
@@ -53,6 +84,29 @@ describe("page content policy", () => {
       const weak = await classifyPageContent(f.source, f.weak);
       expect(weak.role).toBe("uncertain");
       expect(weak.classification.sourceLayout).toMatchObject({ method: "horizontal_staff_bands_v1", status: "unknown", staffBands: [] });
+      const skewed = await classifyPageContent(f.source, f.skewed);
+      expect(skewed.role).toBe("musical");
+      expect(skewed.classification.evidence[0]).toMatch(/^five_skewed_staff_lines:/);
+      expect(skewed.classification.sourceLayout).toMatchObject({
+        status: "unknown",
+        staffBands: [],
+        positiveSkewEvidence: { staffLineCount: 15, staffBandCount: 3 }
+      });
+    } finally { await fs.rm(f.dir, { recursive: true, force: true }); }
+  });
+
+  it("não permite excluir manualmente uma página com geometria positiva de pauta inclinada", async () => {
+    const f = await fixture();
+    try {
+      const decision = {
+        page: 1,
+        role: "nonmusical" as const,
+        sourceSHA256: await sha256File(f.source),
+        originalImageSHA256: await sha256File(f.skewed),
+        reviewer: "curadoria",
+        reason: "Capa confirmada"
+      };
+      await expect(classifyPageContent(f.source, f.skewed, decision)).rejects.toMatchObject({ code: "PAGE_DECISION_CONFLICT" });
     } finally { await fs.rm(f.dir, { recursive: true, force: true }); }
   });
 

@@ -73,6 +73,36 @@ function expectEventsClose(actual: ExpectedEvent[], expected: ExpectedEvent[]): 
 }
 
 describe("homologacao musical MusicXML -> Verovio -> MIDI", () => {
+  it("mapeia as execuções repetidas e voltas pela ocorrência tocada", async () => {
+    const renderer = await createVerovioScoreRenderer(
+      applyDefaultTempo(await loadFixture("learned-skipped-first-ending.musicxml"))
+    );
+    try {
+      const measures = renderer.getMeasureOccurrences();
+      expect(measures.map((measure) => measure.number)).toEqual(["1", "2", "3", "4", "2", "3", "5", "6"]);
+      expect(measures.filter((measure) => measure.number === "2").map((measure) => measure.occurrence)).toEqual([1, 2]);
+      expect(measures.every((measure) => measure.endMs > measure.startMs)).toBe(true);
+      expect(measures.slice(0, -1).every((measure, index) => measure.endMs === measures[index + 1]?.startMs)).toBe(true);
+    } finally {
+      renderer.destroy();
+    }
+  });
+
+  it("keeps the trailing rest in the final measure boundary", async () => {
+    const renderer = await createVerovioScoreRenderer(
+      applyDefaultTempo(await loadFixture("learned-tuplet-without-notations.musicxml"))
+    );
+    try {
+      const measures = renderer.getMeasureOccurrences();
+      const finalNoteEnd = Math.max(...renderer.getNoteEvents().map((event) => event.startMs + event.durationMs));
+      const lastMeasure = measures.at(-1);
+      expect(lastMeasure).toBeDefined();
+      expect(lastMeasure!.endMs).toBeGreaterThan(finalNoteEnd);
+    } finally {
+      renderer.destroy();
+    }
+  });
+
   it("encerra a ligadura na segunda passagem quando a primeira casa é pulada", async () => {
     const renderer = await createVerovioScoreRenderer(
       applyDefaultTempo(await loadFixture("learned-skipped-first-ending.musicxml"))

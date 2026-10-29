@@ -48,3 +48,4 @@ apps/mobile/android/captures/
 
 # Private local visual reader environment and model weights.
 /.local/source-visual-homr/
+/.local/audiveris-*/

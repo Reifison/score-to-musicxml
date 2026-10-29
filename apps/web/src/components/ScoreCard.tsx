@@ -1,6 +1,7 @@
 import { Download, Eye, Heart, Trash2 } from "lucide-react";
 import { canDownloadScoreMusicXml } from "../score/availability.js";
 import type { Score } from "../types/domain.js";
+import { ScoreConversionProgress } from "./ScoreConversionProgress.js";
 import { StatusBadge } from "./StatusBadge.js";
 
 export function ScoreCard({
@@ -53,7 +54,8 @@ export function ScoreCard({
           <Heart fill={score.isFavorite ? "currentColor" : "none"} size={20} />
         </button>
       </div>
-      <StatusBadge status={score.conversionStatus} resultStatus={score.resultStatus} />
+      <StatusBadge status={score.conversionStatus} resultStatus={score.resultStatus} recognitionQuality={score.recognitionQuality} />
+      <ScoreConversionProgress score={score} />
       {score.errorMessage && (
         <div className="card-error">
           <p className="error-text">{score.errorMessage}</p>

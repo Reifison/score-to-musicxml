@@ -4,11 +4,15 @@ import { createReadStream } from "node:fs";
 import { DOMParser } from "@xmldom/xmldom";
 import sharp from "sharp";
 import { runCommand } from "./SubprocessRunner.js";
+import { projectSourceRectangle, validSourceImageTransform, type SourceImageTransform } from "./SourceImageTransform.js";
+import type { NativeMeasureEvidence, NativeHeadEvidence } from "./NativeMeasureEventRecovery.js";
 
 export type AudiverisSourceAnchor = {
   partIndex: number;
   measureIndex: number;
   rectangle: { left: number; top: number; width: number; height: number };
+  /** Present only for explicit native stack geometry, not inferred from XML numbering. */
+  systemIndex?: number;
 };
 
 const maximumArchiveBytes = 128 * 1024 * 1024;
@@ -222,18 +226,30 @@ export async function readAudiverisSourceAnchors(input: {
   imagePath: string;
   originalImagePath: string;
   pageXml: string;
+  sourceTransform?: SourceImageTransform;
+  boundsMode?: "content" | "measure-stack";
 }): Promise<AudiverisSourceAnchor[]> {
   try {
     const archiveInfo = await fs.lstat(input.archivePath);
     if (!archiveInfo.isFile() || archiveInfo.isSymbolicLink() || archiveInfo.size <= 0 || archiveInfo.size > maximumArchiveBytes) return [];
 
-    const [imageHash, originalImageHash, imageMetadata] = await Promise.all([
+    const [imageHash, originalImageHash, imageMetadata, originalMetadata] = await Promise.all([
       sha256File(input.imagePath),
       sha256File(input.originalImagePath),
-      sharp(input.imagePath, { failOn: "truncated", limitInputPixels: maximumPixels }).metadata()
+      sharp(input.imagePath, { failOn: "truncated", limitInputPixels: maximumPixels }).metadata(),
+      sharp(input.originalImagePath, { failOn: "truncated", limitInputPixels: maximumPixels }).metadata()
     ]);
-    if (imageHash !== originalImageHash || !imageMetadata.width || !imageMetadata.height
+    const transform = input.sourceTransform;
+    if (!imageMetadata.width || !imageMetadata.height
       || imageMetadata.width * imageMetadata.height > maximumPixels) return [];
+    if (transform) {
+      if (!validSourceImageTransform(transform) || transform.originalImageSHA256 !== originalImageHash
+        || transform.preparedImageSHA256 !== imageHash
+        || transform.originalWidth !== originalMetadata.width || transform.originalHeight !== originalMetadata.height
+        || transform.preparedWidth !== imageMetadata.width || transform.preparedHeight !== imageMetadata.height
+        || (originalMetadata.orientation && originalMetadata.orientation !== 1)
+        || (imageMetadata.orientation && imageMetadata.orientation !== 1)) return [];
+    } else if (imageHash !== originalImageHash) return [];
 
     const fileList = await runCommand("unzip", ["-Z1", input.archivePath], { timeout: unzipTimeoutMs, maxBuffer: unzipBufferBytes });
     const entries = fileList.stdout.split(/\r?\n/).filter(Boolean);
@@ -265,7 +281,7 @@ export async function readAudiverisSourceAnchors(input: {
 
     const anchors: AudiverisSourceAnchor[] = [];
     let measureIndex = 0;
-    for (const system of systems) {
+    for (const [systemIndex, system] of systems.entries()) {
       const stacks = childElements(system, "stack");
       const parts = childElements(system, "part");
       if (parts.length !== 1) return [];
@@ -282,9 +298,18 @@ export async function readAudiverisSourceAnchors(input: {
         const measureId = measure.getAttribute("id");
         const stackId = stack.getAttribute("id");
         if (!measureId || !stackId || measureId !== stackId) return [];
-        const rectangle = makeRectangle(stack, staves[0], measure, spatial, imageWidth, imageHeight, interline);
+        const staffBounds = staffVerticalBounds(staves[0]);
+        const stackLeft = numericAttribute(stack, "left");
+        const stackRight = numericAttribute(stack, "right");
+        const nativeRectangle = input.boundsMode === "measure-stack" && staffBounds && stackLeft !== null && stackRight !== null
+          && stackLeft >= 0 && stackRight <= imageWidth && stackRight > stackLeft
+          ? { left: stackLeft, top: staffBounds.top, width: stackRight - stackLeft, height: staffBounds.bottom - staffBounds.top }
+          : input.boundsMode === "measure-stack" ? null
+            : makeRectangle(stack, staves[0], measure, spatial, imageWidth, imageHeight, interline);
+        const rectangle = nativeRectangle && transform ? projectSourceRectangle(nativeRectangle, transform) : nativeRectangle;
         if (!rectangle) return [];
-        anchors.push({ partIndex: 0, measureIndex, rectangle });
+        anchors.push({ partIndex: 0, measureIndex, rectangle,
+          ...(input.boundsMode === "measure-stack" ? { systemIndex } : {}) });
         measureIndex += 1;
       }
     }
@@ -294,4 +319,104 @@ export async function readAudiverisSourceAnchors(input: {
   } catch {
     return [];
   }
+}
+
+/**
+ * Reads Audiveris note-head observations and checks that each projected head
+ * still has ink in the original raster. This is evidence for an experimental
+ * event-layer proposal, not a second independent notation recognizer.
+ */
+export async function readAudiverisNativeMeasureEvidence(input: {
+  archivePath: string; imagePath: string; originalImagePath: string; pageXml: string;
+  sourceTransform?: SourceImageTransform;
+}): Promise<NativeMeasureEvidence[]> {
+  try {
+    const anchors = await readAudiverisSourceAnchors({ ...input, boundsMode: "measure-stack" });
+    if (!anchors.length || anchors.length > 200 || anchors.some((anchor) => anchor.systemIndex === undefined)) return [];
+    const originalHash = await sha256File(input.originalImagePath);
+    const archiveInfo = await fs.lstat(input.archivePath);
+    if (!archiveInfo.isFile() || archiveInfo.isSymbolicLink() || archiveInfo.size < 1 || archiveInfo.size > maximumArchiveBytes) return [];
+    const fileList = await runCommand("unzip", ["-Z1", input.archivePath], { timeout: unzipTimeoutMs, maxBuffer: unzipBufferBytes });
+    const entries = fileList.stdout.split(/\r?\n/).filter(Boolean);
+    const sheetEntries = entries.filter((entry) => /^sheet#([1-9]\d*)\/sheet#\1\.xml$/.test(entry));
+    if (sheetEntries.length !== 1) return [];
+    const xml = await runCommand("unzip", ["-p", input.archivePath, sheetEntries[0]], { timeout: unzipTimeoutMs, maxBuffer: unzipBufferBytes });
+    const document = parseXml(xml.stdout, "sheet");
+    if (!document) return [];
+    const page = childElements(document.documentElement, "page")[0];
+    if (!page) return [];
+    const systems = childElements(page, "system");
+    const image = await sharp(input.originalImagePath, { failOn: "truncated", limitInputPixels: maximumPixels })
+      .grayscale().raw().toBuffer({ resolveWithObject: true });
+    if (image.info.channels !== 1 || image.info.width * image.info.height > maximumPixels) return [];
+    const ratio = (rectangle: NativeHeadEvidence["rectangle"]): number | null => {
+      if (!Number.isFinite(rectangle.left) || !Number.isFinite(rectangle.top)
+        || !Number.isFinite(rectangle.width) || !Number.isFinite(rectangle.height)
+        || rectangle.width <= 0 || rectangle.height <= 0 || rectangle.left < 0 || rectangle.top < 0
+        || rectangle.left + rectangle.width > image.info.width + 1
+        || rectangle.top + rectangle.height > image.info.height + 1) return null;
+      const left = Math.max(0, Math.floor(rectangle.left));
+      const top = Math.max(0, Math.floor(rectangle.top));
+      const right = Math.min(image.info.width, Math.ceil(rectangle.left + rectangle.width));
+      const bottom = Math.min(image.info.height, Math.ceil(rectangle.top + rectangle.height));
+      if (right <= left || bottom <= top || (right - left) * (bottom - top) > 100_000) return null;
+      let dark = 0;
+      for (let y = top; y < bottom; y++) for (let x = left; x < right; x++) {
+        if (image.data[y * image.info.width + x] < 180) dark++;
+      }
+      return dark / ((right - left) * (bottom - top));
+    };
+    const result: NativeMeasureEvidence[] = [];
+    for (const [systemIndex, system] of systems.entries()) {
+      const parts = childElements(system, "part");
+      const signature = childElements(system, "sig");
+      if (parts.length !== 1 || signature.length !== 1) return [];
+      const measures = childElements(parts[0], "measure");
+      const stacks = childElements(system, "stack");
+      const interContainer = childElements(signature[0], "inters")[0];
+      const relationContainer = childElements(signature[0], "relations")[0];
+      if (!interContainer || !relationContainer || measures.length !== stacks.length) return [];
+      const inters = new Map<string, Element>();
+      for (const inter of childElements(interContainer)) {
+        const id = inter.getAttribute("id");
+        if (!id || inters.has(id)) return [];
+        inters.set(id, inter);
+      }
+      const contained = new Map<string, string[]>();
+      for (const relation of childElements(relationContainer, "relation")) {
+        if (!childElements(relation, "containment").length) continue;
+        const source = relation.getAttribute("source"); const target = relation.getAttribute("target");
+        if (!source || !target) return [];
+        contained.set(source, [...(contained.get(source) ?? []), target]);
+      }
+      for (const [localIndex, measure] of measures.entries()) {
+        const index = result.length;
+        const anchor = anchors[index];
+        if (!anchor || anchor.systemIndex !== systemIndex || measure.getAttribute("id") !== stacks[localIndex].getAttribute("id")) return [];
+        const chordIds = (childElements(measure, "head-chords")[0]?.textContent ?? "").trim().split(/\s+/).filter(Boolean);
+        const heads: NativeHeadEvidence[] = [];
+        for (const chordId of chordIds) {
+          if (localName(inters.get(chordId) ?? measure) !== "head-chord") return [];
+          const headIds = contained.get(chordId) ?? [];
+          if (!headIds.length) return [];
+          for (const id of headIds) {
+            const head = inters.get(id);
+            const bounds = head && rectangleFromElement(head);
+            const grade = head && numericAttribute(head, "grade");
+            if (!head || localName(head) !== "head" || !bounds || grade === null || grade === undefined) return [];
+            const native = { left: bounds.left, top: bounds.top, width: bounds.right - bounds.left, height: bounds.bottom - bounds.top };
+            const rectangle = input.sourceTransform ? projectSourceRectangle(native, input.sourceTransform) : native;
+            if (!rectangle) return [];
+            const sourceInkRatio = ratio(rectangle);
+            if (sourceInkRatio === null) return [];
+            heads.push({ id, rectangle, grade, sourceInkRatio });
+          }
+        }
+        result.push({ measureIndex: index, systemIndex, rectangle: anchor.rectangle,
+          sourceWidth: image.info.width, sourceHeight: image.info.height,
+          abnormal: measure.getAttribute("abnormal") === "true", heads });
+      }
+    }
+    return result.length === anchors.length && await sha256File(input.originalImagePath) === originalHash ? result : [];
+  } catch { return []; }
 }

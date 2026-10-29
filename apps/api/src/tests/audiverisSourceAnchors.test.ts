@@ -1,9 +1,11 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { createHash } from "node:crypto";
 import sharp from "sharp";
 import { describe, expect, it } from "vitest";
 import { readAudiverisSourceAnchors } from "../services/AudiverisSourceAnchors.js";
+import type { SourceImageTransform } from "../services/SourceImageTransform.js";
 
 function crc32(buffer: Buffer): number {
   let crc = 0xffffffff;
@@ -91,6 +93,33 @@ async function writeArchive(filePath: string, xml: string): Promise<void> {
 }
 
 describe("AudiverisSourceAnchors", () => {
+  it("projects exact stack geometry only through a verified crop and padding transform", async () => {
+    const directory = await fs.mkdtemp(path.join(os.tmpdir(), "audiveris-source-transform-"));
+    try {
+      const originalImagePath = path.join(directory, "original.png");
+      const imagePath = path.join(directory, "prepared.png");
+      const archivePath = path.join(directory, "native.omr");
+      await writeImage(originalImagePath, "black");
+      await sharp(originalImagePath).extract({ left: 100, top: 20, width: 800, height: 500 })
+        .extend({ left: 10, right: 10, top: 80, bottom: 80, background: "white" }).png().toFile(imagePath);
+      await writeArchive(archivePath, nativeSheet({ width: 820, height: 660 }));
+      const hash = async (file: string) => createHash("sha256").update(await fs.readFile(file)).digest("hex");
+      const sourceTransform: SourceImageTransform = { version: 1, method: "crop_padding_v1",
+        originalImageSHA256: await hash(originalImagePath), preparedImageSHA256: await hash(imagePath),
+        originalWidth: 1000, originalHeight: 600, preparedWidth: 820, preparedHeight: 660,
+        crop: { left: 100, top: 20, width: 800, height: 500 }, padding: { left: 10, right: 10, top: 80, bottom: 80 } };
+      const input = { archivePath, imagePath, originalImagePath, pageXml: musicXml(), boundsMode: "measure-stack" as const, sourceTransform };
+      expect(await readAudiverisSourceAnchors(input)).toEqual([
+        { partIndex: 0, measureIndex: 0, systemIndex: 0, rectangle: { left: 190, top: 40, width: 200, height: 40 } },
+        { partIndex: 0, measureIndex: 1, systemIndex: 0, rectangle: { left: 390, top: 40, width: 200, height: 40 } }
+      ]);
+      expect(await readAudiverisSourceAnchors({ ...input, sourceTransform: undefined })).toEqual([]);
+      expect(await readAudiverisSourceAnchors({ ...input, sourceTransform: { ...sourceTransform, preparedImageSHA256: "f".repeat(64) } })).toEqual([]);
+      expect(await readAudiverisSourceAnchors({ ...input, sourceTransform: { ...sourceTransform, originalWidth: 999 } })).toEqual([]);
+      await writeImage(originalImagePath, "red");
+      expect(await readAudiverisSourceAnchors(input)).toEqual([]);
+    } finally { await fs.rm(directory, { recursive: true, force: true }); }
+  });
   it("ancora compassos existentes usando stacks e pautas no mesmo raster verificado", async () => {
     const directory = await fs.mkdtemp(path.join(os.tmpdir(), "audiveris-source-anchors-"));
     const archivePath = path.join(directory, "native.omr");

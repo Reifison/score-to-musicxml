@@ -3,6 +3,8 @@ import { colors } from "./colors";
 
 export { colors } from "./colors";
 
+export const screenGutter = 24;
+
 export const sharedStyles = StyleSheet.create({
   screen: {
     flex: 1,
@@ -10,7 +12,7 @@ export const sharedStyles = StyleSheet.create({
   },
   content: {
     flexGrow: 1,
-    padding: 24,
+    padding: screenGutter,
     gap: 18
   },
   title: {

@@ -30,6 +30,51 @@ def score(measures: str, *, part_id: str = "P1", second_part: str = "") -> bytes
 
 
 class SourceVisualHomrReaderTests(unittest.TestCase):
+    def _run_request_with_xml(self, xml_bytes: bytes, **request_options: object) -> dict[str, object]:
+        image_bytes = b"stable-source-image"
+
+        def process_image(image_path: str, _config: object, _arguments: object) -> None:
+            Path(image_path).with_suffix(".musicxml").write_bytes(xml_bytes)
+
+        fake_homr = SimpleNamespace(
+            detect_title=None,
+            ProcessingConfig=lambda **kwargs: kwargs,
+            XmlGeneratorArguments=lambda *args: args,
+            process_image=process_image,
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            image_path = Path(directory) / "source.png"
+            request_path = Path(directory) / "request.json"
+            image_path.write_bytes(image_bytes)
+            request = {
+                "version": 1,
+                "page": 1,
+                "imagePath": str(image_path),
+                "imageSHA256": hashlib.sha256(image_bytes).hexdigest(),
+            }
+            request.update(request_options)
+            request_path.write_text(json.dumps(request))
+            with mock.patch.object(reader, "_verify_image", return_value=("PNG", 1, 1)), \
+                    mock.patch.object(reader, "_check_runtime_and_models", return_value=fake_homr):
+                return reader.run_request(request_path)
+
+    def test_emits_only_explicit_key_signatures_and_preserves_changes(self) -> None:
+        xml = score('''
+          <measure number="0" implicit="yes"><attributes><divisions>4</divisions><key><fifths>-1</fifths></key></attributes>
+            <note><pitch><step>B</step><alter>-1</alter><octave>4</octave></pitch><duration>2</duration></note></measure>
+          <measure number="1"><note><pitch><step>C</step><octave>4</octave></pitch><duration>4</duration></note></measure>
+          <measure number="2"><attributes><key><fifths>0</fifths></key></attributes>
+            <note><pitch><step>C</step><octave>4</octave></pitch><duration>4</duration></note></measure>''')
+        measures = reader.parse_musicxml(xml)
+        self.assertEqual([measure.get("keyFifths") for measure in measures], [-1, None, 0])
+        self.assertEqual([event["duration"] for event in measures[0]["events"]], [0.5])
+
+    def test_rejects_key_without_simple_fifths(self) -> None:
+        xml = score('''<measure number="1"><attributes><key><key-step>B</key-step><key-alter>-1</key-alter></key></attributes>
+          <note><pitch><step>C</step><octave>4</octave></pitch><duration>1</duration></note></measure>''')
+        with self.assertRaises(reader.UnsupportedMusicXml):
+            reader.parse_musicxml(xml)
+
     def test_emits_quarter_units_pitches_chords_rests_and_cursor_positions(self) -> None:
         xml = score('''
           <measure number="1">
@@ -134,6 +179,76 @@ class SourceVisualHomrReaderTests(unittest.TestCase):
                 "visual não pode associar com segurança."
             ),
         })
+
+    def test_default_request_keeps_response_without_raw_musicxml(self) -> None:
+        xml = score('''<measure number="1"><note><pitch><step>C</step><octave>4</octave></pitch>
+          <duration>1</duration></note></measure>''')
+
+        response = self._run_request_with_xml(xml)
+
+        self.assertTrue(response["coverageComplete"])
+        self.assertEqual(set(response), {
+            "version", "page", "inputImageSHA256", "reader", "coverageComplete",
+            "diagnostics", "measures",
+        })
+
+    def test_opt_in_returns_exact_utf8_musicxml_including_fermata(self) -> None:
+        xml = score('''<measure number="1"><note><pitch><step>F</step><octave>5</octave></pitch>
+          <duration>1</duration><notations><fermata/></notations></note></measure>''')
+
+        response = self._run_request_with_xml(xml, includeMusicXml=True)
+
+        self.assertTrue(response["coverageComplete"])
+        self.assertEqual(response["musicXml"], xml.decode("utf-8"))
+        self.assertIn("<fermata/>", response["musicXml"])
+
+    def test_explicit_false_keeps_default_response_without_raw_musicxml(self) -> None:
+        xml = score('''<measure number="1"><note><pitch><step>C</step><octave>4</octave></pitch>
+          <duration>1</duration></note></measure>''')
+
+        response = self._run_request_with_xml(xml, includeMusicXml=False)
+
+        self.assertTrue(response["coverageComplete"])
+        self.assertNotIn("musicXml", response)
+
+    def test_opt_in_does_not_return_unsupported_or_empty_musicxml(self) -> None:
+        valid_measure = '<measure number="1"><note><pitch><step>C</step><octave>4</octave></pitch><duration>1</duration></note></measure>'
+        unsupported = score(valid_measure, second_part=valid_measure)
+        empty = score('<measure number="1"/>')
+
+        for xml in (unsupported, empty):
+            with self.subTest(xml=xml):
+                response = self._run_request_with_xml(xml, includeMusicXml=True)
+                self.assertFalse(response["coverageComplete"])
+                self.assertNotIn("musicXml", response)
+
+    def test_musicxml_option_requires_boolean_and_rejects_unexpected_fields(self) -> None:
+        base_request = {
+            "version": 1,
+            "page": 1,
+            "imagePath": "/tmp/source.png",
+            "imageSHA256": "a" * 64,
+        }
+        for invalid_request in (
+            {**base_request, "includeMusicXml": "true"},
+            {**base_request, "candidateXML": "<score-partwise/>"},
+        ):
+            with self.subTest(invalid_request=invalid_request), tempfile.TemporaryDirectory() as directory:
+                request_path = Path(directory) / "request.json"
+                request_path.write_text(json.dumps(invalid_request))
+                with self.assertRaises(reader.ReaderError):
+                    reader._load_request(request_path)
+
+    def test_opt_in_requires_utf8_musicxml_and_reports_safe_error(self) -> None:
+        xml = b'''<?xml version="1.0" encoding="ISO-8859-1"?>
+        <score-partwise><part-list><score-part id="P1"><part-name>Caf\xe9</part-name></score-part></part-list>
+        <part id="P1"><measure number="1"><note><pitch><step>C</step><octave>4</octave></pitch>
+        <duration>1</duration></note></measure></part></score-partwise>'''
+
+        with self.assertRaises(reader.ReaderError) as raised:
+            self._run_request_with_xml(xml, includeMusicXml=True)
+
+        self.assertEqual(str(raised.exception), "The local reader produced invalid UTF-8 MusicXML")
 
     def test_run_request_reports_empty_measure_without_claiming_coverage(self) -> None:
         image_bytes = b"stable-source-image"

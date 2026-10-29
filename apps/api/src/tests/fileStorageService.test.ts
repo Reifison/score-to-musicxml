@@ -6,6 +6,26 @@ import { describe, expect, it } from "vitest";
 import { FileStorageService } from "../services/FileStorageService.js";
 
 describe("export downloads", () => {
+  it("remove checkpoints somente junto ao original da partitura correspondente", async () => {
+    const base = await fs.mkdtemp(path.join(os.tmpdir(), "score-checkpoint-retention-"));
+    const storage = new FileStorageService(path.join(base, "uploads"), path.join(base, "exports"));
+    try {
+      await storage.saveUpload("first.pdf", Buffer.from("first"));
+      await storage.saveUpload("other.pdf", Buffer.from("other"));
+      const checkpoint = storage.resolveConversionCheckpointDirectory("first.pdf");
+      const other = storage.resolveConversionCheckpointDirectory("other.pdf");
+      await fs.mkdir(checkpoint, { mode: 0o700 });
+      await fs.mkdir(other, { mode: 0o700 });
+      await fs.writeFile(path.join(checkpoint, "manifest.json"), "{}");
+      await storage.deleteUpload("first.pdf");
+      await expect(fs.stat(checkpoint)).rejects.toMatchObject({ code: "ENOENT" });
+      expect((await fs.stat(other)).isDirectory()).toBe(true);
+      expect(await fs.readFile(storage.resolveUploadPath("other.pdf"), "utf8")).toBe("other");
+      expect(() => storage.resolveConversionCheckpointDirectory("../other.pdf")).toThrow();
+      await storage.deleteUpload("first.pdf");
+    } finally { await fs.rm(base, { recursive: true, force: true }); }
+  });
+
   it("reads regular exports and refuses symlinks or non-file entries", async () => {
     const base = await fs.mkdtemp(path.join(os.tmpdir(), "score-export-download-"));
     const exports = path.join(base, "exports");
@@ -28,6 +48,31 @@ describe("export downloads", () => {
 });
 
 describe("conversion evidence storage", () => {
+  it("redacts engine-generated logs before exposing evidence and hashes the delivered bytes", async () => {
+    const base = await fs.mkdtemp(path.join(os.tmpdir(), "score-evidence-log-"));
+    const workDir = path.join(base, "work");
+    const storage = new FileStorageService(path.join(base, "uploads"), path.join(base, "exports"));
+    try {
+      await fs.mkdir(workDir);
+      await storage.saveUpload("original.pdf", Buffer.from("pdf-source"));
+      await storage.saveExport("score.musicxml", "<score-partwise/>");
+      const raw = "x".repeat(65510) + '\nWARN [customer] PartwiseBuilder | Error visiting FermataInter /private/customer/file.pdf\n'
+        + 'INFO MeasureRhythm | No timeOffset for HeadChordInter#123\nOCR: private title';
+      await fs.writeFile(path.join(workDir, "engine-native.log"), raw);
+      await storage.saveConversionEvidence("score.musicxml", { sourcePath: storage.resolveUploadPath("original.pdf"), workDir,
+        revision: "revision", metadata: {}, candidates: [] });
+      const manifest = await storage.readConversionEvidence("score.musicxml") as { artifacts: Array<{ filename: string; sha256: string; stage: string }> };
+      expect(manifest.artifacts).toHaveLength(1);
+      expect(manifest.artifacts[0].stage).toBe("native-engine-diagnostics-redacted");
+      const redacted = await fs.readFile(storage.resolveEvidenceAsset("score.musicxml", manifest.artifacts[0].filename), "utf8");
+      expect(redacted).toContain("score-to-musicxml:export-incomplete");
+      expect(redacted).toContain("score-to-musicxml:rhythm-unresolved");
+      expect(redacted).not.toMatch(/private|customer|file\.pdf|OCR|Inter/);
+      expect(manifest.artifacts[0].sha256).toBe(createHash("sha256").update(redacted).digest("hex"));
+      expect(await fs.readFile(path.join(workDir, "engine-native.log"), "utf8")).toBe(raw);
+    } finally { await fs.rm(base, { recursive: true, force: true }); }
+  });
+
   it("preserves identical preparation aliases as one engine run without exposing local paths", async () => {
     const base = await fs.mkdtemp(path.join(os.tmpdir(), "score-evidence-aliases-"));
     const workDir = path.join(base, "work");

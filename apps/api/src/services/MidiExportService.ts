@@ -3,11 +3,13 @@ import { createHash } from "node:crypto";
 import { applyDefaultTempo } from "../utils/musicXmlTempo.js";
 import { identifyMusicXmlNotesForMidi } from "../utils/musicXmlMidiIdentity.js";
 import {
+  canonicalizeVerovioMidiTiming,
   validateAndRepairSkippedTieDestinations,
   UnsupportedMidiEventValidationError,
   MidiEventMismatchError,
   type MidiValidation,
-  type MidiSourceEventCoverage
+  type MidiSourceEventCoverage,
+  type PerformedEvent
 } from "../utils/midiEventValidation.js";
 export type { MidiValidation } from "../utils/midiEventValidation.js";
 import {
@@ -29,12 +31,7 @@ interface MidiToolkit {
   loadData(data: string): boolean;
   renderToExpansionMap(): Record<string, string[]>;
   renderToMIDI(): string;
-  renderToTimemap(options?: Record<string, unknown>): Array<{
-    measureOn?: string;
-    qstamp?: number;
-    tempo?: number;
-    tstamp: number;
-  }>;
+  renderToTimemap(options?: Record<string, unknown>): Array<PerformedEvent & { tempo?: number; tstamp: number }>;
   setOptions(options: Record<string, unknown>): boolean;
 }
 
@@ -83,7 +80,7 @@ export class MidiExportService {
           code: error instanceof AppError ? error.code : "MIDI_GENERATION_FAILED",
           message: error instanceof AppError ? error.message : "Não foi possível verificar os eventos MIDI."
         }],
-        limitations: unsupported ? ["A navegação ou as vozes não permitem identificar com segurança a nota ligada."] : [],
+        limitations: unsupported ? ["A execução, a identidade das notas ou o tempo racional não puderam ser demonstrados sem ambiguidade."] : [],
         xmlSHA256
       };
     }
@@ -114,13 +111,33 @@ export class MidiExportService {
       }
 
       const mei = toolkit.getMEI();
-      const timemap = toolkit.renderToTimemap({ includeMeasures: true, includeRests: true });
+      const decimalTimemap = toolkit.renderToTimemap({ includeMeasures: true, includeRests: true });
+      const fractionalTimemap = toolkit.renderToTimemap({ includeMeasures: true, includeRests: true, useFractions: true });
+      const timemap = this.mergeFractionalTimemap(decimalTimemap, fractionalTimemap);
       const expansionMap = toolkit.renderToExpansionMap();
       const tempoTimeline = getPerformedTempoTimeline(mei, timemap, expansionMap);
       const synchronizedMidi = tempoTimeline.hasIntraMeasureTempo
         ? Buffer.from(rewriteMidiTempoEvents(midi, tempoTimeline.changes))
         : midi;
-      const validated = validateAndRepairSkippedTieDestinations(synchronizedMidi, identifiedXml, mei, timemap, expansionMap);
+      const canonical = canonicalizeVerovioMidiTiming(synchronizedMidi, identifiedXml, mei, timemap, expansionMap);
+      const validated = validateAndRepairSkippedTieDestinations(canonical.midi, identifiedXml, mei, timemap, expansionMap);
+      if (canonical.repairedAttacks) {
+        const rawMidiSHA256 = createHash("sha256").update(synchronizedMidi).digest("hex");
+        const canonicalMidiSHA256 = createHash("sha256").update(canonical.midi).digest("hex");
+        const affectedGroupIdsSHA256 = createHash("sha256")
+          .update(canonical.affectedGroupIds.slice().sort().join("\n"))
+          .digest("hex");
+        validated.issues.push({
+          code: "MIDI_FLOAT_TIMING_CANONICALIZED",
+          message: `${canonical.repairedAttacks} ataques e ${canonical.repairedOffsets} note-offs foram alinhados ao timemap racional; intervalos entre note-on/note-off, alturas e velocidades preservados.`,
+          repairedAttacks: String(canonical.repairedAttacks),
+          repairedOffsets: String(canonical.repairedOffsets),
+          rawMidiSHA256,
+          canonicalMidiSHA256,
+          affectedGroupIdsSHA256
+        });
+        validated.limitations.push("A correção de um tick em fronteiras racionais exatas foi registrada separadamente da conferência de alturas e inícios.");
+      }
 
       this.observability.recordSuccess("generation", this.now() - startedAt, validated.midi.byteLength);
       return validated;
@@ -135,7 +152,7 @@ export class MidiExportService {
         );
       }
       if (error instanceof UnsupportedMidiEventValidationError) {
-        throw new AppError(422, "Não foi possível verificar uma ligadura na navegação repetida desta partitura. Revise as casas de repetição e as vozes antes de exportar o MIDI.", "MIDI_EVENTS_UNVERIFIED");
+        throw new AppError(422, "Não foi possível verificar com segurança os inícios, as notas ou a navegação executada desta partitura. Revise o MusicXML antes de exportar o MIDI.", "MIDI_EVENTS_UNVERIFIED");
       }
       if (error instanceof MidiEventMismatchError) {
         throw new AppError(422, "As notas do MIDI divergem da execução desta partitura. Revise o MusicXML antes de exportar.", "MIDI_EVENT_MISMATCH");
@@ -149,6 +166,22 @@ export class MidiExportService {
   private decodeMidi(encodedMidi: string): Buffer {
     if (typeof encodedMidi !== "string" || !encodedMidi.trim()) return Buffer.alloc(0);
     return Buffer.from(encodedMidi.replaceAll(/\s/g, ""), "base64");
+  }
+
+  private mergeFractionalTimemap<T extends PerformedEvent & { tstamp: number; tempo?: number }>(decimal: T[], fractional: T[]): T[] {
+    if (!fractional.some((event) => event.qfrac)) return decimal;
+    if (decimal.length !== fractional.length || fractional.some((event) => !event.qfrac)) {
+      throw new UnsupportedMidiEventValidationError("O timemap racional não corresponde à sequência executada.");
+    }
+    const fields: Array<keyof PerformedEvent | "tstamp" | "tempo"> =
+      ["measureOn", "on", "off", "restsOn", "restsOff", "tstamp", "tempo"];
+    return decimal.map((event, index) => {
+      const rational = fractional[index] as T;
+      if (fields.some((field) => JSON.stringify(event[field]) !== JSON.stringify(rational[field]))) {
+        throw new UnsupportedMidiEventValidationError("Os timemaps decimal e racional divergem na identidade dos eventos.");
+      }
+      return { ...event, qfrac: rational.qfrac };
+    });
   }
 
   private hasValidHeader(midi: Buffer): boolean {
