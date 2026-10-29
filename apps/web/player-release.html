@@ -1,0 +1,8 @@
+<!doctype html>
+<html lang="pt-BR"><head><meta charset="UTF-8"/><meta name="viewport" content="width=device-width,initial-scale=1.0"/><meta name="theme-color" content="#f06432"/><title>Conversor de Partituras — Player</title></head><body><div id="root"></div><script type="module">
+import React from 'react';
+import { createRoot } from 'react-dom/client';
+import { NativePlayerPage } from './src/webview/NativePlayerPage';
+import './src/styles/global.css';
+createRoot(document.getElementById('root')).render(React.createElement(NativePlayerPage));
+</script></body></html>

@@ -1,0 +1,82 @@
+{
+  "movement": "III - Scherzo-Valse",
+  "status": "visual_source_review_complete_with_one_documented_editorial_emendation",
+  "source": {
+    "pdf": "/Users/reifison/Downloads/Bonis - Suite en forme de valses - 03 - Clarinets.pdf",
+    "pdf_pages": [5, 6],
+    "printed_pages": [6, 7],
+    "render_dpi": 300,
+    "method": "Read every source system and encode each written pitch, effective accidental, rest, onset and duration in a source ledger; separately transcribe ties, phrase slurs, beaming, staccato/accent markings, single-stroke tremolos, dynamics, rehearsal letters and final fermatas. Compare generated MusicXML events with this ledger."
+  },
+  "counts": {
+    "measures": 117,
+    "staves": 2,
+    "written_notes": 330,
+    "written_notes_staff_1": 171,
+    "written_notes_staff_2": 159,
+    "rest_events": 192,
+    "total_ledger_events": 522,
+    "tie_connections": 52,
+    "phrase_slurs": 72,
+    "single_stroke_tremolo_notes": 11,
+    "expected_sounding_attacks_after_ties_and_tremolos": 327
+  },
+  "system_review": [
+    {"pdf_page":5,"system":1,"measures":"1-13","written_notes_staff_1":4,"written_notes_staff_2":6,"concluida":true},
+    {"pdf_page":5,"system":2,"measures":"14-25","written_notes_staff_1":6,"written_notes_staff_2":9,"concluida":true},
+    {"pdf_page":5,"system":3,"measures":"26-36","written_notes_staff_1":11,"written_notes_staff_2":11,"concluida":true},
+    {"pdf_page":5,"system":4,"measures":"37-45","written_notes_staff_1":13,"written_notes_staff_2":13,"concluida":true},
+    {"pdf_page":5,"system":5,"measures":"46-53","written_notes_staff_1":32,"written_notes_staff_2":24,"concluida":true},
+    {"pdf_page":6,"system":1,"measures":"54-64","written_notes_staff_1":28,"written_notes_staff_2":0,"concluida":true},
+    {"pdf_page":6,"system":2,"measures":"65-79","written_notes_staff_1":20,"written_notes_staff_2":26,"concluida":true},
+    {"pdf_page":6,"system":3,"measures":"80-87","written_notes_staff_1":9,"written_notes_staff_2":28,"concluida":true},
+    {"pdf_page":6,"system":4,"measures":"88-97","written_notes_staff_1":21,"written_notes_staff_2":13,"concluida":true},
+    {"pdf_page":6,"system":5,"measures":"98-106","written_notes_staff_1":21,"written_notes_staff_2":19,"concluida":true},
+    {"pdf_page":6,"system":6,"measures":"107-117","written_notes_staff_1":6,"written_notes_staff_2":10,"concluida":true}
+  ],
+  "corrections": [
+    "Reconstructed from the source instead of retaining the baseline's 95 misnumbered measures; expanded the source multi-rests to 117 bars, consistent with the handwritten system-start measure numbers.",
+    "Restored the initial two bars of rest and all subsequent multi-rest durations for both clarinets.",
+    "Restored a full three-quarter measure in each staff/voice for every bar; retained explicit lower-staff tacet rests during the solo systems instead of hiding the second staff.",
+    "Re-read pitches and accidentals throughout, including the arpeggio in measure 47, solo material in measures 52-65, the two-clarinet eighth-note passage in measures 67-69 and the low G-sharp 3 in measure 85.",
+    "Encoded 11 single-stroke tremolos at measures 79-86, 87-88 and 92; removed the false OMR notes/durations derived from tremolo strokes.",
+    "Separated 52 same-pitch prolongation ties from 72 phrase slurs and paired every start/stop.",
+    "Restored the source beaming groups, articulations, rehearsal letters A-F, dynamics, solo/soli indications and final fermatas.",
+    "Declared B-flat transposition independently for both treble staves: diatonic -1, chromatic -2; preserved written pitches."
+  ],
+  "editorial_emendations": [
+    {
+      "measure": 45,
+      "staff": 2,
+      "event_index": 2,
+      "pitch": "B3",
+      "source": "Undotted quarter; the complete printed lower-staff bar is A3 eighth, B3 eighth, B3 quarter, C-sharp4 eighth, totalling 2.5 quarters.",
+      "edition": "Dotted quarter, totalling 3 quarters in the bar; no pitch or attack is added.",
+      "reason": "The upper staff has the corresponding dotted-quarter figure, and the source is consistently in 3/4. The missing dot was also checked independently by the parent agent in the enlarged source crop.",
+      "documentation": "MusicXML note footnote plus editorial level; source-ledger marks source and edited durations separately."
+    }
+  ],
+  "validation": {
+    "xml_well_formed": true,
+    "musicxml_internal_issues": 0,
+    "measures_checked": 117,
+    "voice_measures_checked": 117,
+    "measures_skipped": 0,
+    "ledger_events_matching_xml": 522,
+    "ledger_event_differences": 0,
+    "treble_staves_always_visible": true,
+    "transposition_staff_1": {"diatonic":-1,"chromatic":-2},
+    "transposition_staff_2": {"diatonic":-1,"chromatic":-2}
+  },
+  "limitations": [
+    "This is an assistant-led visual source transcription. The ledger comparison proves agreement with the encoded visual reading, not an independent human edition or an external critical source.",
+    "Measure 45 staff 2 contains the explicit editorial emendation described above; the PDF source itself remains unchanged.",
+    "The parent agent owns the MIDI generation and independent rendered-preview inspection."
+  ],
+  "deliverables": {
+    "musicxml": "/Users/reifison/Desktop/Apps/score-to-musicxml/output/bonis-clarinets-reviewed-2026-10-18/03-Scherzo-Valse.musicxml",
+    "source_ledger": "/Users/reifison/Desktop/Apps/score-to-musicxml/source-ledgers/bonis-clarinets-2026-10-18/movement-3/source-ledger.json",
+    "ledger_evaluation": "/Users/reifison/Desktop/Apps/score-to-musicxml/source-ledgers/bonis-clarinets-2026-10-18/movement-3/ledger-evaluation.json",
+    "reconstruction_script": "/Users/reifison/Desktop/Apps/score-to-musicxml/tmp/bonis-review/movement-3/reconstruct.cjs"
+  }
+}

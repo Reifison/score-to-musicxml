@@ -59,5 +59,17 @@ target 'ScoretoMusicXML' do
       :mac_catalyst_enabled => false,
       :ccache_enabled => ccache_enabled?(podfile_properties),
     )
+
+    # Resource bundles from dependencies must also support the installed SDK.
+    # Keep their minimum aligned with the app without raising the app target.
+    app_minimum_ios = podfile_properties['ios.deploymentTarget'] || '15.1'
+    installer.pods_project.targets.each do |pod_target|
+      pod_target.build_configurations.each do |configuration|
+        minimum = configuration.build_settings['IPHONEOS_DEPLOYMENT_TARGET']
+        if minimum && Gem::Version.new(minimum) < Gem::Version.new(app_minimum_ios)
+          configuration.build_settings['IPHONEOS_DEPLOYMENT_TARGET'] = app_minimum_ios
+        end
+      end
+    end
   end
 end

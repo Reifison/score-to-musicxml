@@ -1,0 +1,17 @@
+{
+  "expectedEvents": 655,
+  "actualEvents": 655,
+  "correct": 655,
+  "changed": 0,
+  "missing": 0,
+  "extra": 0,
+  "incorrect": 0,
+  "errorPercent": 0,
+  "accuracyPercent": 100,
+  "scoreOutOf10": 10,
+  "issues": [],
+  "scope": "Altura escrita, duração, início, voz, pauta e pausa. Navegação, articulação e transposição sonora são avaliadas separadamente.",
+  "sourceReferenceSha256": "4a7e34f058661a58d0e0c33c61e1e671e6278c647e1ac8871082b6a91154d433",
+  "candidateSha256": "02e13e6dcde126d34aeb83a338d4c9e1780c0f48cda361da99855a5f07b5ab4d",
+  "referenceType": "Revisão visual assistida; homologação editorial humana independente não registrada"
+}

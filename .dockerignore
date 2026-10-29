@@ -6,6 +6,12 @@ apps/mobile/ios
 apps/mobile/android
 apps/mobile/.expo
 storage
+tmp
+output
+.local
+source-ledgers
+docs
+:memory:.ses
 .env
 .env.*
 !.env.production.example

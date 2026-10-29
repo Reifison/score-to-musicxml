@@ -1,8 +1,8 @@
 import type { Instrument } from "./types";
 import type { SampleManifest } from "./SampleBank";
 
-/** Visible diagnostic marker for physical-device validation. */
-export const SAMPLE_BANK_RELEASE = "Timbres gravados · build 2026-08-23.1";
+/** Short user-facing label for the locally bundled sample banks. */
+export const SAMPLE_BANK_RELEASE = "Timbres locais";
 
 type SamplePoint = {
   fileStem: string;

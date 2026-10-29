@@ -36,6 +36,102 @@ describe("playerBridgeContract", () => {
     });
   });
 
+  it("aceita apenas a extensão opcional booleana que desativa reprodução", () => {
+    const envelope = {
+      channel: PLAYER_BRIDGE_CHANNEL,
+      version: PLAYER_BRIDGE_VERSION,
+      type: "score.load",
+      requestId: "partial-score",
+      payload: {
+        musicXml: "<score-partwise />",
+        scoreName: "Estudo parcial.musicxml",
+        allowPlayback: false
+      }
+    };
+
+    expect(parseHostToPlayerMessage(envelope)).toMatchObject({
+      ok: true,
+      message: { payload: { allowPlayback: false } }
+    });
+    expect(parseHostToPlayerMessage({
+      ...envelope,
+      payload: { ...envelope.payload, allowPlayback: "false" }
+    }).ok).toBe(false);
+    expect(parseHostToPlayerMessage({
+      ...envelope,
+      payload: { ...envelope.payload, token: "campo não permitido" }
+    }).ok).toBe(false);
+  });
+
+  it("aceita o idioma opcional na carga e troca de idioma sem recarregar a partitura", () => {
+    const load = {
+      channel: PLAYER_BRIDGE_CHANNEL,
+      version: PLAYER_BRIDGE_VERSION,
+      type: "score.load",
+      requestId: "load-en",
+      payload: { musicXml: "<score-partwise />", scoreName: "Study.musicxml", language: "en" }
+    };
+    expect(parseHostToPlayerMessage(load)).toMatchObject({
+      ok: true,
+      message: { payload: { language: "en" } }
+    });
+    expect(parseHostToPlayerMessage({
+      ...load,
+      payload: { ...load.payload, language: "es" }
+    }).ok).toBe(false);
+
+    expect(parseHostToPlayerMessage({
+      channel: PLAYER_BRIDGE_CHANNEL,
+      version: PLAYER_BRIDGE_VERSION,
+      type: "player.language",
+      requestId: "load-en",
+      payload: { language: "pt" }
+    })).toEqual({
+      ok: true,
+      message: {
+        channel: PLAYER_BRIDGE_CHANNEL,
+        version: PLAYER_BRIDGE_VERSION,
+        type: "player.language",
+        requestId: "load-en",
+        payload: { language: "pt" }
+      }
+    });
+    expect(parseHostToPlayerMessage({
+      channel: PLAYER_BRIDGE_CHANNEL,
+      version: PLAYER_BRIDGE_VERSION,
+      type: "player.language",
+      requestId: "load-en",
+      payload: { language: "es" }
+    }).ok).toBe(false);
+  });
+
+  it("aceita um snapshot de leitura somente na carga que foi negociada", () => {
+    const restoreSnapshot = {
+      playback: { state: "paused", positionMs: 2_400, durationMs: 9_000, tempo: 88 },
+      reading: { page: 2, scrollRatio: 0.35, anchorMeasureId: "measure-8", anchorViewportRatio: 0.15 }
+    };
+    const envelope = {
+      channel: PLAYER_BRIDGE_CHANNEL,
+      version: PLAYER_BRIDGE_VERSION,
+      type: "score.load",
+      requestId: "load-restore",
+      payload: { musicXml: "<score-partwise />", scoreName: "Estudo.musicxml", restoreSnapshot }
+    };
+
+    expect(parseHostToPlayerMessage(envelope)).toMatchObject({
+      ok: true,
+      message: { payload: { restoreSnapshot } }
+    });
+    expect(parseHostToPlayerMessage({
+      ...envelope,
+      payload: { ...envelope.payload, restoreSnapshot: { ...restoreSnapshot, token: "secret" } }
+    }).ok).toBe(false);
+    expect(parseHostToPlayerMessage({
+      ...envelope,
+      payload: { ...envelope.payload, restoreSnapshot: { ...restoreSnapshot, reading: { page: 2, scrollRatio: 4 } } }
+    }).ok).toBe(false);
+  });
+
   it.each([
     ["pause"],
     ["stop"],
@@ -144,4 +240,12 @@ describe("playerBridgeContract", () => {
     expect(isPlayerWebViewPath("/")).toBe(false);
     expect(isPlayerWebViewPath("/scores/mobile/player")).toBe(false);
   });
+  it("accepts bounded review locations and rejects injected or invalid targets", () => {
+    const envelope = { channel: PLAYER_BRIDGE_CHANNEL, version: PLAYER_BRIDGE_VERSION, type: "score.focus", requestId: "load-1" };
+    expect(parseHostToPlayerMessage({ ...envelope, payload: { target: { id: "review-1", page: 2, measure: "0" } } }).ok).toBe(true);
+    for (const target of [{ id: "review-1" }, { id: "review-1", page: -1 }, { id: "review-1", measure: "" }, { id: "review-1", page: 1, token: "unexpected" }]) {
+      expect(parseHostToPlayerMessage({ ...envelope, payload: { target } }).ok).toBe(false);
+    }
+  });
+
 });

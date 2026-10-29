@@ -1,7 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
 import { api } from "../api/client";
-
-const activeStatuses = new Set(["queued", "processing"]);
+import { shouldPollConversionScore } from "../score/conversionProgressPresentation";
 
 export function useScoreStatus(token: string | null | undefined, scoreId: string | null | undefined) {
   return useQuery({
@@ -9,8 +8,8 @@ export function useScoreStatus(token: string | null | undefined, scoreId: string
     queryFn: () => api.score(token!, scoreId!),
     enabled: Boolean(token && scoreId),
     refetchInterval: (query) => {
-      const status = query.state.data?.score.conversionStatus;
-      return status && activeStatuses.has(status) ? 3000 : false;
+      const score = query.state.data?.score;
+      return shouldPollConversionScore(score) || score?.reviewStatus === "needs_review" ? 3000 : false;
     }
   });
 }

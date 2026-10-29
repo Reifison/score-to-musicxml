@@ -13,6 +13,8 @@
 		4522B5363A2D1A7C183D7F75 /* ExpoModulesProvider.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6EBCA85D0FA642FD6E9AE046 /* ExpoModulesProvider.swift */; };
 		6F8C2BC33268E500174EEE06 /* libPods-ScoretoMusicXML.a in Frameworks */ = {isa = PBXBuildFile; fileRef = 1121AB31C05C021D737B0DE0 /* libPods-ScoretoMusicXML.a */; };
 		BB2F792D24A3F905000567C9 /* Expo.plist in Resources */ = {isa = PBXBuildFile; fileRef = BB2F792C24A3F905000567C9 /* Expo.plist */; };
+		AEE8B6F27B336F500969B32A /* InfoPlist.strings in Resources */ = {isa = PBXBuildFile; fileRef = A88B40E5838671671191D474 /* InfoPlist.strings */; };
+		015903374C61F3E4CB6C72CF /* InfoPlist.strings in Resources */ = {isa = PBXBuildFile; fileRef = D3A4AAA895ACBC6F93CA639E /* InfoPlist.strings */; };
 		F11748422D0307B40044C1D9 /* AppDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = F11748412D0307B40044C1D9 /* AppDelegate.swift */; };
 /* End PBXBuildFile section */
 
@@ -26,6 +28,8 @@
 		A02175772D71AA12DA866DE1 /* PrivacyInfo.xcprivacy */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.xml; name = PrivacyInfo.xcprivacy; path = ScoretoMusicXML/PrivacyInfo.xcprivacy; sourceTree = "<group>"; };
 		AA286B85B6C04FC6940260E9 /* SplashScreen.storyboard */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = file.storyboard; name = SplashScreen.storyboard; path = ScoretoMusicXML/SplashScreen.storyboard; sourceTree = "<group>"; };
 		BB2F792C24A3F905000567C9 /* Expo.plist */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = text.plist.xml; path = Expo.plist; sourceTree = "<group>"; };
+		A88B40E5838671671191D474 /* InfoPlist.strings */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = text.plist.strings; path = InfoPlist.strings; sourceTree = "<group>"; };
+		D3A4AAA895ACBC6F93CA639E /* InfoPlist.strings */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = text.plist.strings; path = InfoPlist.strings; sourceTree = "<group>"; };
 		EA777A131BA24B621727B424 /* Pods-ScoretoMusicXML.debug.xcconfig */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.xcconfig; name = "Pods-ScoretoMusicXML.debug.xcconfig"; path = "Target Support Files/Pods-ScoretoMusicXML/Pods-ScoretoMusicXML.debug.xcconfig"; sourceTree = "<group>"; };
 		ED297162215061F000B7C4FE /* JavaScriptCore.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = JavaScriptCore.framework; path = System/Library/Frameworks/JavaScriptCore.framework; sourceTree = SDKROOT; };
 		F11748412D0307B40044C1D9 /* AppDelegate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = AppDelegate.swift; path = ScoretoMusicXML/AppDelegate.swift; sourceTree = "<group>"; };
@@ -118,9 +122,29 @@
 			isa = PBXGroup;
 			children = (
 				BB2F792C24A3F905000567C9 /* Expo.plist */,
+				16DBF40AF7BCD2B48F1E53D2 /* en.lproj */,
+				CD265A4ECFA225C61F6EA7F9 /* pt-BR.lproj */,
 			);
 			name = Supporting;
 			path = ScoretoMusicXML/Supporting;
+			sourceTree = "<group>";
+		};
+		16DBF40AF7BCD2B48F1E53D2 /* en.lproj */ = {
+			isa = PBXGroup;
+			children = (
+				A88B40E5838671671191D474 /* InfoPlist.strings */,
+			);
+			name = en.lproj;
+			path = en.lproj;
+			sourceTree = "<group>";
+		};
+		CD265A4ECFA225C61F6EA7F9 /* pt-BR.lproj */ = {
+			isa = PBXGroup;
+			children = (
+				D3A4AAA895ACBC6F93CA639E /* InfoPlist.strings */,
+			);
+			name = pt-BR.lproj;
+			path = pt-BR.lproj;
 			sourceTree = "<group>";
 		};
 		E1A395907535755675C0ED31 /* ExpoModulesProviders */ = {
@@ -175,6 +199,7 @@
 			hasScannedForEncodings = 0;
 			knownRegions = (
 				en,
+				pt-BR,
 				Base,
 			);
 			mainGroup = 83CBB9F61A601CBA00E9B192;
@@ -193,6 +218,8 @@
 			buildActionMask = 2147483647;
 			files = (
 				BB2F792D24A3F905000567C9 /* Expo.plist in Resources */,
+				AEE8B6F27B336F500969B32A /* InfoPlist.strings in Resources */,
+				015903374C61F3E4CB6C72CF /* InfoPlist.strings in Resources */,
 				13B07FBF1A68108700A75B9A /* Images.xcassets in Resources */,
 				3E461D99554A48A4959DE609 /* SplashScreen.storyboard in Resources */,
 				3FF9523F23BA6E13AF88475E /* PrivacyInfo.xcprivacy in Resources */,
@@ -341,7 +368,7 @@
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CLANG_ENABLE_MODULES = YES;
 				CODE_SIGN_ENTITLEMENTS = ScoretoMusicXML/ScoretoMusicXML.entitlements;
-				CURRENT_PROJECT_VERSION = 1;
+				CURRENT_PROJECT_VERSION = 16;
 				DEVELOPMENT_TEAM = A3KB88Q9FH;
 				ENABLE_BITCODE = NO;
 				GCC_PREPROCESSOR_DEFINITIONS = (
@@ -378,7 +405,7 @@
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CLANG_ENABLE_MODULES = YES;
 				CODE_SIGN_ENTITLEMENTS = ScoretoMusicXML/ScoretoMusicXML.entitlements;
-				CURRENT_PROJECT_VERSION = 1;
+				CURRENT_PROJECT_VERSION = 16;
 				DEVELOPMENT_TEAM = A3KB88Q9FH;
 				INFOPLIST_FILE = ScoretoMusicXML/Info.plist;
 				IPHONEOS_DEPLOYMENT_TARGET = 15.1;

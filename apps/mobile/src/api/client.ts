@@ -1,10 +1,17 @@
+import { getLocale } from "../i18n";
+import { localizeMessage } from "../score/localizedMessages";
 import { Directory, File, Paths } from "expo-file-system";
 import { resolveApiUrl } from "./config";
 import { createMidiDownloadPlan, runMidiDownload } from "../files/midiExport";
 import { validatePlayerMusicXml, validatePlayerMusicXmlSize } from "../player/bridge";
 import { createPlayerMusicXmlDownloadPlan } from "../player/musicXmlDownload";
+import { clearPlayerSessionSnapshotsForScore, clearPlayerSessionSnapshotsForScores } from "../player/sessionSnapshot";
 import { googlePurchaseRequest, type GooglePurchaseRegistration } from "./purchases";
-import type { AuditLog, Entitlement, PublicUser, Score } from "./types";
+import { scoreRetryRequest } from "./scoreRetry";
+import { scoreReviewRequest } from "./scoreReview";
+import { sourceEvidenceImageSource, visualReviewDecisionRequest, type VisualReviewDecision } from "./sourceVisualReview";
+import { appendScoreUploadFields, type MobileUploadFile } from "./scoreUpload";
+import type { AuditLog, Entitlement, PublicUser, Score, ScoreType, ScoreVersion } from "./types";
 
 export const API_URL = resolveApiUrl(
   process.env.EXPO_PUBLIC_API_URL,
@@ -27,6 +34,8 @@ export class ApiError extends Error {
     public code?: string
   ) {
     super(message);
+    // Resolve at display time, so cached errors follow a settings language change.
+    Object.defineProperty(this, "message", { configurable: true, get: () => localizeMessage(message, this.code) });
   }
 }
 
@@ -47,13 +56,17 @@ async function parseResponse<T>(response: Response): Promise<T> {
 export async function apiRequest<T>(path: string, options: RequestInit = {}, token?: string): Promise<T> {
   const headers = new Headers(options.headers);
   headers.set("Accept", "application/json");
+  headers.set("Accept-Language", getLocale());
   if (!(options.body instanceof FormData)) headers.set("Content-Type", "application/json");
   if (token) headers.set("Authorization", `Bearer ${token}`);
 
-  const response = await fetch(`${API_URL}${path}`, {
-    ...options,
-    headers
-  });
+  let response: Response;
+  try {
+    response = await fetch(`${API_URL}${path}`, { ...options, headers });
+  } catch (error) {
+    if (error instanceof Error && error.name === "AbortError") throw error;
+    throw new ApiError("Network request failed", 0, "NETWORK_ERROR");
+  }
   return parseResponse<T>(response);
 }
 
@@ -86,8 +99,40 @@ export const api = {
     return apiRequest<{ entitlement: Entitlement }>("/api/me/entitlement", {}, token);
   },
 
+  async purchaseBinding(token: string) {
+    return apiRequest<{ binding: { googleObfuscatedAccountId: string; appleAppAccountToken: string } }>("/api/me/purchase-binding", {}, token);
+  },
+
   async scores(token: string) {
     return apiRequest<{ scores: Score[] }>("/api/scores", {}, token);
+  },
+
+  async firstPagePreview(token: string, scoreId: string, revision: string, signal?: AbortSignal) {
+    const path = `/api/scores/${encodeURIComponent(scoreId)}/first-page-preview?revision=${encodeURIComponent(revision)}`;
+    const headers = new Headers({
+      Accept: "application/vnd.recordare.musicxml+xml",
+      "Accept-Language": getLocale(),
+      Authorization: `Bearer ${token}`
+    });
+    let response: Response;
+    try {
+      response = await fetch(`${API_URL}${path}`, { headers, signal });
+    } catch (error) {
+      if (signal?.aborted) throw createAbortError();
+      if (error instanceof Error && error.name === "AbortError") throw error;
+      throw new ApiError("Network request failed", 0, "NETWORK_ERROR");
+    }
+    if (!response.ok) {
+      const rawBody = await response.text().catch(() => "");
+      let body: ApiErrorBody = {};
+      try {
+        body = (rawBody ? JSON.parse(rawBody) : {}) as ApiErrorBody;
+      } catch {
+        // Keep the response status so callers can handle a preview that expired.
+      }
+      throw new ApiError(body.error || "Falha ao carregar a prévia.", response.status, body.code);
+    }
+    return response.text();
   },
 
   async users(token: string) {
@@ -98,8 +143,62 @@ export const api = {
     return apiRequest<{ audits: AuditLog[] }>("/api/admin/audits", {}, token);
   },
 
-  async score(token: string, id: string) {
-    return apiRequest<{ score: Score }>(`/api/scores/${id}`, {}, token);
+  async score(token: string, id: string, signal?: AbortSignal) {
+    return apiRequest<{ score: Score }>(`/api/scores/${id}`, { signal }, token);
+  },
+
+  async scoreVersions(token: string, id: string, signal?: AbortSignal) {
+    return apiRequest<{ versions: ScoreVersion[] }>(`/api/scores/${encodeURIComponent(id)}/versions`, { signal }, token);
+  },
+
+  async scoreVersionMusicXml(token: string, id: string, versionId: string, signal?: AbortSignal) {
+    const path = `/api/scores/${encodeURIComponent(id)}/versions/${encodeURIComponent(versionId)}/musicxml`;
+    const headers = new Headers({
+      Accept: "application/vnd.recordare.musicxml+xml",
+      "Accept-Language": getLocale(),
+      Authorization: `Bearer ${token}`
+    });
+    let response: Response;
+    try {
+      response = await fetch(`${API_URL}${path}`, { headers, signal });
+    } catch (error) {
+      if (signal?.aborted) throw createAbortError();
+      if (error instanceof Error && error.name === "AbortError") throw error;
+      throw new ApiError("Network request failed", 0, "NETWORK_ERROR");
+    }
+    if (!response.ok) {
+      const rawBody = await response.text().catch(() => "");
+      let body: ApiErrorBody = {};
+      try {
+        body = (rawBody ? JSON.parse(rawBody) : {}) as ApiErrorBody;
+      } catch {
+        // Keep the status so callers can treat an expired version as unavailable.
+      }
+      throw new ApiError(body.error || "Falha ao carregar esta versão.", response.status, body.code);
+    }
+    return response.text();
+  },
+
+  async downloadScoreVersionMusicXml(token: string, scoreId: string, versionId: string, filename: string, signal?: AbortSignal) {
+    const musicXml = await api.scoreVersionMusicXml(token, scoreId, versionId, signal);
+    if (signal?.aborted) throw createAbortError();
+    const target = new File(Paths.cache, musicXmlName(filename));
+    target.write(musicXml);
+    return target;
+  },
+
+  async approveScoreReview(token: string, id: string, revision: string) {
+    const request = scoreReviewRequest(id, revision);
+    return apiRequest<{ score: Score }>(request.path, request, token);
+  },
+
+  async decideVisualReviewProposal(token: string, id: string, revision: string, proposalId: string, decision: VisualReviewDecision, signal?: AbortSignal) {
+    const request = visualReviewDecisionRequest(id, revision, proposalId, decision);
+    return apiRequest<{ score: Score }>(request.path, { ...request, signal }, token);
+  },
+
+  sourceEvidenceImageSource(token: string, id: string, assetName: string) {
+    return sourceEvidenceImageSource(API_URL, token, id, assetName);
   },
 
   async renameScore(token: string, id: string, originalFilename: string) {
@@ -117,15 +216,22 @@ export const api = {
   },
 
   /** Move a score to the seven-day trash instead of deleting its file immediately. */
-  async deleteScore(token: string, id: string) {
-    return apiRequest<void>(`/api/scores/${id}`, { method: "DELETE" }, token);
+  async deleteScore(token: string, id: string, userId?: string) {
+    const result = await apiRequest<void>(`/api/scores/${id}`, { method: "DELETE" }, token);
+    await clearPlayerSessionSnapshotsForScore(id, userId).catch(() => undefined);
+    return result;
   },
 
-  async bulkScores(token: string, ids: string[], action: "delete" | "favorite", isFavorite?: boolean) {
-    return apiRequest<{ deletedCount?: number; updatedCount?: number; purgeAt?: string }>("/api/scores/bulk", {
+  async bulkScores(token: string, ids: string[], action: "delete" | "favorite", isFavorite?: boolean, userId?: string) {
+    const scoreIds = [...ids];
+    const result = await apiRequest<{ deletedCount?: number; updatedCount?: number; purgeAt?: string }>("/api/scores/bulk", {
       method: "POST",
-      body: JSON.stringify({ ids, action, ...(action === "favorite" ? { isFavorite: Boolean(isFavorite) } : {}) })
+      body: JSON.stringify({ ids: scoreIds, action, ...(action === "favorite" ? { isFavorite: Boolean(isFavorite) } : {}) })
     }, token);
+    if (action === "delete") {
+      await clearPlayerSessionSnapshotsForScores(scoreIds, userId).catch(() => undefined);
+    }
+    return result;
   },
 
   /** List scores currently in the user's trash. */
@@ -138,10 +244,18 @@ export const api = {
     return apiRequest<{ score: Score }>(`/api/scores/${id}/restore`, { method: "POST" }, token);
   },
 
-  async upload(token: string, file: { uri: string; name: string; type: string }) {
+  async upload(token: string, file: MobileUploadFile, scoreType: ScoreType) {
     const body = new FormData();
-    body.append("file", file as unknown as Blob);
+    appendScoreUploadFields(body, file, scoreType);
     return apiRequest<{ score: Score }>("/api/scores", { method: "POST", body }, token);
+  },
+
+  async retryScore(token: string, id: string, scoreType?: ScoreType) {
+    const request = scoreRetryRequest(id, scoreType);
+    return apiRequest<{ score: Score }>(request.path, {
+      method: request.method,
+      ...(request.body ? { body: request.body } : {})
+    }, token);
   },
 
   async updatePassword(token: string, password: string) {
@@ -177,8 +291,8 @@ export const api = {
     });
   },
 
-  async loadMusicXmlForPlayer(token: string, score: Score) {
-    const plan = createPlayerMusicXmlDownloadPlan(API_URL, token, score);
+  async loadMusicXmlForPlayer(token: string, score: Pick<Score, "id" | "userId">, preview = true) {
+    const plan = createPlayerMusicXmlDownloadPlan(API_URL, token, score, preview);
     const directory = new Directory(Paths.cache, ...plan.directorySegments);
     directory.create({ idempotent: true, intermediates: true });
     const target = new File(directory, plan.filename);
@@ -234,6 +348,12 @@ export const api = {
     });
   }
 };
+
+function createAbortError() {
+  const error = new Error("The operation was aborted.");
+  error.name = "AbortError";
+  return error;
+}
 
 function musicXmlName(name: string): string {
   const base = name.replace(/\.[^.]+$/, "").replace(/[^a-zA-Z0-9._ -]/g, "_").trim() || "score";

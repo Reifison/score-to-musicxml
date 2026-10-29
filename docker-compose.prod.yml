@@ -41,6 +41,13 @@ services:
       - storage_data:/app/storage
     expose:
       - "4000"
+    healthcheck:
+      # Liveness only: readiness also needs the worker, which starts after API.
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:4000/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 30s
 
   worker:
     build:
@@ -79,8 +86,7 @@ services:
       - "80:80"
       - "443:443"
     environment:
-      API_DOMAIN: ${API_DOMAIN:?API_DOMAIN is required}
-      WEB_DOMAIN: ${WEB_DOMAIN:?WEB_DOMAIN is required}
+      PUBLIC_DOMAINS: ${PUBLIC_DOMAINS:?Run scripts/deploy-prod.sh to resolve public domains}
     volumes:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
       - caddy_data:/data

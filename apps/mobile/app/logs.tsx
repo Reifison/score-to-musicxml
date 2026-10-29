@@ -1,14 +1,18 @@
 import { Ionicons } from "@expo/vector-icons";
 import { useQuery } from "@tanstack/react-query";
 import { Redirect } from "expo-router";
-import { ActivityIndicator, FlatList, RefreshControl, StyleSheet, Text, View } from "react-native";
+import { ActivityIndicator, FlatList, RefreshControl, StyleSheet, View } from "react-native";
+import { AdaptiveText as Text } from "../src/adaptive/AdaptiveTypography";
 import { api } from "../src/api/client";
 import type { AuditLog, PublicUser } from "../src/api/types";
 import { useAuth } from "../src/auth/AuthProvider";
-import { BottomNav, bottomNavHeight } from "../src/components/BottomNav";
+import { AdaptiveScreen } from "../src/components/AdaptiveScreen";
+import { getLocale, useTranslation } from "../src/i18n";
+import { auditActionLabel, auditEntityLabel } from "../src/score/auditPresentation";
 import { colors, sharedStyles } from "../src/theme/styles";
 
 export default function LogsScreen() {
+  const { t } = useTranslation();
   const { token, user } = useAuth();
   const isAdmin = user?.role === "admin";
 
@@ -28,14 +32,12 @@ export default function LogsScreen() {
 
   if (!isAdmin) {
     return (
-      <View style={sharedStyles.screen}>
+      <AdaptiveScreen title={t("Logs", "Logs")}>
         <View style={[sharedStyles.content, styles.center]}>
           <Ionicons color={colors.faint} name="lock-closed-outline" size={38} />
-          <Text style={sharedStyles.title}>Logs</Text>
-          <Text style={sharedStyles.subtitle}>Esta area esta disponivel apenas para administradores.</Text>
+          <Text style={sharedStyles.subtitle}>{t("Esta área está disponível apenas para administradores.", "This area is available to administrators only.")}</Text>
         </View>
-        <BottomNav />
-      </View>
+      </AdaptiveScreen>
     );
   }
 
@@ -46,29 +48,28 @@ export default function LogsScreen() {
   }
 
   return (
-    <View style={sharedStyles.screen}>
+    <AdaptiveScreen title={t("Logs", "Logs")}>
       <FlatList
         contentContainerStyle={styles.content}
         data={auditsQuery.data?.audits ?? []}
         keyExtractor={(item) => item.id}
         ListHeaderComponent={
           <View style={styles.header}>
-            <Text style={sharedStyles.title}>Logs</Text>
-            <Text style={sharedStyles.subtitle}>Eventos administrativos e operacionais do sistema.</Text>
+            <Text style={sharedStyles.subtitle}>{t("Eventos administrativos e operacionais do sistema.", "Administrative and operational system events.")}</Text>
           </View>
         }
         ListEmptyComponent={
-          auditsQuery.isLoading ? <ActivityIndicator color={colors.primary} /> : <Text style={sharedStyles.subtitle}>Nenhum log encontrado.</Text>
+          auditsQuery.isLoading ? <ActivityIndicator color={colors.primary} /> : <Text style={sharedStyles.subtitle}>{t("Nenhum log encontrado.", "No logs found.")}</Text>
         }
         refreshControl={<RefreshControl onRefresh={refresh} refreshing={auditsQuery.isFetching || usersQuery.isFetching} />}
         renderItem={({ item }) => <AuditRow audit={item} actor={item.actorId ? usersById.get(item.actorId) : undefined} />}
       />
-      <BottomNav />
-    </View>
+    </AdaptiveScreen>
   );
 }
 
 function AuditRow({ actor, audit }: { actor?: PublicUser; audit: AuditLog }) {
+  const { t } = useTranslation();
   return (
     <View style={sharedStyles.panel}>
       <View style={styles.rowTop}>
@@ -76,13 +77,13 @@ function AuditRow({ actor, audit }: { actor?: PublicUser; audit: AuditLog }) {
           <Ionicons color={colors.primaryDark} name="shield-checkmark-outline" size={18} />
         </View>
         <View style={{ flex: 1, gap: 4 }}>
-          <Text numberOfLines={1} style={styles.action}>{audit.action}</Text>
-          <Text numberOfLines={1} style={sharedStyles.subtitle}>{actor ? `${actor.name} · ${actor.email}` : "Usuario nao identificado"}</Text>
+          <Text style={styles.action}>{auditActionLabel(audit.action)}</Text>
+          <Text style={sharedStyles.subtitle}>{actor ? `${actor.name} · ${actor.email}` : t("Usuário não identificado", "Unknown user")}</Text>
         </View>
       </View>
       <View style={styles.metaRow}>
-        <Text style={styles.meta}>Entidade: {audit.entity ?? "-"}</Text>
-        <Text style={styles.meta}>Data: {new Date(audit.createdAt).toLocaleString()}</Text>
+        <Text style={styles.meta}>{t("Entidade", "Entity")}: {auditEntityLabel(audit.entity)}</Text>
+        <Text style={styles.meta}>{t("Data", "Date")}: {new Date(audit.createdAt).toLocaleString(getLocale())}</Text>
       </View>
     </View>
   );
@@ -97,12 +98,12 @@ const styles = StyleSheet.create({
   center: {
     alignItems: "center",
     justifyContent: "center",
-    paddingBottom: bottomNavHeight + 24
+    paddingBottom: 24
   },
   content: {
     gap: 14,
     padding: 20,
-    paddingBottom: bottomNavHeight + 24
+    paddingBottom: 24
   },
   header: {
     gap: 6
@@ -123,8 +124,9 @@ const styles = StyleSheet.create({
     gap: 5
   },
   rowTop: {
-    alignItems: "center",
+    alignItems: "flex-start",
     flexDirection: "row",
+    flexWrap: "wrap",
     gap: 12
   }
 });

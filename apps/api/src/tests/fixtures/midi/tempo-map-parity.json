@@ -1,0 +1,19 @@
+{
+  "mei": "<mei><scoreDef><meterSig count=\"2\" unit=\"4\"/></scoreDef><measure xml:id=\"m1\" n=\"1\"><tempo tstamp=\"1\" midi.bpm=\"80\"/><tempo tstamp=\"2\" midi.bpm=\"120\"/></measure><measure xml:id=\"m2\" n=\"2\"/></mei>",
+  "timemap": [
+    { "measureOn": "m1", "qstamp": 0, "tstamp": 0 },
+    { "measureOn": "m1-rend2", "qstamp": 4, "tstamp": 2000 },
+    { "measureOn": "m2", "qstamp": 8, "tstamp": 4000 }
+  ],
+  "expansionMap": {
+    "m1": ["m1", "m1-rend2"],
+    "m1-rend2": ["m1", "m1-rend2"],
+    "m2": ["m2"]
+  },
+  "expectedChanges": [
+    { "quarter": 0, "bpm": 80 },
+    { "quarter": 1, "bpm": 120 },
+    { "quarter": 4, "bpm": 80 },
+    { "quarter": 5, "bpm": 120 }
+  ]
+}

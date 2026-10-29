@@ -17,6 +17,18 @@ storage/exports/*
 *.tsbuildinfo
 .DS_Store
 dump.rdb
+tmp/
+
+# Private results generated from user-supplied scores; portable regression
+# fixtures belong in the test fixture directories instead.
+/output/
+/docs/validation/*
+!/docs/validation/RELEASE_GATES_2026-10-06.md
+!/docs/validation/DRIVE_SCORE_SELECTION.md
+/docs/app-store/status-*.json
+/:memory:.ses
+/source-ledgers/tourdion-sol-b.json
+/source-ledgers/tourdion-sol-b.md
 
 # Mobile/iOS generated artifacts
 apps/mobile/.expo/
@@ -33,3 +45,7 @@ apps/mobile/android/.cxx/
 apps/mobile/android/local.properties
 apps/mobile/android/*.iml
 apps/mobile/android/captures/
+
+# Private local visual reader environment and model weights.
+/.local/source-visual-homr/
+/.local/audiveris-*/

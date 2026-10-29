@@ -1,0 +1,32 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import fs from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
+import {createHash} from 'node:crypto';
+import {execFile} from 'node:child_process';
+import {promisify} from 'node:util';
+const execute=promisify(execFile),digest=x=>createHash('sha256').update(x).digest('hex');
+const script=path.resolve('scripts/corpus-report.mjs');
+
+test('report keeps attempts separate from sources, rejects mismatched previews and preserves textual failure codes',async t=>{
+ const dir=await fs.mkdtemp(path.join(os.tmpdir(),'corpus-report-'));t.after(()=>fs.rm(dir,{recursive:true,force:true}));
+ const report=path.join(dir,'report'),output=path.join(dir,'output'),catalog=path.join(report,'catalog');await fs.mkdir(catalog,{recursive:true});await fs.mkdir(output);
+ const save=async(p,d)=>{await fs.mkdir(path.dirname(p),{recursive:true});await fs.writeFile(p,JSON.stringify(d));};
+ const sourceSha='a'.repeat(64),nativeSha='b'.repeat(64),xml=path.join(output,'preview.musicxml');await fs.writeFile(xml,'<score-partwise/>');
+ await save(path.join(catalog,'inventory.json'),{summary:{file_count:2,physical_pdf_count:1,physical_pdf_pages_readable:2,musical_candidate_pdf_count:1,musical_candidate_pdf_pages:2,source_root:'/example'},files:[{path:'A.pdf',extension:'.pdf',sha256:sourceSha,pages:2}]});
+ await save(path.join(catalog,'pages.json'),{pages:[]});await save(path.join(catalog,'assisted_review.json'),{pages:[]});
+ await save(path.join(output,sourceSha.slice(0,16),'result.json'),{sourceSHA256:sourceSha,finishedAt:'2026-01-01',status:'raw_exports_present',exports:[{path:xml,sha256:'c'.repeat(64)}],issues:[{code:'OMR_PROCESS_FAILED',category:'operation',verified:true,exitCode:1}]});
+ const native={process:'native_score_export',source:'B.mscz',sourceSHA256:nativeSha,finishedAt:'2026-01-01',issues:[{code:1}],exports:[],status:'no_candidate'};
+ await save(path.join(output,'native-exports',nativeSha.slice(0,16),'attempt-0001/result.json'),native);
+ await save(path.join(output,'native-exports',nativeSha.slice(0,16),'attempt-0002/result.json'),{...native,issues:[],exports:[{path:xml,sha256:digest('<score-partwise/>')}],status:'raw_partial_candidate_needs_review',operationalOutcome:'engine_failed'});
+ await execute(process.execPath,[script,'--report',report,'--output',output]);const result=JSON.parse(await fs.readFile(path.join(report,'results.json'),'utf8'));
+ assert.equal(result.cases[0].rawExportCount,1);assert.equal(result.cases[0].rawVerifiedExportCount,0);assert.equal(result.cases[0].anyCandidatePresent,false);
+ assert.equal(result.summary.outputIntegrityFailures.length,1);assert.equal(result.summary.nativeAttemptCount,2);assert.equal(result.summary.nativeInputCasesFinished,1);assert.equal(result.summary.nativeUniqueSourcesWithCandidate,1);
+ assert.equal(result.summary.nativeSuccessfulOperationSources,0);assert.equal(result.summary.nativePartialOperationSources,1);
+ const failure=result.issues.find(i=>i.phase==='native_score_export'&&i.legacyNumericCode===1);assert.equal(failure.code,'NATIVE_EXPORT_PROCESS_FAILED');assert.equal(failure.exitCode,1);
+ assert.equal(failure.sourceConfirmed,false);assert.equal(failure.operationConfirmed,true);
+ const rawFailure=result.issues.find(i=>i.phase==='native_pdf_whole'&&i.code==='OMR_PROCESS_FAILED');assert.equal(rawFailure.sourceConfirmed,false);assert.equal(rawFailure.operationConfirmed,true);
+ assert.equal(result.summary.sourceAssistedCasesMeasured,0);assert.equal(result.summary.sourceAssistedWrittenEvents,0);assert.equal(result.summary.confirmedIncorrectEventsInMeasuredOriginals,0);
+ const md=await fs.readFile(path.join(report,'BATCH_RESULTS.md'),'utf8');assert.match(md,/1 divergências/);assert.doesNotMatch(md,/todos os hashes.*referenciados/);
+});

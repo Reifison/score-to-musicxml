@@ -1,0 +1,110 @@
+{
+  "schemaVersion": 1,
+  "fixturePurpose": "Regression evidence for selected source-ledger event cases. No PDF is read at test time.",
+  "scope": "Only the listed written-pitch, onset, duration, and rest events are compared. These excerpts do not certify full-source transcription, playback, delivery approval, human gold, or training eligibility.",
+  "sourceLedgers": {
+    "laudemusRoot": {
+      "path": "docs/validation/acervo-review-2026-10-07/source-ledgers/laudemus-root-normalized-v2.json",
+      "sha256": "0b9dbe2e21d9c35890d3a37a27bbc6d54e90c08f50a845894ffb9a03eb87dd69"
+    },
+    "laudemusSol": {
+      "path": "docs/validation/acervo-review-2026-10-07/source-ledgers/laudemus-sol-normalized-v1.json",
+      "sha256": "e4cd128c27141314337e5bd25b2af7ec315d41b17a8e08cea647b361a5801de9"
+    },
+    "folcloreSolV2": {
+      "path": "docs/validation/acervo-review-2026-10-07/source-ledgers/folclore-sol-v2.json",
+      "sha256": "6dcfd376ed3ea521c541467d0e38554be2b6b3cc01a1e6259edd0e5ea27685de"
+    },
+    "folcloreSolIndependent": {
+      "path": "docs/validation/acervo-review-2026-10-07/source-ledgers/folclore-sol-independent.json",
+      "sha256": "a1c45b0281c732585bfa16b8e8e40545a93aa147e47f1a20d020e530be8eb89d"
+    }
+  },
+  "candidateOrigins": {
+    "laudemusOriginal": {
+      "path": "output/omr/corpus-partituras-2026-10-07/15e4e9f1817299f1/attempts/attempt-0001/preview-01.musicxml",
+      "sha256": "20b887c7a3932d539e4b11b70c710fd28b1ee2ac6600a578790c69cf951e50c3"
+    },
+    "laudemusBroadV3": {
+      "path": "output/omr/acervo-review-2026-10-07/laudemus/v3/laudemus-broad.musicxml",
+      "sha256": "1ab5aebb43e4c7fdffb178e226d44e9668d0591ce0b22f097419bc6866843119"
+    },
+    "laudemusSplendensV3": {
+      "path": "output/omr/acervo-review-2026-10-07/laudemus/v3/splendens.musicxml",
+      "sha256": "afa77d9913a988fdc03cca158003ab41d279085e3a78ed4abaed15fc5b48f44b"
+    },
+    "cravoOriginal": {
+      "path": "output/omr/corpus-partituras-2026-10-07/5ccd749a6a5cc93a/attempts/attempt-0001/preview-01.musicxml",
+      "sha256": "9a5cb91ece224a40f7fb1082c6bbafffd08f095f62255ffeb0e217f992c3ebc6"
+    },
+    "cravoV2": {
+      "path": "output/omr/acervo-review-2026-10-07/folclore/v2/cravo.musicxml",
+      "sha256": "991bda7ab3eed99863e170797d7f895b602b58a167f7d3bbe8c2eee72bb7e97d"
+    },
+    "atireiOriginal": {
+      "path": "output/omr/corpus-partituras-2026-10-07/5ccd749a6a5cc93a/attempts/attempt-0001/preview-02.musicxml",
+      "sha256": "0b91fb9bda7d2c0536efb1cb0929b550409175f7f4e1ef9aa42b8688dba624f4"
+    },
+    "atireiV1": {
+      "path": "output/omr/acervo-review-2026-10-07/folclore/v1/atirei.musicxml",
+      "sha256": "89c6cead6c03e75e2dbef341f30a5286fa03950fcd8e345109e5f119bb207b24"
+    }
+  },
+  "excerpts": {
+    "laudemus-original-affected.xml": "8a825c65a3ef56fcb661e8e4f5b9fb510bab22122107e1d0375af6be704b4406",
+    "laudemus-broad-v3-measure-3.xml": "fa684cd9ed1939161eb2809852c51a695bd08648e5aa5cae9b6b5081ed1d2997",
+    "laudemus-splendens-v3-measures-2-3.xml": "f98e88833edadc3a07ced2abd19e11b02166125b9cab3b9e2669591401253cc7",
+    "cravo-original-single-multirest.xml": "8a6674828112e468628cb83b26f80304cc45b3df53909b16943215e3feafb19a",
+    "cravo-v2-seven-rest-measures.xml": "92d9603aac2cc55d3745af6e1d615c835f5b765d9bdcbb00a3fa31c3468bdcb1",
+    "atirei-original-measure-16.xml": "8b9868496253dcd4db64a69388a0374743ba01926d00c2f6bcc53c43b3760f6d",
+    "atirei-v1-measure-16.xml": "892df495b0ecd6550e1d8e047be26d97331c2a0f28fc2d54d12e9207024af88a",
+    "atirei-v1-provisional-f4-measures.xml": "75fce85d99d87d7cf7af343af304d6201b54ada97d3242ddccd6f53ecc3e93c1"
+  },
+  "extraction": {
+    "laudemus": "Exact measure bodies from the combined original MusicXML are retained for measures 6, 8, and 9. Corrected V3 snippets retain broad local measure 3 and splendens local measures 2–3; tests align them to their source-ledger piece/local measure, with no global note numbering.",
+    "cravo": "The old XML physical measure 10 has printed number 9 duplicated elsewhere and carries multiple-rest=1. The excerpt is aligned by physical index to logical/source measure 10. The corrected V2 excerpt contains logical measures 10–16 and multiple-rest=7; each logical bar remains an event row.",
+    "atirei": "Only measure 16 is compared for the missing-rest regression. Measures 8 and 20 preserve the five candidate F4 events alongside the V2 source ledger uncertainty; the tentative natural reading is not promoted to confirmed by XML coincidence."
+  },
+  "caseMappings": {
+    "laudemus": {
+      "originalMeasureToSource": {
+        "6": "broad local 3",
+        "8": "splendens local 2",
+        "9": "splendens local 3"
+      },
+      "correctedPieces": {
+        "laudemus-broad-v3-measure-3.xml": "broad local 3",
+        "laudemus-splendens-v3-measures-2-3.xml": "splendens local 2–3"
+      }
+    },
+    "cravo": {
+      "original": {
+        "physicalMeasureOrdinal": 10,
+        "printedMeasureNumber": "9",
+        "normalizedSourceMeasure": "10",
+        "multipleRestCount": 1
+      },
+      "corrected": {
+        "logicalSourceMeasures": [
+          10,
+          11,
+          12,
+          13,
+          14,
+          15,
+          16
+        ],
+        "multipleRestCount": 7
+      },
+      "alignmentRule": "physical measure order; the original repeats printed measure number 9"
+    },
+    "atirei": {
+      "comparedLogicalMeasure": 16,
+      "uncertainF4Measures": [
+        8,
+        20
+      ],
+      "uncertainF4EventCount": 5
+    }
+  }
+}

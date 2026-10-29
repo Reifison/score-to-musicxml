@@ -3,8 +3,17 @@ import type { Score } from "../api/types";
 import { safeCacheKey } from "../files/exportFilenames";
 import { validatePlayerMusicXml } from "./bridge";
 import { isPlayerMusicXmlCacheFresh } from "./musicXmlCachePolicy";
+import { musicXmlCacheRevision } from "./musicXmlCacheRevision";
 
-type CacheableScore = Pick<Score, "id" | "userId">;
+type CacheableScore = Pick<Score, "id" | "userId"> & { cacheRevision: string };
+
+export function playerCacheIdentity(score: Score): CacheableScore {
+  return {
+    id: score.id,
+    userId: score.userId,
+    cacheRevision: musicXmlCacheRevision(score)
+  };
+}
 
 /**
  * Keeps the source notation in the app's persistent storage. The file's
@@ -49,7 +58,7 @@ function directoryFor(score: CacheableScore): Directory {
 }
 
 function fileFor(score: CacheableScore): File {
-  return new File(directoryFor(score), `${safeCacheKey(score.id)}.musicxml`);
+  return new File(directoryFor(score), `${safeCacheKey(score.id)}-${safeCacheKey(score.cacheRevision)}.musicxml`);
 }
 
 function removeFile(file: File): void {

@@ -1,3 +1,5 @@
+import type { Score, ScoreVersion, VisualCorrectionProposal } from "../types/domain.js";
+
 const isLocalHost = ["localhost", "127.0.0.1", "0.0.0.0"].includes(window.location.hostname);
 const API_URL = import.meta.env.VITE_API_URL ?? (isLocalHost ? "http://localhost:4000" : window.location.origin);
 
@@ -8,6 +10,13 @@ type ApiErrorBody = {
     formErrors?: string[];
   };
 };
+
+export class ApiError extends Error {
+  constructor(message: string, readonly status: number | null) {
+    super(message);
+    this.name = "ApiError";
+  }
+}
 
 const fieldLabels: Record<string, string> = {
   name: "Nome",
@@ -38,22 +47,37 @@ function apiErrorMessage(body: ApiErrorBody, fallback = "Erro inesperado.") {
   return body.error ?? fallback;
 }
 
-async function responseError(response: Response, fallback: string): Promise<Error> {
+async function responseError(response: Response, fallback: string): Promise<ApiError> {
   const body = await response.json().catch(() => ({ error: fallback })) as ApiErrorBody;
-  return new Error(apiErrorMessage(body, fallback));
+  return new ApiError(apiErrorMessage(body, fallback), response.status);
+}
+
+async function request(url: string, init: RequestInit, fallback: string): Promise<Response> {
+  let response: Response;
+  try {
+    response = await fetch(url, init);
+  } catch (error) {
+    if (init.signal?.aborted) throw error;
+    throw new ApiError("Não foi possível conectar ao serviço. Verifique sua conexão e tente novamente.", null);
+  }
+  if (!response.ok) {
+    const error = await responseError(response, fallback);
+    if (response.status === 401 && !url.includes("/api/auth/me") && !url.includes("/api/auth/login")) {
+      window.dispatchEvent(new Event("score-to-musicxml:session-expired"));
+    }
+    throw error;
+  }
+  return response;
 }
 
 export async function api<T>(path: string, options: RequestInit = {}): Promise<T> {
   const headers = new Headers(options.headers);
   if (!(options.body instanceof FormData)) headers.set("Content-Type", "application/json");
-  const response = await fetch(`${API_URL}${path}`, {
+  const response = await request(`${API_URL}${path}`, {
     ...options,
     headers,
     credentials: "include"
-  });
-  if (!response.ok) {
-    throw await responseError(response, "Erro inesperado.");
-  }
+  }, "Erro inesperado.");
   if (response.status === 204) return undefined as T;
   return response.json() as Promise<T>;
 }
@@ -70,23 +94,84 @@ export function midiDownloadUrl(scoreId: string) {
   return `${API_URL}/api/scores/${scoreId}/midi`;
 }
 
-export async function fetchMusicXml(scoreId: string): Promise<string> {
-  const response = await fetch(downloadUrl(scoreId), {
+export async function fetchMusicXml(scoreId: string, preview = false): Promise<string> {
+  const url = `${downloadUrl(scoreId)}${preview ? "?preview=true" : ""}`;
+  const response = await request(url, {
     credentials: "include"
-  });
-  if (!response.ok) {
-    throw await responseError(response, "Não foi possível carregar o MusicXML.");
-  }
+  }, "Não foi possível carregar o MusicXML.");
   return response.text();
 }
 
-export async function fetchMidi(scoreId: string): Promise<Blob> {
-  const response = await fetch(midiDownloadUrl(scoreId), {
-    credentials: "include"
+export async function fetchScoreVersions(scoreId: string, signal?: AbortSignal): Promise<ScoreVersion[]> {
+  const response = await request(`${API_URL}/api/scores/${encodeURIComponent(scoreId)}/versions`, {
+    credentials: "include",
+    signal
+  }, "Não foi possível carregar o histórico desta partitura.");
+  const body = await response.json() as { versions: ScoreVersion[] };
+  return body.versions;
+}
+
+export async function fetchScoreVersionMusicXml(scoreId: string, versionId: string, signal?: AbortSignal): Promise<string> {
+  const path = `/api/scores/${encodeURIComponent(scoreId)}/versions/${encodeURIComponent(versionId)}/musicxml`;
+  const response = await request(`${API_URL}${path}`, {
+    credentials: "include",
+    headers: { Accept: "application/vnd.recordare.musicxml+xml" },
+    signal
+  }, "Não foi possível carregar esta versão.");
+  return response.text();
+}
+
+export async function fetchFirstPagePreview(scoreId: string, revision: string, signal?: AbortSignal): Promise<string> {
+  const query = new URLSearchParams({ revision });
+  const response = await request(
+    `${API_URL}/api/scores/${encodeURIComponent(scoreId)}/first-page-preview?${query.toString()}`,
+    {
+      headers: { Accept: "application/vnd.recordare.musicxml+xml" },
+      credentials: "include",
+      signal
+    },
+    "Não foi possível carregar a prévia."
+  );
+  return response.text();
+}
+
+export async function approveScoreReview(scoreId: string, revision: string): Promise<Score> {
+  const response = await api<{ score: Score }>(`/api/scores/${encodeURIComponent(scoreId)}/review`, {
+    method: "POST",
+    body: JSON.stringify({ revision })
   });
-  if (!response.ok) {
-    throw await responseError(response, "Não foi possível baixar o MIDI.");
-  }
+  return response.score;
+}
+
+export async function decideVisualReviewProposal(
+  scoreId: string,
+  revision: string,
+  proposalId: string,
+  decision: "accept" | "reject" | "undo",
+  signal?: AbortSignal
+): Promise<Score> {
+  const response = await api<{ score: Score }>(`/api/scores/${encodeURIComponent(scoreId)}/visual-review/decision`, {
+    method: "POST",
+    body: JSON.stringify({ revision, proposalId, decision } satisfies {
+      revision: string;
+      proposalId: VisualCorrectionProposal["id"];
+      decision: "accept" | "reject" | "undo";
+    }),
+    signal
+  });
+  return response.score;
+}
+
+export async function fetchSourceEvidence(scoreId: string, assetName: string, signal?: AbortSignal): Promise<Blob> {
+  const path = `/api/scores/${encodeURIComponent(scoreId)}/evidence/${encodeURIComponent(assetName)}`;
+  const response = await request(`${API_URL}${path}`, { credentials: "include", signal }, "Não foi possível carregar a imagem de origem.");
+  return response.blob();
+}
+
+export async function fetchMidi(scoreId: string): Promise<Blob> {
+  const response = await request(midiDownloadUrl(scoreId), {
+    credentials: "include"
+  }, "Não foi possível baixar o MIDI.");
   return response.blob();
 }
 
@@ -113,13 +198,16 @@ export async function bulkScoreAction(scoreIds: string[], action: "delete" | "fa
 }
 
 export async function downloadMusicXml(scoreId: string, filename: string): Promise<void> {
-  const response = await fetch(downloadUrl(scoreId), {
+  const response = await request(downloadUrl(scoreId), {
     credentials: "include"
-  });
-  if (!response.ok) {
-    throw await responseError(response, "Não foi possível baixar o MusicXML.");
-  }
+  }, "Não foi possível baixar o MusicXML.");
   await saveBlob(await response.blob(), filename);
+}
+
+export async function downloadScoreVersionMusicXml(scoreId: string, versionId: string, filename: string, signal?: AbortSignal): Promise<void> {
+  const musicXml = await fetchScoreVersionMusicXml(scoreId, versionId, signal);
+  if (signal?.aborted) throw createAbortError();
+  await saveBlob(new Blob([musicXml], { type: "application/vnd.recordare.musicxml+xml" }), filename);
 }
 
 export async function downloadMidi(scoreId: string, filename: string): Promise<void> {
@@ -135,4 +223,10 @@ async function saveBlob(blob: Blob, filename: string): Promise<void> {
   link.click();
   link.remove();
   window.setTimeout(() => window.URL.revokeObjectURL(objectUrl), 60_000);
+}
+
+function createAbortError() {
+  const error = new Error("The operation was aborted.");
+  error.name = "AbortError";
+  return error;
 }

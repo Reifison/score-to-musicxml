@@ -1,17 +1,21 @@
 import { router } from "expo-router";
 import { useState } from "react";
-import { ActivityIndicator, KeyboardAvoidingView, Platform, Pressable, StyleSheet, Text, TextInput, View } from "react-native";
+import { ActivityIndicator, KeyboardAvoidingView, Platform, Pressable, ScrollView, StyleSheet, View } from "react-native";
+import { AdaptiveText as Text, AdaptiveTextInput as TextInput } from "../src/adaptive/AdaptiveTypography";
 import { ApiError } from "../src/api/client";
 import { useAuth } from "../src/auth/AuthProvider";
+import { AdaptiveScreen } from "../src/components/AdaptiveScreen";
 import { BrandLockup } from "../src/components/BrandLockup";
+import { useTranslation } from "../src/i18n";
 import { colors } from "../src/theme/styles";
 
 export default function LoginScreen() {
+  const { t } = useTranslation();
   const { login } = useAuth();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<unknown>(null);
 
   async function submit() {
     setBusy(true);
@@ -20,72 +24,87 @@ export default function LoginScreen() {
       await login(email.trim(), password);
       router.replace("/scores");
     } catch (err) {
-      setError(err instanceof ApiError ? err.message : "Nao foi possivel entrar.");
+      setError(err);
     } finally {
       setBusy(false);
     }
   }
 
   return (
-    <KeyboardAvoidingView behavior={Platform.OS === "ios" ? "padding" : undefined} style={styles.screen}>
-      <View style={styles.card}>
-        <BrandLockup />
-        <Text style={styles.intro}>Entre para converter e acompanhar suas partituras.</Text>
+    <AdaptiveScreen navigation={false}>
+      <KeyboardAvoidingView behavior={Platform.OS === "ios" ? "padding" : undefined} style={styles.screen}>
+        <ScrollView
+          contentContainerStyle={styles.scrollContent}
+          keyboardDismissMode={Platform.OS === "ios" ? "interactive" : "on-drag"}
+          keyboardShouldPersistTaps="handled"
+        >
+          <View style={styles.card}>
+            <BrandLockup />
+            <Text style={styles.intro}>{t("Entre para converter e acompanhar suas partituras.", "Sign in to convert and keep track of your scores.")}</Text>
 
-        <View style={styles.field}>
-          <Text style={styles.label}>E-mail</Text>
-          <TextInput
-            autoCapitalize="none"
-            autoComplete="email"
-            autoCorrect={false}
-            inputMode="email"
-            keyboardType="email-address"
-            onChangeText={(value) => setEmail(value.trim())}
-            textContentType="username"
-            style={styles.input}
-            value={email}
-          />
-        </View>
+            <View style={styles.field}>
+              <Text style={styles.label}>{t("E-mail", "Email")}</Text>
+              <TextInput
+                accessibilityLabel={t("E-mail", "Email")}
+                autoCapitalize="none"
+                autoComplete="email"
+                autoCorrect={false}
+                inputMode="email"
+                keyboardType="email-address"
+                onChangeText={(value) => setEmail(value.trim())}
+                textContentType="username"
+                style={styles.input}
+                value={email}
+              />
+            </View>
 
-        <View style={styles.field}>
-          <Text style={styles.label}>Senha</Text>
-            <TextInput
-              autoCapitalize="none"
-              autoComplete="password"
-              autoCorrect={false}
-              onChangeText={setPassword}
-              secureTextEntry
-              style={styles.input}
-              textContentType="password"
-              value={password}
-            />
-        </View>
+            <View style={styles.field}>
+              <Text style={styles.label}>{t("Senha", "Password")}</Text>
+              <TextInput
+                accessibilityLabel={t("Senha", "Password")}
+                autoCapitalize="none"
+                autoComplete="password"
+                autoCorrect={false}
+                onChangeText={setPassword}
+                secureTextEntry
+                style={styles.input}
+                textContentType="password"
+                value={password}
+              />
+            </View>
 
-        {error ? <Text style={styles.error}>{error}</Text> : null}
+            {error ? <Text style={styles.error}>{error instanceof ApiError ? error.message : t("Não foi possível entrar.", "Couldn't sign in.")}</Text> : null}
 
-        <Pressable disabled={busy || !email || !password} onPress={submit} style={[styles.button, (busy || !email || !password) && styles.buttonDisabled]}>
-          {busy ? <ActivityIndicator color={colors.onPrimary} /> : <Text style={styles.buttonText}>Entrar</Text>}
-        </Pressable>
-      </View>
-    </KeyboardAvoidingView>
+            <Pressable disabled={busy || !email || !password} onPress={submit} style={[styles.button, (busy || !email || !password) && styles.buttonDisabled]}>
+              {busy ? <ActivityIndicator color={colors.onPrimary} /> : <Text style={styles.buttonText}>{t("Entrar", "Sign in")}</Text>}
+            </Pressable>
+          </View>
+        </ScrollView>
+      </KeyboardAvoidingView>
+    </AdaptiveScreen>
   );
 }
 
 const styles = StyleSheet.create({
   screen: {
-    alignItems: "center",
     backgroundColor: colors.surface,
-    flex: 1,
+    flex: 1
+  },
+  scrollContent: {
+    alignItems: "center",
+    flexGrow: 1,
     justifyContent: "center",
     padding: 24
   },
   card: {
+    alignSelf: "center",
     backgroundColor: colors.panel,
     borderColor: colors.line,
     borderRadius: 24,
     borderWidth: 1,
     gap: 20,
     maxWidth: 420,
+    marginVertical: 12,
     padding: 30,
     shadowColor: "#4c2e22",
     shadowOffset: { width: 0, height: 24 },

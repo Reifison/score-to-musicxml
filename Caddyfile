@@ -1,7 +1,8 @@
-{$WEB_DOMAIN} {
+# PUBLIC_DOMAINS is deduplicated by the deployment preflight.
+{$PUBLIC_DOMAINS:localhost} {
 	encode gzip
 
-	@api path /api/* /health
+	@api path /api/* /health /ready
 	handle @api {
 		reverse_proxy api:4000
 	}

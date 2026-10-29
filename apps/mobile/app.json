@@ -3,22 +3,19 @@
     "name": "Conversor de Partituras",
     "slug": "score-to-musicxml",
     "scheme": "scoretomusicxml",
-    "version": "0.1.0",
+    "version": "1.0",
     "orientation": "default",
     "icon": "./assets/icon.png",
-    "userInterfaceStyle": "automatic",
+    "userInterfaceStyle": "light",
     "newArchEnabled": true,
-    "splash": {
-      "image": "./assets/splash.png",
-      "resizeMode": "contain",
-      "backgroundColor": "#faf8f4"
-    },
     "ios": {
       "bundleIdentifier": "com.scoretomusicxml.app",
       "icon": "./assets/icon.png",
+      "buildNumber": "16",
       "supportsTablet": true,
       "infoPlist": {
-        "NSCameraUsageDescription": "Usamos a camera para escanear partituras e enviar ao conversor.",
+        "CFBundleLocalizations": ["en", "pt-BR"],
+        "NSCameraUsageDescription": "Usamos a câmera para escanear partituras e ajustar as páginas.",
         "NSPhotoLibraryUsageDescription": "Usamos sua biblioteca para selecionar fotos de partituras.",
         "NSPhotoLibraryAddUsageDescription": "O app pode salvar arquivos temporarios exportados quando voce escolher compartilhar."
       }
@@ -32,9 +29,37 @@
       },
       "permissions": ["CAMERA"]
     },
+    "locales": {
+      "en": {
+        "ios": {
+          "CFBundleDisplayName": "Sheet Music Converter",
+          "NSCameraUsageDescription": "Use the camera to scan sheet music and adjust pages.",
+          "NSPhotoLibraryUsageDescription": "Select sheet music photos to convert to MusicXML.",
+          "NSPhotoLibraryAddUsageDescription": "The app can save temporary exported files when you choose to share them."
+        }
+      },
+      "pt-BR": {
+        "ios": {
+          "CFBundleDisplayName": "Conversor de Partituras",
+          "NSCameraUsageDescription": "Usamos a câmera para escanear partituras e ajustar as páginas.",
+          "NSPhotoLibraryUsageDescription": "Selecione fotos de partituras para converter em MusicXML.",
+          "NSPhotoLibraryAddUsageDescription": "O app pode salvar arquivos temporários exportados quando você escolher compartilhá-los."
+        }
+      }
+    },
     "plugins": [
       "expo-router",
       "expo-secure-store",
+      [
+        "expo-splash-screen",
+        {
+          "image": "./assets/splash.png",
+          "imageWidth": 176,
+          "resizeMode": "contain",
+          "backgroundColor": "#faf8f4"
+        }
+      ],
+      "./plugins/withIOSSceneLifecycle",
       "./plugins/withAndroidPlayerAssets",
       [
         "expo-document-picker",
@@ -46,7 +71,7 @@
         "expo-image-picker",
         {
           "photosPermission": "Selecione fotos de partituras para converter em MusicXML.",
-          "cameraPermission": "Tire fotos de partituras para converter em MusicXML.",
+          "cameraPermission": "Usamos a câmera para escanear partituras e ajustar as páginas.",
           "microphonePermission": false
         }
       ]

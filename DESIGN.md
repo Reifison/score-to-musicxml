@@ -11,7 +11,7 @@ Tema claro com estratégia de cor restrita para o produto. O gradiente laranja e
 - Fonte principal: `ID/branding_assets/`.
 - Símbolo: arquivo PDF, seta de transformação e clave de sol em branco sobre laranja.
 - Nome oficial: Conversor de Partituras.
-- Tela de abertura: composição baseada em `Gemini_Generated_Image_14ktlm14ktlm14kt (5).png`.
+- Tela de abertura: logo isolado em `apps/mobile/assets/splash.png`, derivado do ícone oficial, sobre o canvas claro. A tela nativa usa o logo centralizado com 176 pt; a abertura em React Native mantém sua posição e acrescenta uma pulsação discreta e notas que percorrem uma pauta.
 
 ## Color tokens
 
@@ -59,3 +59,5 @@ Usar a pilha nativa: SF Pro no iOS, Segoe UI no Windows e system-ui no web. Esca
 ## Motion
 
 Transições de estado entre 160 e 220 ms, com `cubic-bezier(0.16, 1, 0.3, 1)`. Não animar layout nem usar movimento decorativo no fluxo principal.
+
+A abertura musical acontece uma vez por inicialização, com uma frase de aproximadamente um segundo e saída de 220 ms quando a sessão está pronta. Enquanto a sessão carrega, o movimento continua sem bloquear sua preparação. Usar transformações e opacidade com o driver nativo; suspender no segundo plano e encerrar ao abrir o app. Com Reduzir Movimento, manter o logo estático e dispensar a espera introdutória, usando apenas uma breve transição de opacidade.

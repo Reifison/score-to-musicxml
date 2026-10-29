@@ -1,0 +1,54 @@
+{
+  "caseId": "adelita-2026-10-10",
+  "piece": "Adelita — Mazurka",
+  "composer": "Francisco Tárrega",
+  "createdAt": "2026-10-10",
+  "status": "reviewed_assisted_local_corpus",
+  "humanEditorialApproval": false,
+  "trainingEligible": false,
+  "trainingPerformed": false,
+  "files": [
+    {
+      "file": "original.pdf",
+      "sha256": "d51b949f2f2e76967402ffb7228adf17656263bac87cbb7df4bf5f195e22b115",
+      "bytes": 63915
+    },
+    {
+      "file": "converted-original.musicxml",
+      "sha256": "90d0df7a17b6935c5c0fd2a7b409e2d8cbb0647357b564050cd099b2343d50a3",
+      "bytes": 50463
+    },
+    {
+      "file": "reviewed.musicxml",
+      "sha256": "2bf75e79fdc4188a2fb6f885b2014a4d21dc4ef95af8320828240629a17f8d6c",
+      "bytes": 53430
+    },
+    {
+      "file": "ledger.json",
+      "sha256": "e3f94df0fec763171e0763b8825f76d851c635695829c3857a6946ea81053e33",
+      "bytes": 58566
+    }
+  ],
+  "sourceProvenance": {
+    "requested_pdf_name": "IMSLP44649-PMLP95949-Tarrega_-_Adelita.pdf",
+    "readable_pdf": "Local copy with same source filename, Antich y Tena plate361, single page",
+    "original_attachment_in_icloud": "dataless at initial read; readable local copy used",
+    "input_musicxml": "User-supplied Downloads file, retained byte-for-byte"
+  },
+  "evidenceReport": "../../docs/validation/adelita-2026-10-10/REPORT.md",
+  "correctionRecords": "../../docs/validation/adelita-2026-10-10/corrections.json",
+  "regressionTest": "../../scripts/tests/adelita-source-cases.test.mjs",
+  "limitations": [
+    "No human editorial approval",
+    "Fingerings/string numbers not transcribed in full",
+    "Video analysis supports navigation, not a note-by-note audio transcription",
+    "No new OMR model or automatic patch rule released"
+  ],
+  "publication": {
+    "published": true,
+    "date": "2026-10-11",
+    "scoreId": "e6535aec-0e70-4cff-be14-2a6ef841f457",
+    "reviewRevision": "00454b37df758328c71270d050c485f498dce0c58cbfb70a04a543738b5fe1d2",
+    "verificationReport": "../../docs/validation/publication-2026-10-11/REPORT.md"
+  }
+}

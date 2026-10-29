@@ -190,6 +190,52 @@ describe("WebAudioMidiEngine", () => {
     expect(context.oscillators).toHaveLength(1);
   });
 
+  it("repete um intervalo sem pausa de agendamento, no andamento escolhido e sem tocar após o limite", async () => {
+    const context = new FakeAudioContext();
+    const timer = createScheduler();
+    const engine = new WebAudioMidiEngine({ contextFactory: () => context, scheduler: timer.scheduler, baseTempoBpm: 120 });
+    engine.load([
+      { pitch: 60, startMs: 1_000, durationMs: 100 },
+      { pitch: 64, startMs: 1_400, durationMs: 300 },
+      { pitch: 67, startMs: 1_600, durationMs: 100 }
+    ], 2_000);
+    engine.setLoopRange({ startMs: 1_000, endMs: 1_500 });
+    engine.seek(1_000);
+    engine.setTempo(240);
+    await engine.playFromUserGesture();
+
+    expect(context.oscillators.map((oscillator) => oscillator.start.mock.calls[0]?.[0])).toEqual([0, 0.2, 0.25, 0.45, 0.5]);
+    context.currentTime = 0.25;
+    timer.run();
+    expect(engine.getSnapshot()).toMatchObject({ state: "playing", positionMs: 1_000, tempo: 240 });
+    expect(context.oscillators.some((oscillator) => oscillator.frequency.values[0]?.value === 391.995435)) .toBe(false);
+    expect(engine.getTelemetrySnapshot()).toMatchObject({ duplicateEvents: 0 });
+  });
+
+  it("preserva pausa, seek e reinício com um intervalo ativo e rejeita limites inválidos", async () => {
+    const context = new FakeAudioContext();
+    const timer = createScheduler();
+    const engine = new WebAudioMidiEngine({ contextFactory: () => context, scheduler: timer.scheduler });
+    engine.load([{ pitch: 60, startMs: 500, durationMs: 200 }], 1_500);
+    expect(() => engine.setLoopRange({ startMs: 900, endMs: 1_600 })).toThrow(RangeError);
+    expect(() => engine.setLoopRange({ startMs: 700, endMs: 700 })).toThrow(RangeError);
+    engine.setLoopRange({ startMs: 500, endMs: 1_000 });
+    engine.seek(1_200);
+    expect(engine.getSnapshot()).toMatchObject({ positionMs: 500 });
+    engine.seek(0);
+    await engine.playFromUserGesture();
+
+    context.currentTime = 0.7;
+    engine.pause();
+    expect(engine.getSnapshot()).toMatchObject({ state: "paused", positionMs: 700 });
+    engine.seek(800);
+    expect(engine.getSnapshot()).toMatchObject({ state: "paused", positionMs: 800 });
+    await engine.resumeFromUserGesture();
+    engine.stop();
+    expect(engine.getSnapshot()).toMatchObject({ state: "stopped", positionMs: 0 });
+    expect(engine.getLoopRange()).toEqual({ startMs: 500, endMs: 1_000 });
+  });
+
   it("usa uma antecipação padrão de pelo menos meio segundo", async () => {
     const context = new FakeAudioContext();
     const engine = new WebAudioMidiEngine({ contextFactory: () => context });

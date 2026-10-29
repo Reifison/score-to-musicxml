@@ -1,25 +1,9 @@
 import { StyleSheet } from "react-native";
+import { colors } from "./colors";
 
-export const colors = {
-  ink: "#3c332f",
-  muted: "#766963",
-  faint: "#7a6d66",
-  line: "#e5ddd5",
-  lineStrong: "#d6cbc1",
-  surface: "#faf8f4",
-  surfaceSoft: "#f3efe9",
-  panel: "#fffdf9",
-  primary: "#c64225",
-  primaryDark: "#a83220",
-  primarySoft: "#fff0e7",
-  accentGold: "#d9992f",
-  accentCoral: "#d96a54",
-  accentBlue: "#4d7d91",
-  danger: "#b73d32",
-  warning: "#a96513",
-  success: "#277a57",
-  onPrimary: "#fffaf5"
-};
+export { colors } from "./colors";
+
+export const screenGutter = 24;
 
 export const sharedStyles = StyleSheet.create({
   screen: {
@@ -28,7 +12,7 @@ export const sharedStyles = StyleSheet.create({
   },
   content: {
     flexGrow: 1,
-    padding: 24,
+    padding: screenGutter,
     gap: 18
   },
   title: {

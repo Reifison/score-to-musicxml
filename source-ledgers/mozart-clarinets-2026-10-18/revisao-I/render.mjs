@@ -1,0 +1,12 @@
+import fs from 'node:fs/promises';
+import path from 'node:path';
+import sharp from 'sharp';
+import {VerovioToolkit} from 'verovio/esm';
+import createVerovioModule from 'verovio/wasm';
+const root=path.dirname(new URL(import.meta.url).pathname);await fs.mkdir(`${root}/previews`,{recursive:true});
+const tk=new VerovioToolkit(await createVerovioModule());
+tk.setOptions({inputFrom:'xml',breaks:'encoded',pageWidth:2480,pageHeight:3508,scale:45,adjustPageHeight:false,midiNoCue:true,header:'none',footer:'none'});
+if(!tk.loadData(await fs.readFile('output/mozart-clarinets-2026-10-18/Clarinet-I-reviewed.musicxml','utf8')))throw Error('Cannot render');
+const count=tk.getPageCount();
+for(let n=1;n<=count;n++)await sharp(Buffer.from(tk.renderToSVG(n))).flatten({background:'#fff'}).png().toFile(`${root}/previews/page-${String(n).padStart(2,'0')}.png`);
+console.log(JSON.stringify({pages:count,directory:`${root}/previews`}));

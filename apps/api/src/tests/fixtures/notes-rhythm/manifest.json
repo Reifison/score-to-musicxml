@@ -1,0 +1,72 @@
+{
+  "fixture": "adelita-notes-rhythm-2026-10-11",
+  "reference": {
+    "ledger": "apps/api/src/tests/fixtures/adelita/source-ledger-notes-rhythm.json",
+    "ledgerSha256": "30accc65f67cef9739033ffeb6a803533626bd7b7a29846cac19a59e8df4742c",
+    "musicXml": "apps/api/src/tests/fixtures/adelita/notes-rhythm.musicxml",
+    "musicXmlSha256": "01dacfeedc64f3000e3616ff7ea1abe570df0848afd474eb2f372027a31f7811",
+    "status": "assisted-source-reading-with-independent-cotejo"
+  },
+  "scope": {
+    "included": [
+      "written-pitch",
+      "onset",
+      "duration",
+      "rest",
+      "voice",
+      "staff",
+      "grace"
+    ],
+    "excluded": [
+      "fingering",
+      "dynamics",
+      "repeat",
+      "slur",
+      "articulation",
+      "navigation",
+      "lyrics",
+      "text",
+      "ornament-glyph",
+      "editorial-accessory"
+    ]
+  },
+  "counts": {
+    "measures": 16,
+    "beatsPerMeasure": 3,
+    "beatType": 4,
+    "events": 147,
+    "notes": 135,
+    "graces": 12,
+    "rests": 12
+  },
+  "baseline": {
+    "musicXml": "apps/api/src/tests/fixtures/adelita/v4.1-new-conversion.musicxml",
+    "musicXmlSha256": "42bb7cf958395aa775fac243d00882463a111177db63e6a464b81c59b4dcc27c",
+    "comparisonVoicePolicy": "neutralized",
+    "expectedActualEvents": 108,
+    "expectedCorrect": 82,
+    "expectedChanged": 25,
+    "expectedMissing": 40,
+    "expectedExtra": 1,
+    "expectedDifferences": 66
+  },
+  "historical": {
+    "ledger": "source-ledgers/adelita-2026-10-10/ledger.json",
+    "ledgerSha256": "e3f94df0fec763171e0763b8825f76d851c635695829c3857a6946ea81053e33",
+    "knownCorrection": {
+      "measure": 13,
+      "onsetQuarters": 2,
+      "voice": "3",
+      "previousWrittenPitch": "C:0:4",
+      "currentWrittenPitch": "A:0:3"
+    }
+  },
+  "provenance": {
+    "editorialHumanApproval": false,
+    "humanReview": false,
+    "trainingEligible": false,
+    "mlTraining": false,
+    "sourceAuthority": "visual-review-and-cotejo",
+    "note": "Regression reference only; it does not change production conversion behavior."
+  }
+}
