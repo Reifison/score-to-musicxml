@@ -13,6 +13,7 @@ import {
   serializePlayerToHostMessage,
   type PlayerBridgeCapability,
   type PlayerReadingTarget,
+  type PlayerReadingPreview,
   type PlayerSessionSnapshot,
   type PlayerToHostMessage
 } from "./playerBridgeContract.js";
@@ -29,6 +30,7 @@ type ScoreSession = {
   musicXml: string;
   scoreName: string;
   allowPlayback?: boolean;
+  capturePreview?: boolean;
   restoreSnapshot?: PlayerSessionSnapshot;
   language: PlayerLanguage;
 };
@@ -54,6 +56,11 @@ const LEGACY_BRIDGE_CAPABILITIES_MESSAGE: PlayerToHostMessage = {
   version: PLAYER_BRIDGE_VERSION,
   type: "bridge.capabilities",
   payload: { capabilities: ["session.snapshot", "session.restore"] }
+};
+
+const PREVIEW_BRIDGE_CAPABILITIES_MESSAGE: PlayerToHostMessage = {
+  ...BRIDGE_CAPABILITIES_MESSAGE,
+  payload: { capabilities: ["session.snapshot", "session.restore", "score.focus", "reading.preview"] }
 };
 
 export function NativePlayerPage() {
@@ -84,6 +91,7 @@ export function NativePlayerPage() {
       // exact v1 shape. Hosts shipped before score.focus only accept the two
       // original capabilities. Announce those first so they retain restoration
       // instead of falling back to a capability-less session.
+      postToHost(PREVIEW_BRIDGE_CAPABILITIES_MESSAGE);
       postToHost(LEGACY_BRIDGE_CAPABILITIES_MESSAGE);
       postToHost(BRIDGE_CAPABILITIES_MESSAGE);
       return true;
@@ -122,6 +130,7 @@ export function NativePlayerPage() {
           musicXml: message.payload.musicXml,
           scoreName: message.payload.scoreName,
           ...(typeof message.payload.allowPlayback === "boolean" ? { allowPlayback: message.payload.allowPlayback } : {}),
+          ...(message.payload.capturePreview ? { capturePreview: true } : {}),
           ...(message.payload.restoreSnapshot ? { restoreSnapshot: message.payload.restoreSnapshot } : {}),
           language: message.payload.language ?? "pt"
         };
@@ -185,6 +194,10 @@ export function NativePlayerPage() {
       });
     };
 
+    // Prepare the engine while the host reads the MusicXML and the saved position.
+    void import("../score/verovioLoader.js")
+      .then(({ loadVerovioModule }) => loadVerovioModule())
+      .catch(() => { /* The score loader can retry initialization. */ });
     window.addEventListener("message", handleMessage);
     document.addEventListener("message", handleMessage as EventListener);
     return () => {
@@ -195,9 +208,11 @@ export function NativePlayerPage() {
     };
   }, [postToHost]);
 
+  const renderedRequestId = session?.requestId;
+
   const reportStatus = useCallback((state: ScorePlayerState, message?: string) => {
     const currentSession = sessionRef.current;
-    if (!currentSession) return;
+    if (!currentSession || currentSession.requestId !== renderedRequestId) return;
     readyRequestIdRef.current = state === "ready" ? currentSession.requestId : null;
     postToHost({
       channel: PLAYER_BRIDGE_CHANNEL,
@@ -209,11 +224,11 @@ export function NativePlayerPage() {
         ...(message ? { message } : {})
       }
     });
-  }, [postToHost]);
+  }, [postToHost, renderedRequestId]);
 
   const reportPlayback = useCallback((snapshot: PlaybackSnapshot) => {
     const currentSession = sessionRef.current;
-    if (!currentSession || readyRequestIdRef.current !== currentSession.requestId) return;
+    if (!currentSession || currentSession.requestId !== renderedRequestId || readyRequestIdRef.current !== renderedRequestId) return;
     postToHost({
       channel: PLAYER_BRIDGE_CHANNEL,
       version: PLAYER_BRIDGE_VERSION,
@@ -226,11 +241,11 @@ export function NativePlayerPage() {
         tempo: Math.round(snapshot.tempo)
       }
     });
-  }, [postToHost]);
+  }, [postToHost, renderedRequestId]);
 
   const reportReading = useCallback((snapshot: PlayerSessionSnapshot["reading"]) => {
     const currentSession = sessionRef.current;
-    if (!currentSession || readyRequestIdRef.current !== currentSession.requestId) return;
+    if (!currentSession || currentSession.requestId !== renderedRequestId || readyRequestIdRef.current !== renderedRequestId) return;
     postToHost({
       channel: PLAYER_BRIDGE_CHANNEL,
       version: PLAYER_BRIDGE_VERSION,
@@ -238,7 +253,19 @@ export function NativePlayerPage() {
       requestId: currentSession.requestId,
       payload: snapshot
     });
-  }, [postToHost]);
+  }, [postToHost, renderedRequestId]);
+
+  const reportPreview = useCallback((preview: PlayerReadingPreview) => {
+    if (!renderedRequestId || sessionRef.current?.requestId !== renderedRequestId
+      || readyRequestIdRef.current !== renderedRequestId) return;
+    postToHost({
+      channel: PLAYER_BRIDGE_CHANNEL,
+      version: PLAYER_BRIDGE_VERSION,
+      type: "reading.preview",
+      requestId: renderedRequestId,
+      payload: preview
+    });
+  }, [postToHost, renderedRequestId]);
 
   return (
     <main className="native-player-page" lang={language === "en" ? "en-US" : "pt-BR"}>
@@ -256,6 +283,7 @@ export function NativePlayerPage() {
           onStatusChange={reportStatus}
           onPlaybackChange={reportPlayback}
           onReadingChange={reportReading}
+          onReadingPreview={session.capturePreview ? reportPreview : undefined}
         />
       ) : (
         <section className="native-player-waiting" role="status" aria-live="polite">

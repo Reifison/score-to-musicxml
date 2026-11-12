@@ -103,8 +103,8 @@ export const api = {
     return apiRequest<{ binding: { googleObfuscatedAccountId: string; appleAppAccountToken: string } }>("/api/me/purchase-binding", {}, token);
   },
 
-  async scores(token: string) {
-    return apiRequest<{ scores: Score[] }>("/api/scores", {}, token);
+  async scores(token: string, signal?: AbortSignal) {
+    return apiRequest<{ scores: Score[] }>("/api/scores", { signal }, token);
   },
 
   async firstPagePreview(token: string, scoreId: string, revision: string, signal?: AbortSignal) {

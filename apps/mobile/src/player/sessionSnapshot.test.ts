@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { MAX_PLAYER_PREVIEW_BASE64_LENGTH, type PlayerReadingPreview } from "./bridge";
 import { createPlayerSessionSnapshotStore, type PlayerSessionIdentity, type PlayerSessionSnapshot } from "./sessionSnapshot";
 
 class MemoryStorage {
@@ -29,6 +30,26 @@ class DelayedFirstWriteStorage extends MemoryStorage {
       await this.firstWriteGate;
     }
     await super.setItem(key, value);
+  }
+}
+
+class DelayedFirstReadStorage extends MemoryStorage {
+  private releaseRead: () => void = () => undefined;
+  private signalReadStarted: () => void = () => undefined;
+  private readonly firstReadGate = new Promise<void>((resolve) => { this.releaseRead = resolve; });
+  readonly firstReadStarted = new Promise<void>((resolve) => { this.signalReadStarted = resolve; });
+  private delayFirstRead = true;
+
+  releaseFirstRead() { this.releaseRead(); }
+
+  override async getItem(key: string) {
+    const value = await super.getItem(key);
+    if (this.delayFirstRead) {
+      this.delayFirstRead = false;
+      this.signalReadStarted();
+      await this.firstReadGate;
+    }
+    return value;
   }
 }
 
@@ -166,5 +187,106 @@ describe("player session snapshots", () => {
     expect(await store.load(userTwoIdentity, userTwoLease)).toBeNull();
     expect(await store.load(otherScoreIdentity, otherScoreLease)).toEqual(snapshot);
     expect(storage.values.size).toBe(1);
+  });
+});
+
+describe("player reading previews", () => {
+  const preview: PlayerReadingPreview = { page: 3, width: 800, height: 1200, jpegBase64: "/9j/AAAAAAAAAAAA" };
+
+  it("keeps one preview per score and isolates account and exact revision", async () => {
+    const storage = new MemoryStorage();
+    const store = createPlayerSessionSnapshotStore(storage);
+    const firstLease = store.createLease(identity.userId)!;
+    const revised = { ...identity, revision: "conversion:attempt-4" };
+    const revisedLease = store.createLease(identity.userId)!;
+    const otherUser = { ...identity, userId: "user-2" };
+    const otherLease = store.createLease(otherUser.userId)!;
+    await store.savePreview(identity, preview, firstLease);
+    await store.savePreview(otherUser, { ...preview, page: 5 }, otherLease);
+    expect(await store.loadPreview(identity, firstLease)).toEqual(preview);
+    expect(await store.loadPreview(revised, revisedLease)).toBeNull();
+    expect(await store.loadPreview({ ...identity, scoreId: "other-score" }, firstLease)).toBeNull();
+
+    await store.savePreview(revised, { ...preview, page: 4 }, revisedLease);
+    await store.savePreview(identity, preview, firstLease);
+    expect(await store.loadPreview(identity, firstLease)).toBeNull();
+    expect(await store.loadPreview(revised, revisedLease)).toEqual({ ...preview, page: 4 });
+    expect(await store.loadPreview(otherUser, otherLease)).toEqual({ ...preview, page: 5 });
+    expect(storage.values.size).toBe(2);
+  });
+
+  it("keeps at most three recent previews in memory and reloads evicted ones from storage", async () => {
+    const storage = new MemoryStorage();
+    const store = createPlayerSessionSnapshotStore(storage);
+    const lease = store.createLease(identity.userId)!;
+    const scores = ["one", "two", "three", "four"].map((scoreId) => ({ ...identity, scoreId }));
+    for (const score of scores.slice(0, 3)) await store.savePreview(score, preview, lease);
+    expect(store.memoryPreview(scores[0], lease)).toEqual(preview);
+    await store.savePreview(scores[3], preview, lease);
+    expect(store.memoryPreview(scores[0], lease)).toBeNull();
+    expect(store.memoryPreview(scores[1], lease)).toEqual(preview);
+    expect(await store.loadPreview(scores[0], lease)).toEqual(preview);
+    expect(store.memoryPreview(scores[0], lease)).toEqual(preview);
+  });
+
+  it("does not let an older storage read replace a newer memory preview", async () => {
+    const storage = new DelayedFirstReadStorage();
+    const writer = createPlayerSessionSnapshotStore(storage);
+    await writer.savePreview(identity, preview, writer.createLease(identity.userId)!);
+    const store = createPlayerSessionSnapshotStore(storage);
+    const lease = store.createLease(identity.userId)!;
+    const loading = store.loadPreview(identity, lease);
+    await storage.firstReadStarted;
+    const latest = { ...preview, page: 5 };
+    await store.savePreview(identity, latest, lease);
+    storage.releaseFirstRead();
+    expect(await loading).toEqual(latest);
+    expect(store.memoryPreview(identity, lease)).toEqual(latest);
+  });
+
+  it("rejects invalid, oversized and expired previews", async () => {
+    const storage = new MemoryStorage();
+    let now = 1_800_000_000_000;
+    const store = createPlayerSessionSnapshotStore(storage, () => now);
+    const lease = store.createLease(identity.userId)!;
+    await store.savePreview(identity, { ...preview, jpegBase64: "<svg onload=alert(1)>" }, lease);
+    await store.savePreview(identity, { ...preview, jpegBase64: `/9j/${"A".repeat(MAX_PLAYER_PREVIEW_BASE64_LENGTH)}` }, lease);
+    expect(storage.values.size).toBe(0);
+
+    await store.savePreview(identity, preview, lease);
+    now += 7 * 24 * 60 * 60 * 1000 + 1;
+    expect(await store.loadPreview(identity, lease)).toBeNull();
+    const key = (await storage.getAllKeys())[0];
+    storage.values.set(key, "x".repeat(MAX_PLAYER_PREVIEW_BASE64_LENGTH + 4097));
+    expect(await store.loadPreview(identity, lease)).toBeNull();
+  });
+
+  it("removes previews on logout and rejects late writes from the old session", async () => {
+    const storage = new MemoryStorage();
+    const store = createPlayerSessionSnapshotStore(storage);
+    const oldLease = store.createLease(identity.userId)!;
+    await store.savePreview(identity, preview, oldLease);
+    expect(store.memoryPreview(identity, oldLease)).toEqual(preview);
+    const clearing = store.clear(identity.userId);
+    expect(store.memoryPreview(identity, oldLease)).toBeNull();
+    await clearing;
+    await store.savePreview(identity, preview, oldLease);
+    expect(storage.values.size).toBe(0);
+    expect(await store.loadPreview(identity, store.createLease(identity.userId)!)).toBeNull();
+  });
+
+  it("fences an in-flight preview write when its score is deleted", async () => {
+    const storage = new DelayedFirstWriteStorage();
+    const store = createPlayerSessionSnapshotStore(storage);
+    const oldLease = store.createLease(identity.userId)!;
+    const saving = store.savePreview(identity, preview, oldLease);
+    await storage.firstWriteStarted;
+    const clearing = store.clearScores([identity.scoreId], identity.userId);
+    expect(store.memoryPreview(identity, oldLease)).toBeNull();
+    storage.releaseFirstWrite();
+    await Promise.all([saving, clearing]);
+    await store.savePreview(identity, preview, oldLease);
+    expect(storage.values.size).toBe(0);
+    expect(await store.loadPreview(identity, oldLease)).toBeNull();
   });
 });

@@ -11,7 +11,7 @@ import { colors } from "../src/theme/styles";
 
 export default function LoginScreen() {
   const { t } = useTranslation();
-  const { login } = useAuth();
+  const { loading, login, restoreError, retrySession } = useAuth();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [busy, setBusy] = useState(false);
@@ -30,6 +30,10 @@ export default function LoginScreen() {
     }
   }
 
+  async function retrySavedSession() {
+    if (await retrySession()) router.replace("/scores");
+  }
+
   return (
     <AdaptiveScreen navigation={false}>
       <KeyboardAvoidingView behavior={Platform.OS === "ios" ? "padding" : undefined} style={styles.screen}>
@@ -41,6 +45,13 @@ export default function LoginScreen() {
           <View style={styles.card}>
             <BrandLockup />
             <Text style={styles.intro}>{t("Entre para converter e acompanhar suas partituras.", "Sign in to convert and keep track of your scores.")}</Text>
+
+            {restoreError ? <View style={styles.field}>
+              <Text accessibilityLiveRegion="polite" style={styles.error}>{t("Não foi possível recuperar sua sessão. Verifique a conexão e tente novamente.", "Couldn't restore your session. Check your connection and try again.")}</Text>
+              <Pressable accessibilityRole="button" disabled={loading || busy} onPress={() => void retrySavedSession()} style={[styles.retryButton, (loading || busy) && styles.buttonDisabled]}>
+                <Text style={styles.retryText}>{loading ? t("Tentando...", "Trying...") : t("Tentar recuperar sessão", "Try restoring session")}</Text>
+              </Pressable>
+            </View> : null}
 
             <View style={styles.field}>
               <Text style={styles.label}>{t("E-mail", "Email")}</Text>
@@ -75,7 +86,7 @@ export default function LoginScreen() {
 
             {error ? <Text style={styles.error}>{error instanceof ApiError ? error.message : t("Não foi possível entrar.", "Couldn't sign in.")}</Text> : null}
 
-            <Pressable disabled={busy || !email || !password} onPress={submit} style={[styles.button, (busy || !email || !password) && styles.buttonDisabled]}>
+            <Pressable disabled={busy || loading || !email || !password} onPress={submit} style={[styles.button, (busy || loading || !email || !password) && styles.buttonDisabled]}>
               {busy ? <ActivityIndicator color={colors.onPrimary} /> : <Text style={styles.buttonText}>{t("Entrar", "Sign in")}</Text>}
             </Pressable>
           </View>
@@ -152,6 +163,20 @@ const styles = StyleSheet.create({
     color: colors.onPrimary,
     fontSize: 17,
     fontWeight: "800"
+  },
+  retryButton: {
+    alignItems: "center",
+    borderColor: colors.line,
+    borderRadius: 14,
+    borderWidth: 1,
+    justifyContent: "center",
+    minHeight: 48,
+    paddingHorizontal: 14
+  },
+  retryText: {
+    color: colors.ink,
+    fontSize: 15,
+    fontWeight: "700"
   },
   error: {
     color: colors.danger,

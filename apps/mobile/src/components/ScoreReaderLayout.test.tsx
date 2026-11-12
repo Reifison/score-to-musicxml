@@ -42,6 +42,7 @@ describe("reading workspace continuity", () => {
     fireEvent.click(screen.getByTestId("player"));
     const initialHeight = Number(screen.getByTestId("player").getAttribute("data-height"));
     fireEvent.click(screen.getByRole("button", { name: "Abrir detalhes da partitura" }));
+    expect(screen.getByRole("button", { name: "Fechar detalhes da partitura" }).textContent).toBe("Fechar");
     expect(screen.getByText("Exportar MusicXML")).toBeTruthy();
     expect(screen.getByTestId("player").getAttribute("data-paused")).toBe("false");
 
@@ -67,6 +68,40 @@ describe("reading workspace continuity", () => {
     expect(screen.getByTestId("player").textContent).toBe("37");
     expect(state.mounts).toBe(1);
     expect(state.unmounts).toBe(0);
+  });
+
+  it("lets notices and details close the panel without restarting the player", () => {
+    const view = render(<ScoreReaderLayout title="Estudo" notice={(open, close) => <>
+      <button onClick={open}>Mostrar detalhes</button><button onClick={close}>Conferir pela faixa</button>
+    </>} details={(close) => <button onClick={close}>Conferir pelo painel</button>}>
+      {(viewport) => <PlayerProbe {...viewport} />}
+    </ScoreReaderLayout>);
+    fireEvent.click(screen.getByTestId("player"));
+    fireEvent.click(screen.getByRole("button", { name: "Mostrar detalhes" }));
+    fireEvent.click(screen.getByRole("button", { name: "Conferir pela faixa" }));
+    expect(screen.queryByRole("button", { name: "Conferir pelo painel" })).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Mostrar detalhes" }));
+    fireEvent.click(screen.getByRole("button", { name: "Conferir pelo painel" }));
+    expect(screen.queryByRole("button", { name: "Conferir pelo painel" })).toBeNull();
+    expect(screen.getByTestId("player").textContent).toBe("37");
+    expect(state.mounts).toBe(1);
+    expect(state.unmounts).toBe(0);
+    view.unmount();
+  });
+
+  it("labels the compact reader's open details action as Fechar", () => {
+    layout(390, 844);
+    render(reader());
+    expect(screen.getByRole("button", { name: "Abrir detalhes da partitura" }).textContent).toBe("Detalhes");
+    fireEvent.click(screen.getByRole("button", { name: "Abrir detalhes da partitura" }));
+    expect(screen.getByRole("button", { name: "Fechar detalhes da partitura" }).textContent).toBe("Fechar");
+  });
+
+  it("keeps the close label visible even in a short compact window", () => {
+    layout(390, 470);
+    render(reader());
+    fireEvent.click(screen.getByRole("button", { name: "Abrir detalhes da partitura" }));
+    expect(screen.getByRole("button", { name: "Fechar detalhes da partitura" }).textContent).toBe("Fechar");
   });
 
   it("retains all real destinations and offers a back destination for a direct link", () => {

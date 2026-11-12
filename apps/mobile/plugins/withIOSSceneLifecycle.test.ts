@@ -32,6 +32,9 @@ describe("iOS scene lifecycle regeneration", () => {
     expect(appDelegate).toContain("bindReactNativeFactory(factory)");
     expect(appDelegate).toContain("appLaunchOptions = launchOptions");
     expect(appDelegate).toContain("func completeSceneLaunch()");
+    expect(appDelegate).toContain("import AVFoundation");
+    expect(appDelegate).toContain("AVAudioSession.sharedInstance().setCategory(.playback, mode: .default)");
+    expect(appDelegate).not.toContain("setActive(");
     expect(appDelegate).toContain("guard !sceneLaunchFinished else { return }");
     expect(migrated).toContain("appDelegate.completeSceneLaunch()");
     expect(appDelegate).toContain("RCTLinkingManager.application(app, open: url, options: options)");
@@ -44,6 +47,7 @@ describe("iOS scene lifecycle regeneration", () => {
   it("regenerates without adding duplicate scenes and refreshes the owned scene code", () => {
     const migrated = migrateAppDelegate(legacyDelegate);
     expect(migrateAppDelegate(migrated)).toBe(migrated);
+    expect(migrated.match(/setCategory\(\.playback/g)).toHaveLength(1);
     const outdated = migrated.replace("class SceneDelegate:", "class OutdatedSceneDelegate:");
     expect(migrateAppDelegate(outdated)).toBe(migrated);
   });

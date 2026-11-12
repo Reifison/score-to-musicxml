@@ -13,6 +13,7 @@ const state = vi.hoisted(() => ({
   share: vi.fn(),
   auth: { token: "session-token" as string | null, user: { id: "user-1" } as { id: string } | null },
   previewLayout: null as ((event: { nativeEvent: { layout: { width: number } } }) => void) | null,
+  alertLayout: null as ((event: { nativeEvent: { layout: { y: number } } }) => void) | null,
   previewStyle: null as unknown,
   previewSectionStyles: [] as unknown[]
 }));
@@ -33,11 +34,12 @@ vi.mock("../api/client", () => ({
 vi.mock("react-native", () => ({
   Pressable: ({ children, onPress, disabled, accessibilityLabel }: { children: ReactNode; onPress?: () => void; disabled?: boolean; accessibilityLabel?: string }) => <button aria-label={accessibilityLabel} disabled={disabled} onClick={onPress}>{children}</button>,
   StyleSheet: { create: (styles: unknown) => styles, hairlineWidth: 1 },
-  View: ({ children, accessibilityLabel, onLayout, testID, style }: { children: ReactNode; accessibilityLabel?: string; onLayout?: (event: { nativeEvent: { layout: { width: number } } }) => void; testID?: string; style?: unknown }) => {
+  View: ({ children, accessibilityLabel, onLayout, testID, style }: { children: ReactNode; accessibilityLabel?: string; onLayout?: (event: { nativeEvent: { layout: { width?: number; y?: number } } }) => void; testID?: string; style?: unknown }) => {
     if (testID === "guided-review-previews") {
       state.previewLayout = onLayout ?? null;
       state.previewStyle = style;
     }
+    if (testID === "guided-review-alerts") state.alertLayout = onLayout ?? null;
     if (testID === "guided-review-preview-section") state.previewSectionStyles.push(style);
     return <div aria-label={accessibilityLabel} data-testid={testID}>{children}</div>;
   }
@@ -129,12 +131,36 @@ describe("mobile guided score review", () => {
     const { rerender } = render(<GuidedScoreReview score={oneProposal} />);
     expect(screen.getByText("1 apontamento")).toBeTruthy();
     expect(screen.getByText("1 pendente")).toBeTruthy();
-    expect(screen.queryByText("Apontamentos")).toBeNull();
+    expect(screen.queryByText("Alertas para conferir")).toBeNull();
 
     const empty = { ...baseScore, validation: { ...baseScore.validation!, visualReview: { ...baseScore.validation!.visualReview!, proposals: [] } } } as Score;
     rerender(<GuidedScoreReview score={empty} />);
-    expect(screen.queryByText("Apontamentos")).toBeNull();
+    expect(screen.queryByText("Alertas para conferir")).toBeNull();
     expect(screen.getByText("Nenhuma sugestão de nota ou pausa disponível.")).toBeTruthy();
+  });
+
+  it("exposes the published alerts and the comparison path for a score without suggested edits", () => {
+    const alert = { code: "VISUAL_MEASURE_UNREADABLE", message: "Compare esta página com o original.", page: 1 };
+    const score: Score = {
+      ...baseScore,
+      validation: null,
+      recognitionQuality: {
+        status: "needs_review", sourceComparison: "partial", checkedMeasures: 0, accuracyVerified: false,
+        issues: [alert, { ...alert, code: "VISUAL_SOURCE_UNAVAILABLE" }, { code: "PAGE_COVERAGE_INCOMPLETE", message: "Confira a cobertura do original." }]
+      }
+    };
+    const onLocateIssue = vi.fn();
+    const onJumpTo = vi.fn();
+    render(<GuidedScoreReview score={score} onLocateIssue={onLocateIssue} onJumpTo={onJumpTo} />);
+    expect(screen.getByText(/Nenhuma correção foi sugerida/)).toBeTruthy();
+    expect(screen.getByText(alert.message)).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Aceitar" })).toBeNull();
+    state.alertLayout?.({ nativeEvent: { layout: { y: 715 } } });
+    fireEvent.click(screen.getByRole("button", { name: "Ver alertas" }));
+    expect(onJumpTo).toHaveBeenLastCalledWith(715);
+    fireEvent.click(screen.getByRole("button", { name: "Localizar" }));
+    expect(onLocateIssue).toHaveBeenCalledWith(expect.objectContaining(alert));
+    expect(onJumpTo).toHaveBeenLastCalledWith(0);
   });
 
   it("submits a safe decision with the current revision", async () => {

@@ -1,5 +1,7 @@
 # Roadmap central do Conversor de Partituras
 
+Rodada atual: [revisão e reenvio à Apple — 08/11/2026](APP_STORE_REVIEW_CURRENT.md). O envio de outubro foi cancelado a pedido do usuário em 07/11; a API confirmou `DEVELOPER_REJECTED` em 08/11. Lançamento manual reconfirmado e salvo nesta rodada. Os estados datados abaixo permanecem históricos.
+
 Atualizado em 23 de outubro de 2026. Este é o ponto de entrada para organizar o trabalho após a [auditoria do projeto](audits/project-2026-10-06/audit.md). A prioridade é entregar uma conversão revisável sem perdas silenciosas, mostrar seu estado com clareza e preparar um lançamento verificável nas três plataformas.
 
 As marcações registram somente evidência disponível. **Feita?** na preparação não significa validação concluída. Nas tabelas, implementação/preparação, validação local e homologação têm colunas separadas; **☑ Sim** indica conclusão comprovada e **☐ Não** indica pendência. Uma atividade com código pronto e homologação pendente continua aberta para lançamento.

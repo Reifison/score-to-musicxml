@@ -145,6 +145,31 @@ describe("WebAudioMidiEngine", () => {
     expect(context.oscillators.at(-1)?.type).toBe("sawtooth");
   });
 
+  it("cancela o início pendente quando o leitor é pausado", async () => {
+    const context = new FakeAudioContext();
+    const { scheduler } = createScheduler();
+    const engine = new WebAudioMidiEngine({ contextFactory: () => context, scheduler });
+    let finishActivation!: () => void;
+    context.resume.mockImplementationOnce(() => new Promise<void>((resolve) => {
+      finishActivation = () => {
+        context.state = "running";
+        resolve();
+      };
+    }));
+    engine.load([{ pitch: 60, startMs: 0, durationMs: 1_000 }]);
+
+    const starting = engine.playFromUserGesture();
+    engine.pause();
+    finishActivation();
+    await starting;
+
+    expect(engine.getSnapshot().state).toBe("idle");
+    expect(scheduler.set).not.toHaveBeenCalled();
+    await engine.playFromUserGesture();
+    expect(engine.getSnapshot().state).toBe("playing");
+    await engine.dispose();
+  });
+
   it("pausa, retoma da posição musical e encerra no fim", async () => {
     const context = new FakeAudioContext();
     const timer = createScheduler();

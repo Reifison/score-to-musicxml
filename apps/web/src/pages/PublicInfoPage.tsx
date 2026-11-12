@@ -71,7 +71,7 @@ function PrivacyPage() {
         <header>
           <span className="public-info-eyebrow">Conversor de Partituras</span>
           <h1>Política de Privacidade</h1>
-          <p className="public-info-lead">Última atualização: 6 de outubro de 2026.</p>
+          <p className="public-info-lead">Última atualização: 10 de novembro de 2026.</p>
         </header>
         <p>O Conversor de Partituras transforma arquivos enviados em MusicXML, permite exportar MIDI e oferece visualização e reprodução da partitura.</p>
         <section aria-labelledby="privacy-data-title">
@@ -96,7 +96,7 @@ function PrivacyPage() {
         <section aria-labelledby="privacy-retention-title">
           <h2 id="privacy-retention-title">Retenção e exclusão</h2>
           <p>Você pode mover uma partitura para a lixeira e restaurá-la durante sete dias. Depois desse prazo, a limpeza remove o arquivo original, os MusicXML das tentativas e o registro da partitura. A limpeza administrativa também pode remover partituras e registros de auditoria antigos conforme os períodos configurados.</p>
-          <p>O servidor gera MIDI em memória a partir do MusicXML quando você solicita a exportação, sem guardar um arquivo MIDI permanente. No app, o player mantém uma cópia local do MusicXML associada à conta e à revisão do resultado. A reutilização expira depois de sete dias sem abertura; a verificação e remoção acontecem quando o cache é acessado. A cópia pode permanecer no armazenamento do app até a limpeza ou remoção do app, e esse cache não garante acesso ao player sem internet. No navegador, os dados do player ficam na memória da página durante a sessão.</p>
+          <p>O servidor gera MIDI em memória a partir do MusicXML quando você solicita a exportação, sem guardar um arquivo MIDI permanente. O app mantém no aparelho uma cópia da lista e dos detalhes das partituras, além do MusicXML associado à conta e à revisão, para preparar a leitura. Esses dados e revisões anteriores podem permanecer até a remoção dos dados ou do app, inclusive após você sair da conta ou excluir a partitura no servidor. No iOS Release, uma partitura já preparada pode ser aberta e reproduzida sem internet; a preparação inicial e os serviços online precisam de conexão. No navegador, os dados do player ficam na memória da página durante a sessão.</p>
           <p>Um MIDI exportado pode permanecer no cache local do app até ser substituído ou removido pelo sistema. Cópias que você salva em Arquivos, MuseScore ou outro app seguem as regras daquele destino.</p>
         </section>
         <section aria-labelledby="privacy-sharing-title">

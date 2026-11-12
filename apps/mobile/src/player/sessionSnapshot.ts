@@ -1,4 +1,5 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
+import { isPlayerReadingPreview, MAX_PLAYER_PREVIEW_BASE64_LENGTH, type PlayerReadingPreview } from "./bridge";
 import { isPlayerSessionSnapshot, type PlayerSessionIdentity, type PlayerSessionSnapshot } from "./sessionSnapshotContract";
 
 export type { PlayerPlaybackSnapshot, PlayerReadingSnapshot, PlayerSessionIdentity, PlayerSessionSnapshot } from "./sessionSnapshotContract";
@@ -8,6 +9,13 @@ type StoredSnapshot = {
   identity: PlayerSessionIdentity;
   savedAt: number;
   snapshot: PlayerSessionSnapshot;
+};
+
+type StoredPreview = {
+  version: 1;
+  identity: PlayerSessionIdentity;
+  savedAt: number;
+  preview: PlayerReadingPreview;
 };
 
 export type PlayerSessionLease = {
@@ -25,13 +33,16 @@ type SnapshotStorage = Pick<
 
 const STORAGE_PREFIX = "@score-to-musicxml/player-session/v1/";
 const SNAPSHOT_TTL_MS = 7 * 24 * 60 * 60 * 1000;
+const MAX_IN_MEMORY_PREVIEWS = 3;
 
 /**
- * Snapshots hold only the playback cursor and reading position. MusicXML,
- * credentials, and score contents never enter this store.
+ * Cursor snapshots contain no MusicXML or credentials. A separate bounded
+ * image preview shares the same account/score deletion and lease fences.
  */
 export function createPlayerSessionSnapshotStore(storage: SnapshotStorage, now = () => Date.now()) {
   const writes = new Map<string, { generation: number; pending: string | null; draining?: Promise<void> }>();
+  const previewWriterGenerations = new Map<string, number>();
+  const previewMemory = new Map<string, StoredPreview>();
   const userGenerations = new Map<string, number>();
   const scoreInvalidationGenerations = new Map<string, number>();
   let globalGeneration = 0;
@@ -98,7 +109,72 @@ export function createPlayerSessionSnapshotStore(storage: SnapshotStorage, now =
 
   async function save(identity: PlayerSessionIdentity, snapshot: PlayerSessionSnapshot, lease: PlayerSessionLease): Promise<void> {
     if (!isCurrentLease(identity, lease) || !isPlayerSessionSnapshot(snapshot)) return;
-    const key = storageKey(identity);
+    return enqueueWrite(storageKey(identity), {
+      version: 1,
+      identity,
+      savedAt: now(),
+      snapshot
+    } satisfies StoredSnapshot);
+  }
+
+  function memoryPreview(identity: PlayerSessionIdentity, lease: PlayerSessionLease): PlayerReadingPreview | null {
+    if (!isCurrentLease(identity, lease)) return null;
+    const key = previewStorageKey(identity);
+    const value = previewMemory.get(key);
+    if (!value || !sameIdentity(value.identity, identity) || !isFreshPreview(value, now())) return null;
+    return value.preview;
+  }
+
+  function rememberPreview(key: string, value: StoredPreview) {
+    previewMemory.delete(key);
+    previewMemory.set(key, value);
+    if (previewMemory.size > MAX_IN_MEMORY_PREVIEWS) {
+      const oldest = previewMemory.keys().next().value;
+      if (oldest !== undefined) previewMemory.delete(oldest);
+    }
+  }
+
+  async function loadPreview(identity: PlayerSessionIdentity, lease: PlayerSessionLease): Promise<PlayerReadingPreview | null> {
+    if (!isCurrentLease(identity, lease)) return null;
+    const cached = memoryPreview(identity, lease);
+    if (cached) return cached;
+    const key = previewStorageKey(identity);
+    const writeState = writes.get(key);
+    if (writeState) await waitForWrites(key, writeState, storage);
+    if (!isCurrentLease(identity, lease)) return null;
+    const readGeneration = writes.get(key)?.generation ?? 0;
+    let raw: string | null;
+    try {
+      raw = await storage.getItem(key);
+    } catch {
+      return null;
+    }
+    if (!isCurrentLease(identity, lease)) return null;
+    if ((writes.get(key)?.generation ?? 0) !== readGeneration) return memoryPreview(identity, lease);
+    if (!raw || raw.length > MAX_PLAYER_PREVIEW_BASE64_LENGTH + 4096) return null;
+    let value: unknown;
+    try {
+      value = JSON.parse(raw);
+    } catch {
+      return null;
+    }
+    if (!isStoredPreview(value) || !sameIdentity(value.identity, identity)) return null;
+    if (!isFreshPreview(value, now())) return null;
+    rememberPreview(key, value);
+    return value.preview;
+  }
+
+  async function savePreview(identity: PlayerSessionIdentity, preview: PlayerReadingPreview, lease: PlayerSessionLease): Promise<void> {
+    if (!isCurrentLease(identity, lease) || !isPlayerReadingPreview(preview)) return;
+    const key = previewStorageKey(identity);
+    if (lease.issuedGeneration < (previewWriterGenerations.get(key) ?? 0)) return;
+    previewWriterGenerations.set(key, lease.issuedGeneration);
+    const value = { version: 1, identity, savedAt: now(), preview } satisfies StoredPreview;
+    rememberPreview(key, value);
+    return enqueueWrite(key, value);
+  }
+
+  async function enqueueWrite(key: string, value: StoredSnapshot | StoredPreview): Promise<void> {
     let state = writes.get(key);
     if (!state) {
       state = { generation: 0, pending: null };
@@ -107,12 +183,7 @@ export function createPlayerSessionSnapshotStore(storage: SnapshotStorage, now =
 
     state.generation += 1;
     const generation = state.generation;
-    state.pending = JSON.stringify({
-      version: 1,
-      identity,
-      savedAt: now(),
-      snapshot
-    } satisfies StoredSnapshot);
+    state.pending = JSON.stringify(value);
     if (!state.draining) beginDrain(key, state, storage);
     // If another save arrived while storage was busy, its higher generation
     // replaces this pending value and the drain writes only the newest state.
@@ -123,6 +194,9 @@ export function createPlayerSessionSnapshotStore(storage: SnapshotStorage, now =
   async function clear(userId?: string): Promise<void> {
     if (userId === undefined) globalGeneration += 1;
     else userGenerations.set(userId, (userGenerations.get(userId) ?? 0) + 1);
+    for (const key of previewMemory.keys()) {
+      if (userId === undefined || key.startsWith(userPrefix(userId))) previewMemory.delete(key);
+    }
 
     const keysToRemove = [...writes.entries()]
       .filter(([key]) => key.startsWith(STORAGE_PREFIX)
@@ -156,6 +230,9 @@ export function createPlayerSessionSnapshotStore(storage: SnapshotStorage, now =
       issuedGeneration += 1;
       scoreInvalidationGenerations.set(scoreInvalidationKey(scoreId, userId), issuedGeneration);
     }
+    for (const key of previewMemory.keys()) {
+      if (selectedScoreIds.some((scoreId) => keyMatchesScore(key, scoreId, userId))) previewMemory.delete(key);
+    }
 
     const keysToWaitFor = [...writes.entries()]
       .filter(([key]) => selectedScoreIds.some((scoreId) => keyMatchesScore(key, scoreId, userId)))
@@ -178,7 +255,7 @@ export function createPlayerSessionSnapshotStore(storage: SnapshotStorage, now =
     if (selectedKeys.length > 0) await storage.multiRemove(selectedKeys).catch(() => undefined);
   }
 
-  return { clear, clearScores, createLease, load, save };
+  return { clear, clearScores, createLease, load, save, loadPreview, savePreview, memoryPreview };
 }
 
 const playerSessionSnapshotStore = createPlayerSessionSnapshotStore(AsyncStorage);
@@ -197,6 +274,18 @@ export function savePlayerSessionSnapshot(
   lease: PlayerSessionLease
 ): Promise<void> {
   return playerSessionSnapshotStore.save(identity, snapshot, lease);
+}
+
+export function loadPlayerReadingPreview(identity: PlayerSessionIdentity, lease: PlayerSessionLease): Promise<PlayerReadingPreview | null> {
+  return playerSessionSnapshotStore.loadPreview(identity, lease);
+}
+
+export function getMemoryPlayerReadingPreview(identity: PlayerSessionIdentity, lease: PlayerSessionLease): PlayerReadingPreview | null {
+  return playerSessionSnapshotStore.memoryPreview(identity, lease);
+}
+
+export function savePlayerReadingPreview(identity: PlayerSessionIdentity, preview: PlayerReadingPreview, lease: PlayerSessionLease): Promise<void> {
+  return playerSessionSnapshotStore.savePreview(identity, preview, lease);
 }
 
 /** Clear only player reading snapshots, for example when the authenticated session logs out. */
@@ -220,6 +309,20 @@ function isStoredSnapshot(value: unknown): value is StoredSnapshot {
     && isPlayerSessionIdentity(value.identity)
     && isFiniteNumber(value.savedAt, 0, Number.MAX_SAFE_INTEGER)
     && isPlayerSessionSnapshot(value.snapshot);
+}
+
+function isStoredPreview(value: unknown): value is StoredPreview {
+  return isRecord(value)
+    && hasOnlyKeys(value, ["version", "identity", "savedAt", "preview"])
+    && value.version === 1
+    && isPlayerSessionIdentity(value.identity)
+    && isFiniteNumber(value.savedAt, 0, Number.MAX_SAFE_INTEGER)
+    && isPlayerReadingPreview(value.preview);
+}
+
+function isFreshPreview(value: StoredPreview, currentTime: number): boolean {
+  const age = currentTime - value.savedAt;
+  return age >= -5 * 60 * 1000 && age <= SNAPSHOT_TTL_MS;
 }
 
 function isPlayerSessionIdentity(value: unknown): value is PlayerSessionIdentity {
@@ -256,6 +359,10 @@ function sameIdentity(left: PlayerSessionIdentity, right: PlayerSessionIdentity)
 
 function storageKey(identity: PlayerSessionIdentity): string {
   return `${userPrefix(identity.userId)}${encodeURIComponent(identity.scoreId)}/${fingerprint(identity.revision)}`;
+}
+
+function previewStorageKey(identity: PlayerSessionIdentity): string {
+  return `${userPrefix(identity.userId)}${encodeURIComponent(identity.scoreId)}/preview`;
 }
 
 function scoreInvalidationKey(scoreId: string, userId?: string): string {

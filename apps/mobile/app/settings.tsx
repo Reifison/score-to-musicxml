@@ -9,6 +9,7 @@ import { useOnboarding } from "../src/onboarding/OnboardingProvider";
 import { colors, sharedStyles } from "../src/theme/styles";
 
 const supportAddress = "reifison@hotmail.com";
+const privacyPolicyUrl = "https://converter.nossateoria.com.br/privacidade";
 
 export default function SettingsScreen() {
   const { logout, user } = useAuth();
@@ -125,6 +126,14 @@ export default function SettingsScreen() {
             <View style={styles.rowCopy}>
               <Text style={styles.rowTitle}>{t("Falar com o suporte", "Contact support")}</Text>
               <Text style={styles.rowDescription}>{supportAddress}</Text>
+            </View>
+            <Ionicons color={colors.muted} name="open-outline" size={18} />
+          </Pressable>
+          <Pressable accessibilityRole="link" onPress={() => void openLink(privacyPolicyUrl, t("Política de privacidade", "Privacy policy"))} style={styles.actionRow}>
+            <View style={styles.iconBox}><Ionicons color={colors.primaryDark} name="shield-checkmark-outline" size={21} /></View>
+            <View style={styles.rowCopy}>
+              <Text style={styles.rowTitle}>{t("Política de privacidade", "Privacy policy")}</Text>
+              <Text style={styles.rowDescription}>{t("Veja como seus dados são tratados e como solicitar sua exclusão.", "See how your data is handled and how to request deletion.")}</Text>
             </View>
             <Ionicons color={colors.muted} name="open-outline" size={18} />
           </Pressable>

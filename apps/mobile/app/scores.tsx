@@ -22,7 +22,8 @@ import { captureFailureCopy, captureScoreDocument, releaseScannedDocument } from
 import { DocumentReviewModal } from "../src/documentScanner/DocumentReviewModal";
 import type { ReviewableCapture } from "../src/documentScanner/types";
 import { getLocale, useTranslation } from "../src/i18n";
-import { isConversionProgressActive, shouldPollConversionScore } from "../src/score/conversionProgressPresentation";
+import { useScoreLibrary } from "../src/score/useScoreLibrary";
+import { writeScoreLibrary } from "../src/score/scoreLibraryStorage";
 import { localizeMessage } from "../src/score/localizedMessages";
 import { colors, sharedStyles } from "../src/theme/styles";
 
@@ -114,21 +115,12 @@ export default function ScoresScreen() {
   });
 
   const entitlementQuery = useQuery({
-    queryKey: ["entitlement"],
+    queryKey: ["entitlement", user?.id ?? null],
     queryFn: () => api.entitlement(token!),
-    enabled: Boolean(token)
+    enabled: Boolean(token && user?.id)
   });
 
-  const scoresQuery = useQuery({
-    queryKey: ["scores", user?.id ?? null],
-    queryFn: () => api.scores(token!),
-    enabled: Boolean(token && user?.id),
-    refetchInterval: (query) => {
-      const scores = query.state.data?.scores ?? [];
-      if (scores.some((score) => isConversionProgressActive(score.conversionProgress))) return 10_000;
-      return scores.some((score) => shouldPollConversionScore(score) || score.reviewStatus === "needs_review") ? 60_000 : false;
-    }
-  });
+  const { library: scoresQuery, scores: savedOrSyncedScores, loadingSaved } = useScoreLibrary(token, user?.id, true);
 
   const favoriteMutation = useMutation({
     mutationFn: ({ id, isFavorite }: { id: string; isFavorite: boolean }) => api.setScoreFavorite(token!, id, isFavorite),
@@ -140,12 +132,31 @@ export default function ScoresScreen() {
 
   const deleteMutation = useMutation({
     mutationFn: async (ids: string[]) => {
-      if (ids.length > 1) await api.bulkScores(token!, ids, "delete");
-      else await api.deleteScore(token!, ids[0]);
+      const sessionUserId = user?.id;
+      if (ids.length > 1) await api.bulkScores(token!, ids, "delete", undefined, sessionUserId);
+      else await api.deleteScore(token!, ids[0], sessionUserId);
+      return sessionUserId;
     },
-    onSuccess: async () => {
+    onSuccess: async (sessionUserId, ids) => {
       setSelectedIds(new Set());
       setSelectionMode(false);
+      if (sessionUserId) {
+        const listKey = ["scores", sessionUserId];
+        const savedKey = ["saved-score-library", sessionUserId];
+        await Promise.all([
+          queryClient.cancelQueries({ queryKey: listKey }),
+          queryClient.cancelQueries({ queryKey: savedKey })
+        ]);
+        const current = queryClient.getQueryData<{ scores: Score[] }>(listKey)
+          ?? queryClient.getQueryData<{ scores: Score[] }>(savedKey);
+        if (current) {
+          const updated = { scores: current.scores.filter((score) => !ids.includes(score.id)) };
+          queryClient.setQueryData(listKey, updated);
+          queryClient.setQueryData(savedKey, updated);
+          await writeScoreLibrary(sessionUserId, updated).catch(() => undefined);
+        }
+        for (const id of ids) queryClient.removeQueries({ queryKey: ["score", sessionUserId, id] });
+      }
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: ["scores"] }),
         queryClient.invalidateQueries({ queryKey: ["trash-scores"] })
@@ -154,7 +165,8 @@ export default function ScoresScreen() {
     onError: (error) => Alert.alert(t("Não foi possível mover para a lixeira", "Couldn't move to Trash"), error instanceof Error ? error.message : t("Tente novamente.", "Please try again."))
   });
 
-  const entitlement = entitlementQuery.data?.entitlement;
+  const entitlement = token && user?.id ? entitlementQuery.data?.entitlement : undefined;
+  const entitlementUnavailable = !entitlement && entitlementQuery.isError;
   const hasUnlimitedConversions = entitlement?.plan === "paid";
   const canUpload = entitlement?.plan === "paid" || (entitlement?.freeScansRemaining ?? 0) > 0;
 
@@ -246,7 +258,9 @@ export default function ScoresScreen() {
   }, [availablePurchases]);
 
   const subtitle = !entitlement
-    ? t("Carregando limite de uso...", "Loading usage limit...")
+    ? entitlementUnavailable
+      ? t("Não foi possível verificar o plano desta conta.", "Couldn't check this account's plan.")
+      : t("Carregando limite de uso...", "Loading usage limit...")
     : entitlement.plan === "paid"
       ? t("Conversões ilimitadas ativas", "Unlimited conversions active")
       : t("{{remaining}} de {{limit}} conversões gratuitas restantes", "{{remaining}} of {{limit}} free conversions remaining", {
@@ -257,6 +271,15 @@ export default function ScoresScreen() {
   async function ensureUploadAllowed(): Promise<ScoreType | null> {
     if (!scoreType) {
       Alert.alert(t("Selecione o tipo de partitura", "Select a score type"), t("Escolha melodia, piano, violão solo ou violão duo antes de enviar.", "Choose melody, piano, solo guitar, or guitar duet before uploading."));
+      return null;
+    }
+    if (!entitlement) {
+      Alert.alert(
+        entitlementUnavailable ? t("Não foi possível verificar o plano", "Couldn't check your plan") : t("Verificando o plano", "Checking your plan"),
+        entitlementUnavailable
+          ? t("Verifique sua conexão e tente novamente antes de enviar.", "Check your connection and try again before uploading.")
+          : t("Aguarde a verificação do plano antes de enviar.", "Wait until your plan has been checked before uploading.")
+      );
       return null;
     }
     if (canUpload) return scoreType;
@@ -464,7 +487,7 @@ export default function ScoresScreen() {
     }
   }
 
-  const scores = scoresQuery.data?.scores ?? [];
+  const scores = savedOrSyncedScores ?? [];
   const visibleScores = favoritesOnly ? scores.filter((score) => score.isFavorite) : scores;
   const selectedCount = selectedIds.size;
   const allSelected = visibleScores.length > 0 && visibleScores.every((score) => selectedIds.has(score.id));
@@ -526,6 +549,9 @@ export default function ScoresScreen() {
             <View style={styles.scoreHeaderRow}>
               <View style={{ flex: 1, gap: 5 }}>
                 <Text style={sharedStyles.subtitle}>{user?.name} · {subtitle}</Text>
+                {entitlementUnavailable ? <Pressable accessibilityRole="button" disabled={entitlementQuery.isFetching} onPress={() => void entitlementQuery.refetch()}>
+                  <Text style={styles.selectAllText}>{entitlementQuery.isFetching ? t("Verificando...", "Checking...") : t("Tentar verificar novamente", "Try checking again")}</Text>
+                </Pressable> : null}
               </View>
               <Pressable
                 accessibilityLabel={selectionMode ? t("Sair da seleção", "Exit selection") : t("Selecionar partituras", "Select scores")}
@@ -551,7 +577,7 @@ export default function ScoresScreen() {
               <ScoreTypePicker onChange={setScoreType} value={scoreType} />
               <Pressable disabled={cameraBusy || uploadMutation.isPending} onPress={scanWithCamera} style={[sharedStyles.button, styles.scanButton]}>
                 {cameraBusy || uploadMutation.isPending ? <ActivityIndicator color={colors.onPrimary} /> : <Ionicons color={colors.onPrimary} name="camera-outline" size={20} />}
-                <Text style={sharedStyles.buttonText}>{uploadMutation.isPending ? t("Enviando...", "Uploading...") : cameraBusy ? Platform.OS === "ios" ? t("Abrindo scanner...", "Opening scanner...") : t("Abrindo câmera...", "Opening camera...") : t("Escanear partitura", "Scan score")}</Text>
+                <Text style={[sharedStyles.buttonText, styles.scanButtonText]}>{uploadMutation.isPending ? t("Enviando...", "Uploading...") : cameraBusy ? Platform.OS === "ios" ? t("Abrindo scanner...", "Opening scanner...") : t("Abrindo câmera...", "Opening camera...") : t("Escanear partitura", "Scan score")}</Text>
               </Pressable>
               <View style={styles.uploadChoices}>
                 <Pressable disabled={cameraBusy || uploadMutation.isPending} onPress={pickPdf} style={[sharedStyles.button, sharedStyles.buttonSecondary, { flex: 1 }]}>
@@ -568,7 +594,9 @@ export default function ScoresScreen() {
             </View>
           </View>
         }
-        ListEmptyComponent={!scoresQuery.isLoading ? favoritesOnly ? (
+        ListEmptyComponent={loadingSaved ? null : !savedOrSyncedScores && scoresQuery.isError ? (
+          <Text style={sharedStyles.subtitle}>{t("Não foi possível carregar a lista. Conecte-se à internet e puxe para atualizar.", "Couldn't load the list. Connect to the internet and pull to refresh.")}</Text>
+        ) : !scoresQuery.isLoading ? favoritesOnly ? (
           <View style={styles.emptyFavorites}>
             <Ionicons color={colors.primaryDark} name="heart-outline" size={30} />
             <Text style={styles.emptyFavoritesTitle}>{t("Suas favoritas aparecem aqui", "Your favorites will appear here")}</Text>
@@ -615,7 +643,10 @@ export default function ScoresScreen() {
           <View style={styles.paywallBackdrop}>
             <ScrollView contentContainerStyle={styles.paywallContent} style={styles.paywallPanel}>
               <Text style={{ color: colors.ink, fontSize: 22, fontWeight: "700" }}>{t("Conversões ilimitadas", "Unlimited conversions")}</Text>
-            <Text style={sharedStyles.subtitle}>{!entitlement ? t("Verificando o plano desta conta...", "Checking this account's plan...") : hasUnlimitedConversions ? t("As conversões ilimitadas já estão ativas nesta conta.", "Unlimited conversions are already active on this account.") : t("Desbloqueie conversões ilimitadas para esta conta.", "Unlock unlimited conversions for this account.")}</Text>
+            <Text style={sharedStyles.subtitle}>{entitlementUnavailable ? t("Não foi possível verificar o plano. Verifique sua conexão e tente novamente.", "Couldn't check your plan. Check your connection and try again.") : !entitlement ? t("Verificando o plano desta conta...", "Checking this account's plan...") : hasUnlimitedConversions ? t("As conversões ilimitadas já estão ativas nesta conta.", "Unlimited conversions are already active on this account.") : t("Desbloqueie conversões ilimitadas para esta conta.", "Unlock unlimited conversions for this account.")}</Text>
+            {entitlementUnavailable ? <Pressable accessibilityRole="button" disabled={entitlementQuery.isFetching} onPress={() => void entitlementQuery.refetch()} style={[sharedStyles.button, sharedStyles.buttonSecondary]}>
+              <Text style={[sharedStyles.buttonText, sharedStyles.buttonTextSecondary]}>{entitlementQuery.isFetching ? t("Verificando...", "Checking...") : t("Tentar verificar novamente", "Try checking again")}</Text>
+            </Pressable> : null}
             {!hasUnlimitedConversions && purchaseOffer.state === "disconnected" ? <Text style={styles.offerMessage}>{t("Aguardando conexão com a {{store}}.", "Waiting to connect to {{store}}.", { store: storeName })}</Text> : null}
             {!hasUnlimitedConversions && purchaseOffer.state === "loading" ? <Text style={styles.offerMessage}>{t("Consultando o produto e o preço na {{store}}...", "Checking the product and price in {{store}}...", { store: storeName })}</Text> : null}
             {!hasUnlimitedConversions && purchaseOffer.state === "failed" ? <Text style={sharedStyles.error}>{t("Não foi possível consultar o preço na loja.", "Couldn't check the price in the store.")}</Text> : null}
@@ -786,9 +817,9 @@ const styles = StyleSheet.create({
   scoreRowTrailing: { alignItems: "flex-end", gap: 4 },
   selectAllText: { color: colors.primary, fontSize: 13, fontWeight: "800" },
   selectAllAction: { justifyContent: "center", minHeight: 44, paddingHorizontal: 4 },
-  selectButton: { alignItems: "center", borderColor: colors.lineStrong, borderRadius: 12, borderWidth: 1, flexDirection: "row", flexWrap: "wrap", gap: 5, justifyContent: "center", minHeight: 44, paddingHorizontal: 11 },
+  selectButton: { alignItems: "center", borderColor: colors.lineStrong, borderRadius: 12, borderWidth: 1, flexDirection: "row", gap: 5, justifyContent: "center", maxWidth: "100%", minHeight: 44, paddingHorizontal: 11, paddingVertical: 6 },
   selectButtonActive: { backgroundColor: colors.primarySoft, borderColor: colors.primary },
-  selectButtonText: { color: colors.ink, fontSize: 13, fontWeight: "800" },
+  selectButtonText: { color: colors.ink, flexShrink: 1, fontSize: 13, fontWeight: "800", textAlign: "center" },
   selectButtonTextActive: { color: colors.primary },
   selectionAction: { alignItems: "center", flexDirection: "row", flexWrap: "wrap", gap: 5, minHeight: 44, paddingHorizontal: 8 },
   selectionActionText: { color: colors.ink, fontSize: 13, fontWeight: "800" },
@@ -797,7 +828,8 @@ const styles = StyleSheet.create({
   selectionBarLabel: { color: colors.ink, flex: 1, fontSize: 13, fontWeight: "800", paddingLeft: 6 },
   selectionDisabled: { color: colors.muted },
   selectionHint: { alignItems: "flex-start", backgroundColor: colors.primarySoft, borderRadius: 12, flexDirection: "row", flexWrap: "wrap", gap: 8, justifyContent: "space-between", paddingHorizontal: 12, paddingVertical: 10 },
-  scanButton: { flexWrap: "wrap" },
+  scanButton: { paddingVertical: 8 },
+  scanButtonText: { flexShrink: 1, textAlign: "center" },
   uploadChoices: { flexDirection: "row", flexWrap: "wrap", gap: 10 },
   selectionHintText: { color: colors.muted, flex: 1, fontSize: 13 },
   swipeActionButton: { alignItems: "center", backgroundColor: colors.primarySoft, gap: 3, justifyContent: "center", width: 76 },

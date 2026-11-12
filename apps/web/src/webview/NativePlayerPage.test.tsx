@@ -63,9 +63,15 @@ describe("NativePlayerPage", () => {
       channel: PLAYER_BRIDGE_CHANNEL,
       version: PLAYER_BRIDGE_VERSION,
       type: "bridge.capabilities",
-      payload: { capabilities: ["session.snapshot", "session.restore"] }
+      payload: { capabilities: ["session.snapshot", "session.restore", "score.focus", "reading.preview"] }
     });
     expect(messages(postMessage)[2]).toEqual({
+      channel: PLAYER_BRIDGE_CHANNEL,
+      version: PLAYER_BRIDGE_VERSION,
+      type: "bridge.capabilities",
+      payload: { capabilities: ["session.snapshot", "session.restore"] }
+    });
+    expect(messages(postMessage)[3]).toEqual({
       channel: PLAYER_BRIDGE_CHANNEL,
       version: PLAYER_BRIDGE_VERSION,
       type: "bridge.capabilities",

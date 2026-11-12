@@ -5,12 +5,13 @@ export const PLAYER_BRIDGE_CHANNEL = "score-to-musicxml/player";
 export const PLAYER_BRIDGE_VERSION = 1 as const;
 export const MAX_PLAYER_MUSICXML_BYTES = 12 * 1024 * 1024;
 const MAX_INCOMING_MESSAGE_LENGTH = 16 * 1024;
+export const MAX_PLAYER_PREVIEW_BASE64_LENGTH = 200 * 1024;
 const MAX_REQUEST_ID_LENGTH = 128;
 const MAX_SCORE_NAME_LENGTH = 256;
 const MAX_ERROR_MESSAGE_LENGTH = 512;
 
 export type PlayerHostCommand = "pause" | "stop" | "dispose";
-export type PlayerBridgeCapability = "session.snapshot" | "session.restore" | "score.focus";
+export type PlayerBridgeCapability = "session.snapshot" | "session.restore" | "score.focus" | "reading.preview";
 export type PlayerReadingTarget = { id: string; page?: number; measure?: string };
 export type PlayerLanguage = "pt" | "en";
 export type PlayerScoreState = "loading" | "ready" | "empty" | "error" | "disposed";
@@ -31,6 +32,8 @@ export class PlayerMusicXmlError extends Error {
     this.name = "PlayerMusicXmlError";
   }
 }
+
+export type PlayerReadingPreview = { page: number; width: number; height: number; jpegBase64: string };
 
 export type PlayerToHostMessage =
   | {
@@ -74,6 +77,13 @@ export type PlayerToHostMessage =
   | {
       channel: typeof PLAYER_BRIDGE_CHANNEL;
       version: typeof PLAYER_BRIDGE_VERSION;
+      type: "reading.preview";
+      requestId: string;
+      payload: PlayerReadingPreview;
+    }
+  | {
+      channel: typeof PLAYER_BRIDGE_CHANNEL;
+      version: typeof PLAYER_BRIDGE_VERSION;
       type: "bridge.error";
       requestId?: string;
       payload: { code: PlayerBridgeErrorCode; message: string };
@@ -89,7 +99,8 @@ export function createScoreLoadMessage(
   scoreName: string,
   allowPlayback?: boolean,
   restoreSnapshot?: PlayerSessionSnapshot,
-  language?: PlayerLanguage
+  language?: PlayerLanguage,
+  capturePreview?: boolean
 ): string {
   assertRequestId(requestId);
   const normalizedName = scoreName.trim();
@@ -110,7 +121,8 @@ export function createScoreLoadMessage(
       scoreName: normalizedName,
       ...(allowPlayback === false ? { allowPlayback: false } : {}),
       ...(restoreSnapshot ? { restoreSnapshot } : {}),
-      ...(language ? { language } : {})
+      ...(language ? { language } : {}),
+      ...(capturePreview ? { capturePreview: true } : {})
     }
   });
 }
@@ -155,7 +167,7 @@ export function createPlayerCommandMessage(
 }
 
 export function parsePlayerToHostMessage(raw: unknown): PlayerMessageParseResult {
-  if (typeof raw !== "string" || raw.length === 0 || raw.length > MAX_INCOMING_MESSAGE_LENGTH) {
+  if (typeof raw !== "string" || raw.length === 0 || raw.length > MAX_PLAYER_PREVIEW_BASE64_LENGTH + 512) {
     return invalid("invalid-message");
   }
 
@@ -169,6 +181,15 @@ export function parsePlayerToHostMessage(raw: unknown): PlayerMessageParseResult
   if (!isRecord(value) || value.channel !== PLAYER_BRIDGE_CHANNEL || value.version !== PLAYER_BRIDGE_VERSION) {
     return invalid("invalid-message");
   }
+
+  if (value.type === "reading.preview") {
+    if (!validEnvelopeWithRequest(value) || !isPlayerReadingPreview(value.payload)) return invalid("invalid-message");
+    return { ok: true, message: {
+      channel: PLAYER_BRIDGE_CHANNEL, version: PLAYER_BRIDGE_VERSION,
+      type: "reading.preview", requestId: value.requestId, payload: value.payload
+    } };
+  }
+  if (raw.length > MAX_INCOMING_MESSAGE_LENGTH) return invalid("invalid-message");
 
   if (value.type === "bridge.ready") {
     if (!hasOnlyKeys(value, ["channel", "version", "type", "payload"]) || !isRecord(value.payload)) {
@@ -372,10 +393,21 @@ function validCommands(value: unknown): value is PlayerHostCommand[] {
     && new Set(value).size === value.length;
 }
 
+export function isPlayerReadingPreview(value: unknown): value is PlayerReadingPreview {
+  if (!isRecord(value) || !hasExactKeys(value, ["page", "width", "height", "jpegBase64"])) return false;
+  return validFiniteNumber(value.page, 1, 10_000) && Number.isInteger(value.page)
+    && validFiniteNumber(value.width, 1, 1600) && Number.isInteger(value.width)
+    && validFiniteNumber(value.height, 1, 1600) && Number.isInteger(value.height)
+    && typeof value.jpegBase64 === "string" && value.jpegBase64.length >= 16
+    && value.jpegBase64.length <= MAX_PLAYER_PREVIEW_BASE64_LENGTH
+    && value.jpegBase64.length % 4 === 0
+    && /^\/9j\/[A-Za-z0-9+/]+={0,2}$/.test(value.jpegBase64);
+}
+
 function validCapabilities(value: unknown): value is PlayerBridgeCapability[] {
   return Array.isArray(value)
-    && value.length <= 3
-    && value.every((capability) => capability === "session.snapshot" || capability === "session.restore" || capability === "score.focus")
+    && value.length <= 4
+    && value.every((capability) => capability === "session.snapshot" || capability === "session.restore" || capability === "score.focus" || capability === "reading.preview")
     && new Set(value).size === value.length;
 }
 

@@ -11,7 +11,7 @@
     "ios": {
       "bundleIdentifier": "com.scoretomusicxml.app",
       "icon": "./assets/icon.png",
-      "buildNumber": "16",
+      "buildNumber": "19",
       "supportsTablet": true,
       "infoPlist": {
         "CFBundleLocalizations": ["en", "pt-BR"],

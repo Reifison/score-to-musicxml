@@ -17,13 +17,13 @@ export default function LogsScreen() {
   const isAdmin = user?.role === "admin";
 
   const usersQuery = useQuery({
-    queryKey: ["admin-users"],
+    queryKey: ["admin-users", user?.id ?? null],
     queryFn: () => api.users(token!),
     enabled: Boolean(token && isAdmin)
   });
 
   const auditsQuery = useQuery({
-    queryKey: ["admin-audits"],
+    queryKey: ["admin-audits", user?.id ?? null],
     queryFn: () => api.audits(token!),
     enabled: Boolean(token && isAdmin)
   });

@@ -27,7 +27,7 @@ O contrato consolidado abrange melodia, piano, violão solo e duo. O tipo precis
 
 Parcial é permitido somente quando faltam páginas inteiras, com aviso na prévia e no MusicXML. O player permite ouvir os trechos convertidos e acompanha notas, pausas e páginas; páginas ausentes não são tocadas, e a exportação MIDI de resultados parciais permanece bloqueada. Falta de parte ou pauta obrigatória falha a tentativa inteira.
 
-Cada envio admite uma retentativa automática por falha transitória e uma manual, sem novo débito de scan. Estouro do orçamento de conversão não inicia outra tentativa inteira automaticamente. Uma tentativa falha preserva o resultado anterior. O player móvel requer internet para abrir a superfície HTTPS. A meta de até 2% de eventos incorretos por arquivo e parte permanece uma meta a comprovar, conforme [o contrato](docs/CONVERSION_RELIABILITY.md).
+Cada envio admite uma retentativa automática por falha transitória e uma manual, sem novo débito de scan. Estouro do orçamento de conversão não inicia outra tentativa inteira automaticamente. Uma tentativa falha preserva o resultado anterior. No iOS Release, partituras já preparadas podem ser abertas e reproduzidas sem internet; a preparação inicial depende de conexão. A meta de até 2% de eventos incorretos por arquivo e parte permanece uma meta a comprovar, conforme [o contrato](docs/CONVERSION_RELIABILITY.md).
 
 O player usa piano como timbre padrão, sem exibir seletor de timbre, mensagens sobre bancos de samples ou créditos técnicos na área de reprodução, conforme a preferência do usuário em 2026-10-08. As atribuições dos samples permanecem nos arquivos distribuídos.
 

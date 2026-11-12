@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { Alert } from "react-native";
+import { Alert, Linking } from "react-native";
 import type { ReactNode } from "react";
 import * as i18n from "../i18n";
 import SettingsScreen from "../../app/settings";
@@ -45,6 +45,15 @@ describe("settings purchase access", () => {
     fireEvent.click(screen.getByRole("button", { name: /Conversões ilimitadas/ }));
 
     expect(testState.push).toHaveBeenCalledWith("/scores?paywall=1");
+  });
+
+  it("opens the public privacy policy from settings", async () => {
+    vi.mocked(Linking.openURL).mockResolvedValueOnce(undefined);
+    render(<SettingsScreen />);
+
+    fireEvent.click(screen.getByRole("button", { name: /Política de privacidade/ }));
+
+    await waitFor(() => expect(Linking.openURL).toHaveBeenCalledWith("https://converter.nossateoria.com.br/privacidade"));
   });
 
   it("switches the settings screen language immediately", () => {

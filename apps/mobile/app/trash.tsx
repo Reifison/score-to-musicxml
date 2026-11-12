@@ -18,12 +18,12 @@ type TrashScore = Score & {
 
 export default function TrashScreen() {
   const { t } = useTranslation();
-  const { token } = useAuth();
+  const { token, user } = useAuth();
   const queryClient = useQueryClient();
   const trashQuery = useQuery({
-    queryKey: ["trash-scores"],
+    queryKey: ["trash-scores", user?.id ?? null],
     queryFn: () => api.trashScores(token!),
-    enabled: Boolean(token)
+    enabled: Boolean(token && user?.id)
   });
 
   const restoreMutation = useMutation({
@@ -42,7 +42,7 @@ export default function TrashScreen() {
     }
   });
 
-  const scores = (trashQuery.data?.scores ?? []) as TrashScore[];
+  const scores = (token && user?.id ? trashQuery.data?.scores ?? [] : []) as TrashScore[];
 
   function restore(score: TrashScore) {
     if (restoreMutation.isPending) return;

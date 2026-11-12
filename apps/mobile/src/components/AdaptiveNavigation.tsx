@@ -74,7 +74,7 @@ export function AdaptiveNavigation({ layout, back = false, onBack = backToScores
             style={[styles.item, readerDetails.open && styles.selected]}
           >
             <Ionicons color={colors.primaryDark} name={readerDetails.open ? "close-outline" : "options-outline"} size={23} />
-            <Text style={[styles.label, readerDetails.open && styles.activeLabel]}>{t("Detalhes", "Details")}</Text>
+            <Text style={[styles.label, readerDetails.open && styles.activeLabel]}>{readerDetails.open ? t("Fechar", "Close") : t("Detalhes", "Details")}</Text>
           </Pressable>
         ) : null}
         {rail && utilityItems.map((item) => {

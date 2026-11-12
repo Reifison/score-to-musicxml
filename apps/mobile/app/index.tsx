@@ -203,7 +203,7 @@ export default function IndexScreen() {
           <ScoreTypePicker onChange={setScoreType} value={scoreType} />
           <Pressable disabled={cameraBusy || uploadMutation.isPending} onPress={scanWithCamera} style={[sharedStyles.button, styles.scanButton]}>
             {cameraBusy || uploadMutation.isPending ? <ActivityIndicator color={colors.onPrimary} /> : <Ionicons color={colors.onPrimary} name="camera-outline" size={22} />}
-            <Text style={sharedStyles.buttonText}>{uploadMutation.isPending ? t("Enviando...", "Uploading...") : cameraBusy ? Platform.OS === "ios" ? t("Abrindo scanner...", "Opening scanner...") : t("Abrindo câmera...", "Opening camera...") : t("Escanear partitura", "Scan score")}</Text>
+            <Text style={[sharedStyles.buttonText, styles.scanButtonText]}>{uploadMutation.isPending ? t("Enviando...", "Uploading...") : cameraBusy ? Platform.OS === "ios" ? t("Abrindo scanner...", "Opening scanner...") : t("Abrindo câmera...", "Opening camera...") : t("Escanear partitura", "Scan score")}</Text>
           </Pressable>
           <View style={styles.uploadActions}>
             <Pressable disabled={cameraBusy || uploadMutation.isPending} onPress={pickFile} style={[sharedStyles.button, sharedStyles.buttonSecondary, styles.uploadChoice]}>
@@ -270,7 +270,11 @@ const styles = StyleSheet.create({
     flex: 1
   },
   scanButton: {
-    flexWrap: "wrap"
+    paddingVertical: 8
+  },
+  scanButtonText: {
+    flexShrink: 1,
+    textAlign: "center"
   },
   tile: {
     alignItems: "center",

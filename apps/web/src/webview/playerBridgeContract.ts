@@ -11,7 +11,7 @@ const MAX_HOST_MESSAGE_LENGTH = MAX_PLAYER_MUSICXML_BYTES + 2048;
 const MAX_SCORE_NAME_LENGTH = 256;
 
 export type PlayerHostCommand = "pause" | "stop" | "dispose";
-export type PlayerBridgeCapability = "session.snapshot" | "session.restore" | "score.focus";
+export type PlayerBridgeCapability = "session.snapshot" | "session.restore" | "score.focus" | "reading.preview";
 export type PlayerReadingTarget = { id: string; page?: number; measure?: string };
 
 export type PlayerSessionSnapshot = {
@@ -43,6 +43,7 @@ export type HostToPlayerMessage =
         allowPlayback?: boolean;
         restoreSnapshot?: PlayerSessionSnapshot;
         language?: PlayerLanguage;
+        capturePreview?: boolean;
       };
     }
   | {
@@ -61,6 +62,8 @@ export type HostToPlayerMessage =
       requestId: string;
       payload: { language: PlayerLanguage };
     };
+
+export type PlayerReadingPreview = { page: number; width: number; height: number; jpegBase64: string };
 
 export type PlayerToHostMessage =
   | {
@@ -100,6 +103,13 @@ export type PlayerToHostMessage =
       type: "reading.state";
       requestId: string;
       payload: PlayerSessionSnapshot["reading"];
+    }
+  | {
+      channel: typeof PLAYER_BRIDGE_CHANNEL;
+      version: typeof PLAYER_BRIDGE_VERSION;
+      type: "reading.preview";
+      requestId: string;
+      payload: PlayerReadingPreview;
     }
   | {
       channel: typeof PLAYER_BRIDGE_CHANNEL;
@@ -162,12 +172,13 @@ export function parseHostToPlayerMessage(raw: unknown): PlayerBridgeParseResult 
     if (
       !hasOnlyKeys(value, ["channel", "version", "type", "requestId", "payload"])
       || !isRecord(value.payload)
-      || !hasOnlyRequiredAndOptionalKeys(value.payload, ["musicXml", "scoreName"], ["allowPlayback", "restoreSnapshot", "language"])
+      || !hasOnlyRequiredAndOptionalKeys(value.payload, ["musicXml", "scoreName"], ["allowPlayback", "restoreSnapshot", "language", "capturePreview"])
       || typeof value.payload.musicXml !== "string"
       || typeof value.payload.scoreName !== "string"
       || ("allowPlayback" in value.payload && typeof value.payload.allowPlayback !== "boolean")
       || ("restoreSnapshot" in value.payload && !isPlayerSessionSnapshot(value.payload.restoreSnapshot))
       || ("language" in value.payload && !isPlayerLanguage(value.payload.language))
+      || ("capturePreview" in value.payload && typeof value.payload.capturePreview !== "boolean")
       || !value.payload.scoreName.trim()
       || value.payload.scoreName.trim().length > MAX_SCORE_NAME_LENGTH
       || !isValidMusicXml(value.payload.musicXml)
@@ -186,7 +197,8 @@ export function parseHostToPlayerMessage(raw: unknown): PlayerBridgeParseResult 
           scoreName: value.payload.scoreName.trim(),
           ...(typeof value.payload.allowPlayback === "boolean" ? { allowPlayback: value.payload.allowPlayback } : {}),
           ...(isPlayerSessionSnapshot(value.payload.restoreSnapshot) ? { restoreSnapshot: value.payload.restoreSnapshot } : {}),
-          ...(isPlayerLanguage(value.payload.language) ? { language: value.payload.language } : {})
+          ...(isPlayerLanguage(value.payload.language) ? { language: value.payload.language } : {}),
+          ...(value.payload.capturePreview === true ? { capturePreview: true } : {})
         }
       }
     };

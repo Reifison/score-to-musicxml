@@ -6,7 +6,8 @@ import type { MusicalValidationIssue, Score, VisualCorrectionProposal, VisualNot
 import { useAuth } from "../auth/AuthProvider";
 import { AdaptiveText as Text } from "../adaptive/AdaptiveTypography";
 import { useTranslation } from "../i18n";
-import { reviewIssueLocation } from "../score/reviewPresentation";
+import { localizeMessage } from "../score/localizedMessages";
+import { reviewIssueLocation, reviewSourcePage } from "../score/reviewPresentation";
 import { formatVisualNoteValue, visualReviewLocation } from "../score/sourceVisualReview";
 import { colors } from "../theme/styles";
 
@@ -17,12 +18,13 @@ export type GuidedScoreReviewProps = {
   onLocateIssue?: (issue: MusicalValidationIssue) => void;
   onLocateProposal?: (proposal: VisualCorrectionProposal) => void;
   onScoreChange?: (score: Score) => void | Promise<void>;
+  onJumpTo?: (offset: number) => void;
 };
 
 type LocalScoreOverride = { scoreId: string; sourceRevision: string | null; sourceUpdatedAt: string; value: Score };
 type DecisionAction = "accept" | "reject" | "undo";
 
-export function GuidedScoreReview({ score, originalPreview, resultPreview, onLocateIssue, onLocateProposal, onScoreChange }: GuidedScoreReviewProps) {
+export function GuidedScoreReview({ score, originalPreview, resultPreview, onLocateIssue, onLocateProposal, onScoreChange, onJumpTo }: GuidedScoreReviewProps) {
   const { t } = useTranslation();
   const { token, user } = useAuth();
   const [localOverride, setLocalOverride] = useState<LocalScoreOverride | null>(null);
@@ -44,11 +46,17 @@ export function GuidedScoreReview({ score, originalPreview, resultPreview, onLoc
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
   const [locatedId, setLocatedId] = useState("");
-  const issues = currentScore.validation?.issues ?? [];
+  const sectionOffsets = useRef<Partial<Record<"alerts" | "suggestions", number>>>({});
+  const issues = comparisonAlerts(currentScore);
   const review = currentScore.validation?.visualReview;
   const proposals = review?.proposals ?? [];
   const findingCount = issues.length + proposals.length;
   const pendingCount = proposals.filter((proposal) => proposal.status === "pending").length;
+
+  function jumpToSection(section: "alerts" | "suggestions") {
+    const offset = sectionOffsets.current[section];
+    if (offset !== undefined) onJumpTo?.(offset);
+  }
 
   useEffect(() => {
     mountedRef.current = true;
@@ -68,6 +76,7 @@ export function GuidedScoreReview({ score, originalPreview, resultPreview, onLoc
 
   useEffect(() => {
     setPendingAction(null);
+    setLocatedId("");
   }, [score.id, score.userId, score.updatedAt, score.reviewRevision]);
 
   async function decide(proposal: VisualCorrectionProposal, decision: DecisionAction) {
@@ -127,10 +136,18 @@ export function GuidedScoreReview({ score, originalPreview, resultPreview, onLoc
       <View style={styles.heading}>
         <View style={styles.headingCopy}>
           <Text style={styles.title}>{t("Conferir original e resultado", "Compare the original and result")}</Text>
-          <Text style={styles.description}>{t("Use os apontamentos para localizar trechos. As sugestões disponíveis podem ser aceitas, recusadas ou desfeitas.", "Use the findings to locate passages. Available suggestions can be accepted, rejected, or undone.")}</Text>
+          <Text style={styles.description}>{t("Compare o arquivo original com a partitura convertida. Os alertas indicam o que conferir. Use as sugestões disponíveis para decidir quais correções aplicar.", "Compare the original file with the converted score. Alerts show what to check. Use available suggestions to decide which corrections to apply.")}</Text>
+          {!proposals.length ? <Text style={styles.description}>{t("Nenhuma correção foi sugerida para esta versão. Você pode comparar as partituras e voltar à leitura.", "There are no suggested corrections for this version. You can compare the scores and return to reading.")}</Text> : null}
         </View>
         <Text style={styles.count}>{findingCount === 1 ? t("1 apontamento", "1 finding") : t("{{count}} apontamentos", "{{count}} findings", { count: findingCount })}</Text>
       </View>
+
+      {onJumpTo && (issues.length > 0 || proposals.length > 0) ? (
+        <View style={styles.actions}>
+          {issues.length > 0 ? <ActionButton icon="alert-circle-outline" title={t("Ver alertas", "See alerts")} onPress={() => jumpToSection("alerts")} /> : null}
+          {proposals.length > 0 ? <ActionButton icon="list-outline" title={t("Ver sugestões", "See suggestions")} onPress={() => jumpToSection("suggestions")} /> : null}
+        </View>
+      ) : null}
 
       <View
         onLayout={(event) => {
@@ -150,34 +167,34 @@ export function GuidedScoreReview({ score, originalPreview, resultPreview, onLoc
         </View>
       </View>
 
-      <View style={styles.findings}>
-        {issues.length ? <View style={styles.findingSection}>
-          <Text style={styles.sectionTitle}>{t("Apontamentos", "Findings")}</Text>
+      {issues.length ? <View testID="guided-review-alerts" style={styles.findingSection} onLayout={(event) => { sectionOffsets.current.alerts = event.nativeEvent.layout.y; }}>
+          <Text style={styles.sectionTitle}>{t("Alertas para conferir", "Alerts to check")}</Text>
           {issues.map((issue, index) => {
             const id = `issue:${index}:${issue.code}`;
             const isLocated = locatedId === id;
+            const location = reviewIssueLocation(issue);
+            const canLocate = reviewSourcePage(issue, currentScore.coverage?.totalPages ?? 1) !== undefined || Boolean(issue.measure?.trim());
             return (
               <View key={id} style={[styles.entry, isLocated && styles.entryLocated]}>
                 <View style={styles.entryCopy}>
-                  <Text style={styles.entryTitle}>{issue.severity === "error" ? t("Verificar", "Check") : t("Atenção", "Review")}</Text>
-                  <Text style={styles.entryBody}>{issue.message}</Text>
-                  {!!reviewIssueLocation(issue) && <Text style={styles.entryDetail}>{reviewIssueLocation(issue)}</Text>}
+                  <Text style={styles.entryTitle}>{location || t("Partitura", "Score")}</Text>
+                  <Text style={styles.entryBody}>{localizeMessage(issue.message, issue.code) || t("Compare este trecho com o original.", "Compare this passage with the original.")}</Text>
                 </View>
-                <Pressable
+                {onLocateIssue && canLocate ? <Pressable
                   accessibilityRole="button"
                   accessibilityState={{ selected: isLocated }}
-                  onPress={() => { setLocatedId(id); onLocateIssue?.(issue); }}
+                  onPress={() => { setLocatedId(id); onLocateIssue(issue); onJumpTo?.(0); }}
                   style={({ pressed }) => [styles.outlineButton, isLocated && styles.selectedButton, pressed && styles.pressed]}
                 >
                   <Ionicons color={isLocated ? colors.primaryDark : colors.ink} name="location-outline" size={18} />
                   <Text style={[styles.buttonText, isLocated && styles.selectedButtonText]}>{t("Localizar", "Locate")}</Text>
-                </Pressable>
+                </Pressable> : null}
               </View>
             );
           })}
         </View> : null}
 
-        <View style={styles.findingSection}>
+        <View testID="guided-review-suggestions" style={styles.findingSection} onLayout={(event) => { sectionOffsets.current.suggestions = event.nativeEvent.layout.y; }}>
           <View style={styles.sectionHeading}>
             <Text style={styles.sectionTitle}>{t("Sugestões de nota ou pausa", "Note or rest suggestions")}</Text>
             {review ? <Text style={styles.count}>{pendingCount === 1 ? t("1 pendente", "1 pending") : t("{{count}} pendentes", "{{count}} pending", { count: pendingCount })}</Text> : null}
@@ -197,15 +214,15 @@ export function GuidedScoreReview({ score, originalPreview, resultPreview, onLoc
                   {proposal.status !== "pending" ? <Text style={styles.status}>{proposal.status === "accepted" ? t("Aceita", "Accepted") : automaticRejection ? t("Não aplicada automaticamente", "Not applied automatically") : t("Recusada", "Rejected")}</Text> : null}
                 </View>
                 <View style={styles.actions}>
-                  <Pressable
+                  {onLocateProposal ? <Pressable
                     accessibilityRole="button"
                     accessibilityState={{ selected: isLocated }}
-                    onPress={() => { setLocatedId(proposal.id); onLocateProposal?.(proposal); }}
+                    onPress={() => { setLocatedId(proposal.id); onLocateProposal(proposal); onJumpTo?.(0); }}
                     style={({ pressed }) => [styles.outlineButton, isLocated && styles.selectedButton, pressed && styles.pressed]}
                   >
                     <Ionicons color={isLocated ? colors.primaryDark : colors.ink} name="location-outline" size={18} />
                     <Text style={[styles.buttonText, isLocated && styles.selectedButtonText]}>{t("Localizar", "Locate")}</Text>
-                  </Pressable>
+                  </Pressable> : null}
                   {safe && proposal.status === "pending" ? <>
                     <ActionButton icon="checkmark" title={action === "accept" ? t("Salvando…", "Saving…") : t("Aceitar", "Accept")} disabled={!token || !currentScore.reviewRevision || Boolean(pendingAction)} primary onPress={() => void decide(proposal, "accept")} />
                   </> : null}
@@ -219,15 +236,28 @@ export function GuidedScoreReview({ score, originalPreview, resultPreview, onLoc
             );
           }) : <Text style={styles.empty}>{t("Nenhuma sugestão de nota ou pausa disponível.", "No note or rest suggestions are available.")}</Text>}
         </View>
-      </View>
-
       {notice ? <Text accessibilityLiveRegion="polite" style={styles.notice}>{notice}</Text> : null}
       {error ? <Text accessibilityLiveRegion="assertive" style={styles.error}>{error}</Text> : null}
     </View>
   );
 }
 
-function ActionButton({ icon, title, disabled, primary, onPress }: { icon: React.ComponentProps<typeof Ionicons>["name"]; title: string; disabled: boolean; primary?: boolean; onPress: () => void }) {
+function comparisonAlerts(score: Score): MusicalValidationIssue[] {
+  const issues = score.validation?.issues ?? [];
+  const alerts = score.recognitionQuality?.issues.map((alert) => {
+    const detail = issues.find((issue) => issue.code === alert.code && issue.page === alert.page && issue.measure === alert.measure);
+    return { severity: "warning" as const, ...detail, ...alert };
+  }) ?? issues;
+  const seen = new Set<string>();
+  return alerts.filter((alert) => {
+    const key = JSON.stringify([alert.message, alert.page, alert.measure, alert.partId, alert.staff, alert.voice]);
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
+function ActionButton({ icon, title, disabled, primary, onPress }: { icon: React.ComponentProps<typeof Ionicons>["name"]; title: string; disabled?: boolean; primary?: boolean; onPress: () => void }) {
   return (
     <Pressable accessibilityRole="button" disabled={disabled} onPress={onPress} style={({ pressed }) => [styles.outlineButton, primary && styles.primaryButton, disabled && styles.disabledButton, pressed && styles.pressed]}>
       <Ionicons color={primary ? colors.onPrimary : colors.ink} name={icon} size={18} />
@@ -266,7 +296,6 @@ const styles = StyleSheet.create({
   previewsWide: { flexDirection: "row" },
   previewSection: { gap: 8, minWidth: 0, width: "100%" },
   previewSectionWide: { flexShrink: 1, minWidth: 0 },
-  findings: { gap: 20, minWidth: 0 },
   findingSection: { gap: 7, minWidth: 0 },
   sectionHeading: { alignItems: "baseline", flexDirection: "row", flexWrap: "wrap", gap: 4, justifyContent: "space-between" },
   sectionTitle: { color: colors.ink, fontSize: 16, fontWeight: "800", lineHeight: 22 },

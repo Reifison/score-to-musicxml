@@ -107,6 +107,8 @@ describe("layout do player dedicado", () => {
     const query = "(min-width: 640px) and (max-height: 520px)";
     expect(mediaDeclarations(query, ".native-player-page .score-player", "display")).toContain("grid");
     expect(mediaDeclarations(query, ".native-player-page .playback-controls", "overflow")).toContain("auto");
+    expect(mediaDeclarations(query, ".native-player-page .tempo-control", "flex-basis")).toContain("100%");
+    expect(mediaDeclarations(query, ".native-player-page .tempo-control", "grid-template-columns")).toContain("minmax(0, 1fr)");
     expect(mediaDeclarations(query, ".native-player-page .score-sheet", "grid-row")).toContain("1 / 4");
     expect(mediaDeclarations(query, ".native-player-page .score-pagination", "grid-row")).toContain("4");
   });

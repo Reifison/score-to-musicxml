@@ -2,8 +2,19 @@ import { describe, expect, it } from "vitest";
 import {
   isTrustedPlayerDocument,
   isTrustedPlayerOrigin,
+  resolveBundledPlayerWebViewConfig,
   resolvePlayerWebViewConfig
 } from "./config";
+
+describe("bundled iOS player endpoint", () => {
+  it("trusts only the precise loopback document returned by the native module", () => {
+    const config = resolveBundledPlayerWebViewConfig("http://127.0.0.1:41567/mobile/player");
+    expect(isTrustedPlayerDocument("http://127.0.0.1:41567/mobile/player", config)).toBe(true);
+    expect(isTrustedPlayerDocument("http://127.0.0.1:41568/mobile/player", config)).toBe(false);
+    expect(() => resolveBundledPlayerWebViewConfig("http://127.0.0.1:41567/mobile/player?key=abc")).toThrow();
+    expect(() => resolveBundledPlayerWebViewConfig("http://192.168.0.4:41567/mobile/player")).toThrow();
+  });
+});
 
 describe("resolvePlayerWebViewConfig", () => {
   it("adiciona o caminho dedicado a uma origem HTTPS", () => {

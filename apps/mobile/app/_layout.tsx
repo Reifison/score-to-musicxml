@@ -1,13 +1,16 @@
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { focusManager, QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { Stack } from "expo-router";
 import * as SplashScreen from "expo-splash-screen";
-import { useState } from "react";
-import { StyleSheet, View } from "react-native";
+import { useEffect, useState } from "react";
+import { AppState, StyleSheet, View } from "react-native";
 import { AuthProvider, useAuth } from "../src/auth/AuthProvider";
 import { StartupSplash } from "../src/components/StartupSplash";
 import { FeatureOnboarding } from "../src/onboarding/FeatureOnboarding";
 import { OnboardingProvider, useOnboarding } from "../src/onboarding/OnboardingProvider";
 import { LanguageProvider, useTranslation } from "../src/i18n";
+import { ApiError } from "../src/api/client";
+import { startOfflineScorePreparation } from "../src/player/offlineScorePreparation";
+import { useScoreLibrary } from "../src/score/useScoreLibrary";
 import { colors } from "../src/theme/styles";
 
 void SplashScreen.preventAutoHideAsync().catch(() => undefined);
@@ -29,7 +32,23 @@ export default function RootLayout() {
 }
 
 function AppStack() {
-  const { loading } = useAuth();
+  const { loading, token, user, retrySession } = useAuth();
+  const userId = user?.id;
+  const { library, loadingSaved } = useScoreLibrary(token, userId);
+  const { data: syncedLibrary, dataUpdatedAt, error: libraryError } = library;
+  useEffect(() => {
+    const subscription = AppState.addEventListener("change", (state) => focusManager.setFocused(state === "active"));
+    return () => {
+      subscription.remove();
+      focusManager.setFocused(undefined);
+    };
+  }, []);
+  useEffect(() => {
+    if (token && libraryError instanceof ApiError && libraryError.status === 401) void retrySession();
+  }, [libraryError, retrySession, token]);
+  useEffect(() => {
+    if (token && userId && syncedLibrary) return startOfflineScorePreparation(token, userId, syncedLibrary.scores);
+  }, [dataUpdatedAt, syncedLibrary, token, userId]);
   const { isReady: languageReady } = useTranslation();
   const onboarding = useOnboarding();
   const [opening, setOpening] = useState(true);
@@ -71,7 +90,7 @@ function AppStack() {
           <FeatureOnboarding onFinish={onboarding.finish} />
         </View>
       ) : null}
-      {opening && <StartupSplash onFinish={() => setOpening(false)} ready={!loading && languageReady && onboarding.isReady} />}
+      {opening && <StartupSplash onFinish={() => setOpening(false)} ready={!loading && !loadingSaved && languageReady && onboarding.isReady} />}
     </View>
   );
 }

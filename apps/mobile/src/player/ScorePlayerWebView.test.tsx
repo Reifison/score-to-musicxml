@@ -1,11 +1,13 @@
 // @vitest-environment jsdom
-import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import type { CSSProperties, ReactNode, Ref } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ScorePlayerWebView } from "./ScorePlayerWebView";
+import { IOS_PLAYER_AUDIO_SESSION_SCRIPT } from "./iosAudioSession";
 
 const testState = vi.hoisted(() => ({
   webViewMounts: 0,
+  platform: "ios",
   webViewUnmounts: 0,
   postedMessages: [] as string[],
   injectedScripts: [] as string[],
@@ -17,7 +19,10 @@ const testState = vi.hoisted(() => ({
   cacheLoad: vi.fn(),
   cacheSave: vi.fn(),
   loadSnapshot: vi.fn(),
-  saveSnapshot: vi.fn()
+  saveSnapshot: vi.fn(),
+  memoryPreview: vi.fn(),
+  loadPreview: vi.fn(),
+  savePreview: vi.fn()
 }));
 
 vi.mock("@expo/vector-icons", () => ({ Ionicons: () => null }));
@@ -51,8 +56,11 @@ vi.mock("react-native", () => ({
       return { remove: vi.fn(() => { testState.appStateListener = null; }) };
     }
   },
+  Platform: { get OS() { return testState.platform; } },
+  Image: ({ source, accessibilityLabel, onError }: { source: { uri: string }; accessibilityLabel?: string; onError?: () => void }) =>
+    <img alt={accessibilityLabel} src={source.uri} onError={onError} />,
   Pressable: ({ children, onPress, style }: { children: ReactNode; onPress?: () => void; style?: unknown }) => (
-    <button onClick={onPress} style={style as CSSProperties}>{children}</button>
+    <button onClick={onPress} style={Object.assign({}, ...(Array.isArray(style) ? style : [style]).filter(Boolean)) as CSSProperties}>{children}</button>
   ),
   StyleSheet: {
     absoluteFillObject: { position: "absolute", inset: 0 },
@@ -89,13 +97,17 @@ vi.mock("react-native-webview", async () => {
 vi.mock("../api/client", () => ({ api: { loadMusicXmlForPlayer: testState.loadMusicXmlForPlayer } }));
 vi.mock("./musicXmlCache", () => ({
   loadCachedPlayerMusicXml: testState.cacheLoad,
-  playerCacheIdentity: (score: { id: string; userId: string }) => ({ ...score, cacheRevision: "revision-1" }),
+  playerCacheIdentity: (score: { id: string; userId: string }, sessionUserId = score.userId) => ({ ...score, userId: sessionUserId, cacheRevision: "revision-1" }),
   savePlayerMusicXmlToCache: testState.cacheSave
 }));
+vi.mock("./scoreDetailsCache", () => ({ readCachedScoreDetails: vi.fn(), saveCachedScoreDetails: vi.fn() }));
 vi.mock("./sessionSnapshot", () => ({
   createPlayerSessionLease: (userId: string) => ({ userId, generation: 0, globalGeneration: 0 }),
   loadPlayerSessionSnapshot: testState.loadSnapshot,
-  savePlayerSessionSnapshot: testState.saveSnapshot
+  savePlayerSessionSnapshot: testState.saveSnapshot,
+  getMemoryPlayerReadingPreview: testState.memoryPreview,
+  loadPlayerReadingPreview: testState.loadPreview,
+  savePlayerReadingPreview: testState.savePreview
 }));
 
 const score = {
@@ -111,6 +123,7 @@ const playerUrl = "http://localhost:5173/mobile/player";
 beforeEach(() => {
   vi.stubGlobal("__DEV__", true);
   testState.webViewMounts = 0;
+  testState.platform = "ios";
   testState.webViewUnmounts = 0;
   testState.postedMessages = [];
   testState.injectedScripts = [];
@@ -126,6 +139,9 @@ beforeEach(() => {
     reading: { page: 2, scrollRatio: 0.3 }
   });
   testState.saveSnapshot.mockReset().mockResolvedValue(undefined);
+  testState.memoryPreview.mockReset().mockReturnValue(null);
+  testState.loadPreview.mockReset().mockResolvedValue(null);
+  testState.savePreview.mockReset().mockResolvedValue(undefined);
 });
 
 afterEach(() => {
@@ -134,6 +150,39 @@ afterEach(() => {
 });
 
 describe("ScorePlayerWebView continuity", () => {
+  it("opens prepared notation without making a network request", async () => {
+    testState.cacheLoad.mockResolvedValue("<score-partwise />");
+    render(<ScorePlayerWebView score={score} sessionUserId="user-1" token="token-1" />);
+    await screen.findByTestId("player-webview");
+    sendBridgeHandshake();
+    await waitFor(() => expect(scoreLoads()).toHaveLength(1));
+    expect(testState.loadMusicXmlForPlayer).not.toHaveBeenCalled();
+  });
+
+  it("explains how to prepare a score that has not been saved offline", async () => {
+    testState.loadMusicXmlForPlayer.mockRejectedValue(new Error("offline"));
+    render(<ScorePlayerWebView score={score} sessionUserId="user-1" token="token-1" />);
+    expect(await screen.findByText("Esta partitura ainda não está preparada para uso sem internet. Conecte-se e abra-a novamente.")).toBeTruthy();
+  });
+
+  it("configures the iOS main-frame audio category before the player loads without starting playback", async () => {
+    render(<ScorePlayerWebView score={score} sessionUserId="user-1" token="token-1" />);
+    await screen.findByTestId("player-webview");
+
+    expect(testState.latestProps?.injectedJavaScriptBeforeContentLoaded).toBe(IOS_PLAYER_AUDIO_SESSION_SCRIPT);
+    expect(testState.latestProps?.injectedJavaScriptBeforeContentLoadedForMainFrameOnly).toBe(true);
+    expect(testState.latestProps?.mediaPlaybackRequiresUserAction).toBe(true);
+    expect(playerCommands()).not.toContainEqual({ command: "play" });
+  });
+
+  it("does not inject the iOS audio policy on Android", async () => {
+    testState.platform = "android";
+    render(<ScorePlayerWebView score={score} sessionUserId="user-1" token="token-1" />);
+    await screen.findByTestId("player-webview");
+
+    expect(testState.latestProps?.injectedJavaScriptBeforeContentLoaded).toBeUndefined();
+  });
+
   it("translates the waiting UI and sends a locale change without reloading the score", async () => {
     const view = render(<ScorePlayerWebView score={score} sessionUserId="admin-1" token="token-1" language="en" />);
 
@@ -179,6 +228,7 @@ describe("ScorePlayerWebView continuity", () => {
     await waitFor(() => expect(scoreLoads()).toHaveLength(1));
     expect(testState.loadSnapshot).toHaveBeenCalledTimes(1);
     expect(testState.webViewMounts).toBe(1);
+    expect(scoreLoads()[0].payload.capturePreview).toBeUndefined();
     view.rerender(<ScorePlayerWebView score={score} sessionUserId="admin-1" token="token-1" height={520} />);
     expect(testState.loadSnapshot).toHaveBeenCalledTimes(1);
     expect(scoreLoads()).toHaveLength(1);
@@ -350,6 +400,133 @@ describe("ScorePlayerWebView continuity", () => {
     view.unmount();
   });
 
+  it("loads a changed review revision and ignores a stale status from the previous score", async () => {
+    const oldXml = '<score-partwise><part id="old" /></score-partwise>';
+    const newXml = '<score-partwise><part id="new" /></score-partwise>';
+    testState.loadMusicXmlForPlayer.mockReset().mockResolvedValue(newXml).mockResolvedValueOnce(oldXml);
+    const original = { ...(score as unknown as Record<string, unknown>), reviewRevision: "review-1" } as never;
+    const revised = { ...(score as unknown as Record<string, unknown>), reviewRevision: "review-2" } as never;
+    const view = render(<ScorePlayerWebView score={original} sessionUserId="user-1" token="token-1" />);
+    await screen.findByTestId("player-webview");
+    sendBridgeHandshake();
+    await waitFor(() => expect(scoreLoads()).toHaveLength(1));
+    const previousRequestId = scoreLoads()[0].requestId;
+    sendPlayerMessage("score.status", previousRequestId, { state: "ready" });
+
+    view.rerender(<ScorePlayerWebView score={revised} sessionUserId="user-1" token="token-1" suspended />);
+    await waitFor(() => expect(testState.webViewMounts).toBe(2));
+    sendBridgeHandshake();
+    await waitFor(() => expect(scoreLoads()).toHaveLength(2));
+    expect(scoreLoads()[1].payload.musicXml).toBe(newXml);
+    sendPlayerMessage("score.status", previousRequestId, { state: "ready" });
+    expect(screen.getByText("Renderizando partitura")).toBeTruthy();
+    sendPlayerMessage("score.status", scoreLoads()[1].requestId, { state: "ready" });
+    expect(screen.queryByText("Renderizando partitura")).toBeNull();
+    view.unmount();
+  });
+
+  it("does not read or overwrite the reading snapshot for the comparison player", async () => {
+    const view = render(<ScorePlayerWebView score={score} sessionUserId="user-1" token="token-1" persistSession={false} />);
+    await screen.findByTestId("player-webview");
+    sendBridgeHandshake(["session.snapshot", "session.restore", "score.focus", "reading.preview"]);
+    await waitFor(() => expect(scoreLoads()).toHaveLength(1));
+    expect(testState.loadSnapshot).not.toHaveBeenCalled();
+    expect(testState.loadPreview).not.toHaveBeenCalled();
+    expect(scoreLoads()[0].payload.restoreSnapshot).toBeUndefined();
+    expect(scoreLoads()[0].payload.capturePreview).toBeUndefined();
+
+    const requestId = scoreLoads()[0].requestId;
+    sendPlayerMessage("reading.preview", requestId, { page: 3, width: 800, height: 1200, jpegBase64: "/9j/AAAAAAAAAAAA" });
+    expect(testState.savePreview).not.toHaveBeenCalled();
+    sendPlayerMessage("playback.state", requestId, { state: "playing", positionMs: 4_500, durationMs: 8_000, tempo: 96 });
+    sendPlayerMessage("reading.state", requestId, { page: 3, scrollRatio: 0.65 });
+    view.rerender(<ScorePlayerWebView score={score} sessionUserId="user-1" token="token-1" persistSession={false} suspended />);
+    expect(playerCommands()).toContainEqual({ command: "pause" });
+    view.unmount();
+    expect(testState.saveSnapshot).not.toHaveBeenCalled();
+  });
+
+  it("shows a saved static page while loading and keeps it available with retry after an error", async () => {
+    const preview = { page: 3, width: 800, height: 1200, jpegBase64: "/9j/AAAAAAAAAAAA" };
+    testState.loadPreview.mockResolvedValue(preview);
+    render(<ScorePlayerWebView score={score} sessionUserId="user-1" token="token-1" />);
+    const image = await screen.findByRole("img", { name: "Prévia salva da página 3, somente leitura" });
+    expect(image.getAttribute("src")).toBe(`data:image/jpeg;base64,${preview.jpegBase64}`);
+    expect(screen.getByText("Preparando controles…")).toBeTruthy();
+    expect(screen.queryByText("Preparando player")).toBeNull();
+    expect(screen.queryByText("Renderizando partitura")).toBeNull();
+    const onError = testState.latestProps?.onError as (() => void);
+    act(() => onError());
+    expect(screen.getByRole("img", { name: "Prévia salva da página 3, somente leitura" })).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Tentar novamente" }));
+    await waitFor(() => expect(testState.webViewMounts).toBe(2));
+    expect(screen.getByRole("img", { name: "Prévia salva da página 3, somente leitura" })).toBeTruthy();
+  });
+
+  it("shows a retained memory preview on the first render without waiting for storage", () => {
+    const preview = { page: 4, width: 800, height: 1200, jpegBase64: "/9j/AAAAAAAAAAAA" };
+    testState.memoryPreview.mockReturnValue(preview);
+    render(<ScorePlayerWebView score={score} sessionUserId="user-1" token="token-1" />);
+    expect(screen.getByRole("img", { name: "Prévia salva da página 4, somente leitura" })).toBeTruthy();
+    expect(screen.getByText("Preparando controles…")).toBeTruthy();
+    expect(testState.loadPreview).not.toHaveBeenCalled();
+  });
+
+  it("captures previews only for the active main-player request and compatible bridge", async () => {
+    const preview = { page: 3, width: 800, height: 1200, jpegBase64: "/9j/AAAAAAAAAAAA" };
+    render(<ScorePlayerWebView score={score} sessionUserId="user-1" token="token-1" />);
+    await screen.findByTestId("player-webview");
+    sendBridgeHandshake(["session.snapshot", "session.restore", "score.focus", "reading.preview"]);
+    const onMessage = testState.latestProps?.onMessage as (event: unknown) => void;
+    act(() => onMessage({ nativeEvent: { url: playerUrl, data: JSON.stringify({
+      channel: "score-to-musicxml/player", version: 1, type: "bridge.capabilities",
+      payload: { capabilities: ["session.snapshot", "session.restore"] }
+    }) } }));
+    await waitFor(() => expect(scoreLoads()).toHaveLength(1));
+    expect(scoreLoads()[0].payload.capturePreview).toBe(true);
+    act(() => onMessage({ nativeEvent: { url: "https://untrusted.example/mobile/player", data: JSON.stringify({
+      channel: "score-to-musicxml/player", version: 1, type: "reading.preview",
+      requestId: scoreLoads()[0].requestId, payload: preview
+    }) } }));
+    expect(testState.savePreview).not.toHaveBeenCalled();
+    sendPlayerMessage("reading.preview", "old-request", preview);
+    expect(testState.savePreview).not.toHaveBeenCalled();
+    sendPlayerMessage("reading.preview", scoreLoads()[0].requestId, preview);
+    expect(testState.savePreview).toHaveBeenCalledWith(
+      expect.objectContaining({ userId: "user-1", scoreId: "score-1" }),
+      preview,
+      expect.objectContaining({ userId: "user-1" })
+    );
+    expect(await screen.findByRole("img", { name: "Prévia salva da página 3, somente leitura" })).toBeTruthy();
+  });
+
+  it("does not show a late preview from a previous account", async () => {
+    const previous = deferred<{ page: number; width: number; height: number; jpegBase64: string } | null>();
+    const current = deferred<{ page: number; width: number; height: number; jpegBase64: string } | null>();
+    testState.loadPreview.mockReset().mockReturnValueOnce(previous.promise).mockReturnValueOnce(current.promise);
+    const view = render(<ScorePlayerWebView score={score} sessionUserId="user-1" token="token-1" />);
+    await waitFor(() => expect(testState.loadPreview).toHaveBeenCalledTimes(1));
+    view.rerender(<ScorePlayerWebView score={score} sessionUserId="user-2" token="token-2" />);
+    await waitFor(() => expect(testState.loadPreview).toHaveBeenCalledTimes(2));
+    await act(async () => previous.resolve({ page: 3, width: 800, height: 1200, jpegBase64: "/9j/AAAAAAAAAAAA" }));
+    expect(screen.queryByRole("img")).toBeNull();
+    await act(async () => current.resolve({ page: 4, width: 800, height: 1200, jpegBase64: "/9j/BBBBBBBBBBBB" }));
+    expect(screen.getByRole("img", { name: "Prévia salva da página 4, somente leitura" })).toBeTruthy();
+  });
+
+  it("does not replace a freshly captured page with an older delayed cache read", async () => {
+    const cached = deferred<{ page: number; width: number; height: number; jpegBase64: string } | null>();
+    testState.loadPreview.mockReturnValue(cached.promise);
+    render(<ScorePlayerWebView score={score} sessionUserId="user-1" token="token-1" />);
+    await screen.findByTestId("player-webview");
+    sendBridgeHandshake(["session.snapshot", "session.restore", "score.focus", "reading.preview"]);
+    await waitFor(() => expect(scoreLoads()).toHaveLength(1));
+    sendPlayerMessage("reading.preview", scoreLoads()[0].requestId, { page: 5, width: 800, height: 1200, jpegBase64: "/9j/BBBBBBBBBBBB" });
+    await act(async () => cached.resolve({ page: 2, width: 800, height: 1200, jpegBase64: "/9j/AAAAAAAAAAAA" }));
+    expect(screen.queryByRole("img", { name: "Prévia salva da página 2, somente leitura" })).toBeNull();
+    expect(screen.getByRole("img", { name: "Prévia salva da página 5, somente leitura" })).toBeTruthy();
+  });
+
   it("loads a provisional first page without final XML caching, playback or saved-session state", async () => {
     const view = render(<ScorePlayerWebView
       score={score}
@@ -417,7 +594,7 @@ function deferred<T>() {
   return { promise, reject, resolve };
 }
 
-function sendPlayerMessage(type: "playback.state" | "reading.state" | "score.status", requestId: string, payload: unknown) {
+function sendPlayerMessage(type: "playback.state" | "reading.state" | "reading.preview" | "score.status", requestId: string, payload: unknown) {
   const onMessage = testState.latestProps?.onMessage as ((event: unknown) => void) | undefined;
   if (!onMessage) throw new Error("The player WebView is not mounted.");
   act(() => onMessage({
@@ -434,7 +611,7 @@ function sendPlayerMessage(type: "playback.state" | "reading.state" | "score.sta
   }));
 }
 
-function sendBridgeHandshake() {
+function sendBridgeHandshake(capabilities = ["session.snapshot", "session.restore"]) {
   const onMessage = testState.latestProps?.onMessage as ((event: unknown) => void) | undefined;
   if (!onMessage) throw new Error("The player WebView is not mounted.");
   act(() => {
@@ -456,7 +633,7 @@ function sendBridgeHandshake() {
           channel: "score-to-musicxml/player",
           version: 1,
           type: "bridge.capabilities",
-          payload: { capabilities: ["session.snapshot", "session.restore"] }
+          payload: { capabilities }
         })
       }
     });
@@ -482,9 +659,9 @@ function refocusRoute() {
   };
 }
 
-function scoreLoads(): Array<{ requestId: string; payload: { allowPlayback?: boolean; restoreSnapshot?: unknown; language?: string } }> {
+function scoreLoads(): Array<{ requestId: string; payload: { musicXml?: string; allowPlayback?: boolean; restoreSnapshot?: unknown; language?: string; capturePreview?: boolean } }> {
   return testState.postedMessages
-    .map((message) => JSON.parse(message) as { type: string; requestId: string; payload: { allowPlayback?: boolean; restoreSnapshot?: unknown; language?: string } })
+    .map((message) => JSON.parse(message) as { type: string; requestId: string; payload: { musicXml?: string; allowPlayback?: boolean; restoreSnapshot?: unknown; language?: string; capturePreview?: boolean } })
     .filter((message) => message.type === "score.load");
 }
 

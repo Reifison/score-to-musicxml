@@ -19,6 +19,7 @@ import { RecognitionQualityNotice } from "../../src/components/RecognitionQualit
 import { ScoreTypePicker } from "../../src/components/ScoreTypePicker";
 import { StatusBadge } from "../../src/components/StatusBadge";
 import { ScorePlayerWebView } from "../../src/player/ScorePlayerWebView";
+import { readCachedScoreDetails, saveCachedScoreDetails } from "../../src/player/scoreDetailsCache";
 import { scoreDisplayName, scoreExtension } from "../../src/score/presentation";
 import { scoreTypeLabel } from "../../src/score/scoreTypes";
 import { currentFirstPagePreview } from "../../src/score/firstPagePreview";
@@ -46,12 +47,53 @@ export default function ScoreDetailsScreen() {
     }
   });
 
-  const score = token && user?.id ? scoreQuery.data?.score : undefined;
+  const [cachedDetails, setCachedDetails] = useState<{ userId: string; score: Score }>();
+  useEffect(() => {
+    if (!token || !user?.id || !id) return;
+    const sessionUserId = user.id;
+    let cancelled = false;
+    void readCachedScoreDetails(sessionUserId, id).then((saved) => {
+      if (!cancelled && saved) setCachedDetails({ userId: sessionUserId, score: saved });
+    });
+    return () => { cancelled = true; };
+  }, [id, token, user?.id]);
+  useEffect(() => {
+    if (!token || !user?.id || !scoreQuery.data?.score || scoreQuery.data.score.id !== id) return;
+    try {
+      saveCachedScoreDetails(user.id, scoreQuery.data.score);
+    } catch {
+      // Reading this score still works if the local cache cannot be written.
+    }
+  }, [id, scoreQuery.data, token, user?.id]);
+
+  const library = token && user?.id
+    ? queryClient.getQueryData<{ scores: Score[] }>(["scores", user.id])
+      ?? queryClient.getQueryData<{ scores: Score[] } | null>(["saved-score-library", user.id])
+    : undefined;
+  const listedScore = library?.scores.find((item) => item.id === id);
+  const localScore = cachedDetails && cachedDetails.userId === user?.id && cachedDetails.score.id === id
+    && (!library || listedScore) ? cachedDetails.score : undefined;
+  // The server's list omits attempts; preserve them from the matching stored
+  // details while taking newer list fields such as the name and favorite.
+  const fallbackScore = listedScore && localScore && samePublication(listedScore, localScore)
+    ? listedScore.updatedAt >= localScore.updatedAt ? { ...localScore, ...listedScore } : localScore
+    : listedScore ?? localScore;
+  const status = (scoreQuery.error as { status?: number } | null)?.status;
+  const accessDenied = status === 401 || status === 403 || status === 404;
+  const absentFromLibrary = Boolean(library && !listedScore);
+  const freshServerScore = !absentFromLibrary || (scoreQuery.isFetchedAfterMount && !scoreQuery.isError)
+    ? scoreQuery.data?.score : undefined;
+  const score = token && user?.id && !accessDenied ? freshServerScore ?? fallbackScore : undefined;
   const [originalPage, setOriginalPage] = useState(1);
   const [workspace, setWorkspace] = useState<"reading" | "review" | "versions">("reading");
   const [historicalVersion, setHistoricalVersion] = useState<{ version: ScoreVersion; musicXml: string; userId: string; scoreId: string } | null>(null);
   const [readingTarget, setReadingTarget] = useState<PlayerReadingTarget>();
   const locationSequence = useRef(0);
+  const reviewScrollRef = useRef<ScrollView>(null);
+  const reportedSourcePages = score?.coverage?.totalPages;
+  const totalSourcePages = typeof reportedSourcePages === "number" && Number.isFinite(reportedSourcePages)
+    ? Math.max(1, Math.floor(reportedSourcePages))
+    : 1;
   useEffect(() => {
     setOriginalPage(1);
     setWorkspace("reading");
@@ -68,11 +110,15 @@ export default function ScoreDetailsScreen() {
   }, [id, queryClient, token, user?.id]);
 
   const locateReviewItem = useCallback((item: MusicalValidationIssue | VisualCorrectionProposal) => {
-    if (item.page && item.page > 0) setOriginalPage(item.page);
+    const hasPage = typeof item.page === "number" && Number.isFinite(item.page) && item.page > 0;
+    if (hasPage) setOriginalPage(Math.min(totalSourcePages, Math.max(1, Math.floor(item.page!))));
     if (item.measure) {
       locationSequence.current += 1;
       setReadingTarget({ id: `review-${locationSequence.current}`, measure: item.measure });
-    }
+    } else if (hasPage) setReadingTarget(undefined);
+  }, [totalSourcePages]);
+  const scrollReviewTo = useCallback((offset: number) => {
+    if (Number.isFinite(offset)) reviewScrollRef.current?.scrollTo?.({ y: Math.max(0, offset), animated: true });
   }, []);
   const [originalError, setOriginalError] = useState(false);
   useEffect(() => {
@@ -144,7 +190,7 @@ export default function ScoreDetailsScreen() {
     }
   });
 
-  if (scoreQuery.isLoading) {
+  if (scoreQuery.isLoading && !score) {
     return (
       <ScoreReaderLayout title={t("Partitura", "Score")} details={<Text style={sharedStyles.subtitle}>{t("Carregando os dados da partitura.", "Loading score data.")}</Text>}>
         {() => <View style={styles.loadFailure}><ActivityIndicator color={colors.primary} /></View>}
@@ -176,7 +222,6 @@ export default function ScoreDetailsScreen() {
   const showRetry = hasRetryableResult && !manualRetryUsed;
   const retryNeedsScoreType = score.scoreTypeSelected !== true;
 
-  const totalSourcePages = Math.max(1, score.coverage?.totalPages ?? 1);
   const originalPreview = (
     <View style={[styles.preview, workspace === "review" && styles.reviewOriginal]}>
       {workspace !== "review" ? <View style={styles.previewHeading}>
@@ -201,11 +246,15 @@ export default function ScoreDetailsScreen() {
     </View>
   );
   const visibleHistoricalVersion = historicalVersion?.userId === user?.id && historicalVersion?.scoreId === id ? historicalVersion : null;
+  const openReview = (closeDetails: () => void) => {
+    closeDetails();
+    setWorkspace("review");
+  };
 
   return (
     <ScoreReaderLayout
       title={scoreDisplayName(score)}
-      notice={(openDetails) => <>
+      notice={(openDetails, closeDetails) => <>
         {hasFinalMusicXml ? (
           <View accessibilityRole="tablist" style={styles.workspaceTabs}>
             {([
@@ -214,11 +263,17 @@ export default function ScoreDetailsScreen() {
               ["versions", t("Versões", "Versions")]
             ] as const).map(([mode, label]) => (
               <Pressable key={mode} accessibilityRole="tab" accessibilityState={{ selected: workspace === mode }}
-                onPress={() => setWorkspace(mode)} style={[styles.workspaceTab, workspace === mode && styles.workspaceTabSelected]}>
+                onPress={() => mode === "review" ? openReview(closeDetails) : setWorkspace(mode)} style={[styles.workspaceTab, workspace === mode && styles.workspaceTabSelected]}>
                 <Text style={[styles.workspaceTabText, workspace === mode && styles.workspaceTabTextSelected]}>{label}</Text>
               </Pressable>
             ))}
           </View>
+        ) : null}
+        {workspace === "review" && hasFinalMusicXml ? (
+          <Pressable accessibilityRole="button" onPress={() => { closeDetails(); setWorkspace("reading"); }} style={styles.returnToScore}>
+            <Ionicons color={colors.primaryDark} name="chevron-back" size={19} />
+            <Text style={styles.workspaceTabTextSelected}>{t("Voltar à partitura", "Back to score")}</Text>
+          </Pressable>
         ) : null}
         {historicalVersion && historicalVersion.userId === user?.id && historicalVersion.scoreId === id && workspace === "reading" ? (
           <View style={styles.versionBanner}>
@@ -235,14 +290,21 @@ export default function ScoreDetailsScreen() {
           <Ionicons color={colors.primaryDark} name="chevron-forward" size={19} />
         </Pressable>
       ) : workspace === "reading" && (score.resultStatus === "partial" || score.recognitionQuality?.status === "needs_review") ? (
-        <Pressable accessibilityHint={t("Abre os avisos completos e o arquivo original", "Opens all notices and the original file")} accessibilityRole="button" onPress={openDetails} style={styles.readingNotice}>
+        <Pressable accessibilityHint={hasFinalMusicXml
+          ? t("Abre a conferência entre o original e a partitura", "Opens the comparison between the original and the score")
+          : t("Abre os avisos completos e o arquivo original", "Opens all notices and the original file")}
+          accessibilityRole="button" onPress={hasFinalMusicXml ? () => openReview(closeDetails) : openDetails} style={styles.readingNotice}>
           <Ionicons color={colors.warning} name="information-circle-outline" size={21} />
-          <Text style={styles.readingNoticeText}>{score.resultStatus === "partial" ? t("Conversão parcial · conferir detalhes", "Partial conversion · review details") : score.recognitionQuality?.status === "needs_review" ? t("Revisar partitura com o original", "Review the score against the original") : t("Conferir partitura com o original", "Check the score against the original")}</Text>
+          <Text style={styles.readingNoticeText}>{!hasFinalMusicXml
+            ? t("Ver detalhes da conversão", "View conversion details")
+            : score.resultStatus === "partial"
+              ? t("Conversão parcial · conferir com o original", "Partial conversion · compare with the original")
+              : t("Revisar partitura com o original", "Review the score against the original")}</Text>
           <Ionicons color={colors.warning} name="chevron-forward" size={19} />
         </Pressable>
       ) : null}
       </>}
-      details={<>
+      details={(closeDetails) => <>
         <View style={styles.headerCard}>
           <StatusBadge status={score.conversionStatus} resultStatus={score.resultStatus} recognitionQuality={score.recognitionQuality} />
           <Text style={styles.typeLine}>
@@ -256,6 +318,13 @@ export default function ScoreDetailsScreen() {
             {scoreExtension(score) ? <Text style={styles.extension}>{scoreExtension(score)}</Text> : null}
           </View>
         </View>
+
+        {hasFinalMusicXml ? (
+          <Pressable accessibilityRole="button" onPress={() => openReview(closeDetails)} style={[sharedStyles.button, sharedStyles.buttonSecondary]}>
+            <Ionicons color={colors.ink} name="git-compare-outline" size={19} />
+            <Text style={[sharedStyles.buttonText, sharedStyles.buttonTextSecondary]}>{t("Conferir com o original", "Compare with the original")}</Text>
+          </Pressable>
+        ) : null}
 
         <ScoreConversionProgress language={language} score={score} />
         {hasFinalMusicXml ? <FirstPagePreview score={score} sessionUserId={user?.id ?? ""} token={token!} /> : null}
@@ -331,28 +400,47 @@ export default function ScoreDetailsScreen() {
         </View>
       </>}
     >
-      {({ height, suspended, fontScale }) => currentPreview && !hasFinalMusicXml ? (
-        <FirstPagePreview fontScale={fontScale} height={height} score={score} scrollable sessionUserId={user?.id ?? ""} suspended={suspended} token={token!} />
-      ) : workspace === "review" && hasFinalMusicXml ? (
-        <ScrollView contentContainerStyle={styles.workspaceContent} keyboardShouldPersistTaps="handled">
-          <GuidedScoreReview key={`${user?.id}:${score.id}`} score={score} originalPreview={originalPreview}
-            resultPreview={<ScorePlayerWebView height={420} fontScale={fontScale} score={score} sessionUserId={user?.id ?? ""} suspended={suspended} token={token!} readingTarget={readingTarget} />}
-            onLocateIssue={locateReviewItem} onLocateProposal={locateReviewItem} onScoreChange={updateReviewedScore} />
-        </ScrollView>
-      ) : workspace === "versions" && hasFinalMusicXml ? (
-        <ScrollView contentContainerStyle={styles.workspaceContent} keyboardShouldPersistTaps="handled">
-          <ScoreVersionHistory key={`${user?.id}:${score.id}`} score={score} onOpenVersion={(version, musicXml) => {
-            if (!user?.id || activeSessionRef.current.userId !== user.id || activeSessionRef.current.token !== token || activeSessionRef.current.scoreId !== id) return;
-            setHistoricalVersion(version.isCurrent ? null : { version, musicXml, userId: user.id, scoreId: id });
-            setWorkspace("reading");
-          }} />
-        </ScrollView>
-      ) : (
-        <ScorePlayerWebView fontScale={fontScale} height={height} score={score} sessionUserId={user?.id ?? ""} suspended={suspended} token={token!}
-          versionPreview={visibleHistoricalVersion ? { versionId: visibleHistoricalVersion.version.id, revision: visibleHistoricalVersion.version.revision ?? visibleHistoricalVersion.version.id, musicXml: visibleHistoricalVersion.musicXml } : undefined} />
-      )}
+      {({ height, suspended, fontScale }) => {
+        const readingVisible = !hasFinalMusicXml || workspace === "reading";
+        return <>
+          {currentPreview && !hasFinalMusicXml ? (
+            <FirstPagePreview fontScale={fontScale} height={height} score={score} scrollable sessionUserId={user?.id ?? ""} suspended={suspended} token={token!} />
+          ) : (
+            <View
+              accessibilityElementsHidden={!readingVisible}
+              importantForAccessibility={readingVisible ? "auto" : "no-hide-descendants"}
+              pointerEvents={readingVisible ? "auto" : "none"}
+              style={[styles.retainedPlayer, !readingVisible && styles.retainedPlayerHidden]}
+            >
+              <ScorePlayerWebView key={`${user?.id ?? ""}:${score.id}`} fontScale={fontScale} height={height} score={score} sessionUserId={user?.id ?? ""} suspended={suspended || !readingVisible} token={token!}
+                versionPreview={visibleHistoricalVersion ? { versionId: visibleHistoricalVersion.version.id, revision: visibleHistoricalVersion.version.revision ?? visibleHistoricalVersion.version.id, musicXml: visibleHistoricalVersion.musicXml } : undefined} />
+            </View>
+          )}
+          {workspace === "review" && hasFinalMusicXml ? (
+            <ScrollView ref={reviewScrollRef} contentContainerStyle={styles.workspaceContent} keyboardShouldPersistTaps="handled">
+              <GuidedScoreReview key={`${user?.id}:${score.id}`} score={score} originalPreview={originalPreview}
+                resultPreview={<ScorePlayerWebView height={420} fontScale={fontScale} score={score} sessionUserId={user?.id ?? ""} suspended={suspended} token={token!} readingTarget={readingTarget} persistSession={false} />}
+                onLocateIssue={locateReviewItem} onLocateProposal={locateReviewItem} onScoreChange={updateReviewedScore} onJumpTo={scrollReviewTo} />
+            </ScrollView>
+          ) : workspace === "versions" && hasFinalMusicXml ? (
+            <ScrollView contentContainerStyle={styles.workspaceContent} keyboardShouldPersistTaps="handled">
+              <ScoreVersionHistory key={`${user?.id}:${score.id}`} score={score} onOpenVersion={(version, musicXml) => {
+                if (!user?.id || activeSessionRef.current.userId !== user.id || activeSessionRef.current.token !== token || activeSessionRef.current.scoreId !== id) return;
+                setHistoricalVersion(version.isCurrent ? null : { version, musicXml, userId: user.id, scoreId: id });
+                setWorkspace("reading");
+              }} />
+            </ScrollView>
+          ) : null}
+        </>;
+      }}
     </ScoreReaderLayout>
   );
+}
+
+function samePublication(a: Score, b: Score): boolean {
+  return a.userId === b.userId && a.musicxmlFilename === b.musicxmlFilename
+    && a.convertedAt === b.convertedAt && a.resultStatus === b.resultStatus
+    && a.reviewRevision === b.reviewRevision;
 }
 
 function PartialResultNotice({ score }: { score: Score }) {
@@ -373,6 +461,8 @@ function PartialResultNotice({ score }: { score: Score }) {
 }
 
 const styles = StyleSheet.create({
+  retainedPlayer: { flex: 1, minHeight: 0 },
+  retainedPlayerHidden: { position: "absolute", top: 0, left: 0, width: "100%", height: "100%", opacity: 0 },
   reviewOriginal: { borderWidth: 0, borderRadius: 0, minHeight: 0, backgroundColor: colors.panel },
   reviewPreviewImage: { height: 300 },
   workspaceContent: { padding: 16, gap: 16, paddingBottom: 32 },
@@ -381,6 +471,7 @@ const styles = StyleSheet.create({
   workspaceTabSelected: { backgroundColor: colors.primarySoft },
   workspaceTabText: { color: colors.muted, fontSize: 14, fontWeight: "700" },
   workspaceTabTextSelected: { color: colors.primaryDark, fontSize: 14, fontWeight: "700" },
+  returnToScore: { alignItems: "center", alignSelf: "flex-start", flexDirection: "row", gap: 4, minHeight: 44, paddingHorizontal: 12 },
   versionBanner: { flexDirection: "row", flexWrap: "wrap", alignItems: "center", gap: 8, paddingHorizontal: 12, backgroundColor: colors.surfaceSoft },
   versionBannerText: { color: colors.ink, fontSize: 13, flexGrow: 1 },
   returnCurrent: { minHeight: 44, paddingHorizontal: 8, justifyContent: "center" },

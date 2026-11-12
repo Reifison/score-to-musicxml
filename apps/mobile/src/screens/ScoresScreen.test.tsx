@@ -4,8 +4,10 @@ import { act, cleanup, fireEvent, render, screen } from "@testing-library/react"
 import type { ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import ScoresScreen from "../../app/scores";
+import AsyncStorage from "@react-native-async-storage/async-storage";
 import { ApiError, api } from "../api/client";
 import { configureLanguageController, type Language } from "../i18n";
+import { writeScoreLibrary } from "../score/scoreLibraryStorage";
 
 const testState = vi.hoisted(() => ({
   params: {} as Record<string, string | undefined>,
@@ -18,6 +20,8 @@ const testState = vi.hoisted(() => ({
   requestPurchase: vi.fn(),
   purchaseBinding: vi.fn(),
   onPurchaseError: undefined as ((error: unknown) => void) | undefined,
+  userId: "user-1",
+  token: "token",
   captureDocument: vi.fn(),
   releaseDocument: vi.fn(),
   launchCamera: vi.fn(),
@@ -25,6 +29,7 @@ const testState = vi.hoisted(() => ({
 }));
 
 vi.mock("@expo/vector-icons", () => ({ Ionicons: () => null }));
+vi.mock("@react-native-async-storage/async-storage", () => ({ default: { getItem: vi.fn(), setItem: vi.fn() } }));
 vi.mock("expo-document-picker", () => ({}));
 vi.mock("expo-image-picker", () => ({
   launchCameraAsync: testState.launchCamera,
@@ -48,7 +53,7 @@ vi.mock("expo-iap", () => {
     }
   };
 });
-vi.mock("../auth/AuthProvider", () => ({ useAuth: () => ({ token: "token", user: { id: "user-1", name: "Ana" } }) }));
+vi.mock("../auth/AuthProvider", () => ({ useAuth: () => ({ token: testState.token, user: { id: testState.userId, name: "Ana" } }) }));
 vi.mock("../api/client", () => ({ ApiError: class extends Error {}, api: { scores: vi.fn(), entitlement: vi.fn(), purchaseBinding: testState.purchaseBinding } }));
 vi.mock("../components/AdaptiveScreen", () => ({ AdaptiveScreen: ({ children }: { children: ReactNode }) => <div>{children}</div> }));
 vi.mock("../adaptive/AdaptiveTypography", () => ({ AdaptiveText: ({ children }: { children: ReactNode }) => <span>{children}</span> }));
@@ -114,6 +119,8 @@ beforeEach(() => {
   testState.connected = false;
   testState.products = [];
   testState.onPurchaseError = undefined;
+  testState.userId = "user-1";
+  testState.token = "token";
   testState.setParams.mockImplementation((params: Record<string, string | undefined>) => {
     Object.assign(testState.params, params);
   });
@@ -137,7 +144,7 @@ beforeEach(() => {
   });
   client = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity } } });
   client.setQueryData(["scores", "user-1"], queued);
-  client.setQueryData(["entitlement"], entitlement);
+  client.setQueryData(["entitlement", "user-1"], entitlement);
 });
 
 afterEach(() => {
@@ -156,6 +163,28 @@ async function flush() {
 }
 
 describe("ScoresScreen refresh animation", () => {
+  it("renders the saved library during a cold offline open and isolates it by account", async () => {
+    client.removeQueries({ queryKey: ["scores"] });
+    const disk = new Map<string, string>();
+    vi.mocked(AsyncStorage.setItem).mockImplementation(async (key, value) => { disk.set(key, value); });
+    vi.mocked(AsyncStorage.getItem).mockImplementation(async (key) => disk.get(key) ?? null);
+    await writeScoreLibrary("user-1", converted as Awaited<ReturnType<typeof api.scores>>);
+    const response = deferred<Awaited<ReturnType<typeof api.scores>>>();
+    vi.mocked(api.scores).mockReturnValueOnce(response.promise).mockRejectedValue(new Error("Offline"));
+    vi.mocked(api.entitlement).mockResolvedValue(entitlement as Awaited<ReturnType<typeof api.entitlement>>);
+    const view = mount();
+    await flush();
+    expect(screen.getByTestId("score-list").getAttribute("data-status")).toBe("converted");
+    response.reject(new Error("Offline"));
+    await flush();
+    expect(screen.getByTestId("score-list").getAttribute("data-status")).toBe("converted");
+
+    testState.userId = "user-2";
+    view.rerender(<QueryClientProvider client={client}><ScoresScreen /></QueryClientProvider>);
+    await flush();
+    expect(screen.getByTestId("score-list").getAttribute("data-status")).toBeNull();
+  });
+
   it("polls a pending conversion once per minute silently and stops when it completes", async () => {
     const response = deferred<unknown>();
     vi.mocked(api.scores).mockReturnValue(response.promise as ReturnType<typeof api.scores>);
@@ -200,10 +229,54 @@ describe("ScoresScreen refresh animation", () => {
 });
 
 describe("unlimited conversions paywall", () => {
+  it("does not open the paywall when the plan cannot be loaded and lets the user retry", async () => {
+    client.removeQueries({ queryKey: ["entitlement"] });
+    vi.mocked(api.entitlement).mockRejectedValueOnce(new Error("Offline"));
+    vi.mocked(api.entitlement).mockResolvedValueOnce({ entitlement: { plan: "free", freeScansRemaining: 2, freeScanLimit: 3 } } as Awaited<ReturnType<typeof api.entitlement>>);
+    mount();
+    await flush();
+
+    expect(screen.getByText(/Não foi possível verificar o plano desta conta/)).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Selecionar piano" }));
+    await act(async () => { fireEvent.click(screen.getByRole("button", { name: "Escanear partitura" })); });
+    expect(testState.alert).toHaveBeenCalledWith("Não foi possível verificar o plano", "Verifique sua conexão e tente novamente antes de enviar.");
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(testState.captureDocument).not.toHaveBeenCalled();
+
+    await act(async () => { fireEvent.click(screen.getByRole("button", { name: "Tentar verificar novamente" })); });
+    await flush();
+    expect(api.entitlement).toHaveBeenCalledTimes(2);
+    expect(screen.getByText(/2 de 3 conversões gratuitas restantes/)).toBeTruthy();
+  });
+
+  it("does not show the previous account's plan while the new account is being checked", async () => {
+    testState.params.paywall = "1";
+    client.setQueryData(["entitlement"], entitlement);
+    const nextEntitlement = deferred<unknown>();
+    vi.mocked(api.entitlement).mockReturnValue(nextEntitlement.promise as ReturnType<typeof api.entitlement>);
+    vi.mocked(api.scores).mockResolvedValue({ scores: [] });
+    const view = mount();
+    await flush();
+    expect(screen.getByText("As conversões ilimitadas já estão ativas nesta conta.")).toBeTruthy();
+
+    testState.userId = "user-2";
+    testState.token = "token-2";
+    view.rerender(<QueryClientProvider client={client}><ScoresScreen /></QueryClientProvider>);
+    await flush();
+
+    expect(screen.queryByText("As conversões ilimitadas já estão ativas nesta conta.")).toBeNull();
+    expect(screen.getByText("Verificando o plano desta conta...")).toBeTruthy();
+    expect(api.entitlement).toHaveBeenCalledWith("token-2");
+
+    nextEntitlement.resolve({ entitlement: { plan: "free", freeScansRemaining: 2, freeScanLimit: 3 } });
+    await flush();
+    expect(screen.getByText("Desbloqueie conversões ilimitadas para esta conta.")).toBeTruthy();
+  });
+
   it("opens from a direct route while free scans remain, consumes the route flag, and keeps restore available", async () => {
     testState.params.paywall = "1";
     testState.connected = true;
-    client.setQueryData(["entitlement"], { entitlement: { plan: "free", freeScansRemaining: 2, freeScanLimit: 3 } });
+    client.setQueryData(["entitlement", "user-1"], { entitlement: { plan: "free", freeScansRemaining: 2, freeScanLimit: 3 } });
     mount();
     await flush();
 
@@ -233,7 +306,7 @@ describe("unlimited conversions paywall", () => {
     testState.params.paywall = "1";
     testState.connected = true;
     testState.products = [{ id: "premium_unlock", displayPrice: "R$ 32,90" }];
-    client.setQueryData(["entitlement"], { entitlement: { plan: "paid", freeScansRemaining: 0, freeScanLimit: 3 } });
+    client.setQueryData(["entitlement", "user-1"], { entitlement: { plan: "paid", freeScansRemaining: 0, freeScanLimit: 3 } });
     mount();
     await flush();
 
@@ -250,7 +323,7 @@ describe("purchase cancellation feedback", () => {
     testState.params.paywall = "1";
     testState.connected = true;
     testState.products = [{ id: "premium_unlock", displayPrice: "R$ 32,90" }];
-    client.setQueryData(["entitlement"], { entitlement: { plan: "free", freeScansRemaining: 1, freeScanLimit: 3 } });
+    client.setQueryData(["entitlement", "user-1"], { entitlement: { plan: "free", freeScansRemaining: 1, freeScanLimit: 3 } });
   }
 
   it.each([

@@ -12,8 +12,8 @@ type ReaderViewport = { height: number; suspended: boolean; fontScale: number };
 
 export function ScoreReaderLayout({ title, notice, details, children }: {
   title: string;
-  notice?: ReactNode | ((openDetails: () => void) => ReactNode);
-  details: ReactNode;
+  notice?: ReactNode | ((openDetails: () => void, closeDetails: () => void) => ReactNode);
+  details: ReactNode | ((closeDetails: () => void) => ReactNode);
   children: (viewport: ReaderViewport) => ReactNode;
 }) {
   useTranslation();
@@ -47,7 +47,7 @@ export function ScoreReaderLayout({ title, notice, details, children }: {
               style={[styles.detailsButton, detailsOpen && styles.selectedButton]}
             >
               <Ionicons color={colors.primaryDark} name={detailsOpen ? "close-outline" : "options-outline"} size={23} />
-              {!layout.low && <Text style={styles.detailsLabel}>{t("Detalhes", "Details")}</Text>}
+              {(!layout.low || detailsOpen) && <Text style={styles.detailsLabel}>{detailsOpen ? t("Fechar", "Close") : t("Detalhes", "Details")}</Text>}
             </Pressable>
           ) : null}
         </View>
@@ -58,7 +58,7 @@ export function ScoreReaderLayout({ title, notice, details, children }: {
             pointerEvents={overlayOpen ? "none" : "auto"}
             style={styles.reading}
           >
-            {typeof notice === "function" ? notice(() => setDetailsOpen(true)) : notice}
+            {typeof notice === "function" ? notice(() => setDetailsOpen(true), () => setDetailsOpen(false)) : notice}
             <View onLayout={(event) => setViewportHeight(event.nativeEvent.layout.height)} style={styles.viewport}>
               {children({ height, suspended: overlayOpen, fontScale: layout.fontScale })}
             </View>
@@ -79,7 +79,7 @@ export function ScoreReaderLayout({ title, notice, details, children }: {
                     </Pressable>
                   ) : null}
                 </View>
-                {details}
+                {typeof details === "function" ? details(() => setDetailsOpen(false)) : details}
               </ScrollView>
             </View>
           ) : null}

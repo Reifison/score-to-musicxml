@@ -1,6 +1,6 @@
 # Politica De Privacidade
 
-Última atualização do documento local: 2026-10-06. A publicação em URL pública e as declarações finais das lojas ainda precisam ser conferidas.
+Última atualização do documento local: 2026-11-10. A publicação em URL pública e as declarações finais das lojas ainda precisam ser conferidas.
 
 O Conversor de Partituras converte partituras enviadas pelo usuario em MusicXML, permite gerar MIDI e oferece reproducao visual da partitura.
 
@@ -26,7 +26,7 @@ Imagens sao reencodadas no servidor para remover metadados sensiveis quando viav
 
 O usuário pode mover uma partitura para a lixeira e restaurá-la durante sete dias. Após esse prazo, a limpeza remove o arquivo original, os MusicXML das tentativas e o registro da partitura. Também existe limpeza administrativa configurável para remover partituras antigas e logs de auditoria antigos conforme `SCORE_RETENTION_DAYS` e `AUDIT_RETENTION_DAYS`.
 
-O MIDI é gerado em memória pelo servidor a partir do MusicXML quando solicitado e não é salvo como um novo arquivo permanente no armazenamento do servidor. No aplicativo, o player mantém uma cópia local do MusicXML associada à conta e à revisão do resultado. Sua reutilização expira após sete dias sem abertura; a verificação e remoção ocorrem ao acessar o cache. A cópia pode permanecer no armazenamento do aplicativo até sua limpeza ou remoção do app. Esse cache não garante abertura do player sem internet. No navegador, os dados usados pelo player ficam na memória da página durante a sessão.
+O MIDI é gerado em memória pelo servidor a partir do MusicXML quando solicitado e não é salvo como um novo arquivo permanente no armazenamento do servidor. O aplicativo mantém no aparelho uma cópia da lista e dos detalhes das partituras, além do MusicXML associado à conta e à revisão, para preparar a leitura. Esses dados e revisões anteriores podem permanecer até a remoção dos dados ou do aplicativo, inclusive após sair da conta ou excluir a partitura no servidor. No iOS Release, uma partitura já preparada pode ser aberta e reproduzida sem internet; a preparação inicial e os serviços online precisam de conexão. No navegador, os dados usados pelo player ficam na memória da página durante a sessão.
 
 Um MIDI exportado pode permanecer no cache local do app ate ser substituido ou removido pelo sistema. Copias salvas em Arquivos, MuseScore ou outro app por escolha do usuario passam a seguir as regras de retencao e exclusao desse destino.
 

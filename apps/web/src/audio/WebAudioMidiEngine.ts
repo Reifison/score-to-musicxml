@@ -92,6 +92,7 @@ export class WebAudioMidiEngine {
   private rate: number;
   private readonly baseTempoBpm: number;
   private disposed = false;
+  private playbackStartSequence = 0;
 
   private readonly contextFactory: AudioContextFactory;
   private readonly scheduler: IntervalScheduler;
@@ -163,8 +164,7 @@ export class WebAudioMidiEngine {
       this.emit();
       return;
     }
-    await this.activateAudioFromUserGesture();
-    this.beginPlayback();
+    await this.startPlaybackFromUserGesture();
   }
 
   async playFromUserGesture(): Promise<void> {
@@ -172,6 +172,7 @@ export class WebAudioMidiEngine {
   }
 
   pause(): void {
+    this.playbackStartSequence += 1;
     if (this.state !== "playing") return;
     this.updatePosition();
     this.stopScheduler();
@@ -188,8 +189,7 @@ export class WebAudioMidiEngine {
   async resume(): Promise<void> {
     this.assertUsable();
     if (this.state !== "paused") return;
-    await this.activateAudioFromUserGesture();
-    this.beginPlayback();
+    await this.startPlaybackFromUserGesture();
   }
 
   async resumeFromUserGesture(): Promise<void> {
@@ -197,6 +197,7 @@ export class WebAudioMidiEngine {
   }
 
   stop(): void {
+    this.playbackStartSequence += 1;
     this.stopScheduler();
     this.synth?.stopAll();
     this.currentPositionMs = 0;
@@ -396,6 +397,12 @@ export class WebAudioMidiEngine {
       durationMs: note.durationBeats * millisecondsPerBeat,
       velocity: note.velocity
     })));
+  }
+
+  private async startPlaybackFromUserGesture(): Promise<void> {
+    const sequence = ++this.playbackStartSequence;
+    await this.activateAudioFromUserGesture();
+    if (!this.disposed && sequence === this.playbackStartSequence) this.beginPlayback();
   }
 
   private async activateAudioFromUserGesture(): Promise<void> {

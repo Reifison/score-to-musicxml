@@ -9,6 +9,9 @@ const boot = vi.hoisted(() => ({
   guide: { isReady: true, visible: true, finish: vi.fn(), openGuide: vi.fn() }
 }));
 vi.mock("expo-splash-screen", () => ({ preventAutoHideAsync: vi.fn(async () => undefined) }));
+vi.mock("../api/client", () => ({ ApiError: class extends Error {}, api: {} }));
+vi.mock("../score/scoreLibraryStorage", () => ({ readScoreLibrary: vi.fn(), writeScoreLibrary: vi.fn() }));
+vi.mock("../player/offlineScorePreparation", () => ({ startOfflineScorePreparation: vi.fn() }));
 vi.mock("expo-router", () => {
   const Stack = Object.assign(({ children }: { children: ReactNode }) => <div data-testid="routes">{children}</div>, { Screen: () => null });
   return { Stack };
@@ -36,6 +39,7 @@ vi.mock("../components/StartupSplash", () => ({
   StartupSplash: ({ ready, onFinish }: { ready: boolean; onFinish: () => void }) => <button disabled={!ready} onClick={onFinish}>Finish opening</button>
 }));
 vi.mock("react-native", () => ({
+  AppState: { addEventListener: () => ({ remove: () => undefined }) },
   StyleSheet: { create: (styles: unknown) => styles, absoluteFillObject: {} },
   View: ({ children, accessibilityElementsHidden, importantForAccessibility, pointerEvents, accessibilityViewIsModal }: {
     children: ReactNode; accessibilityElementsHidden?: boolean; importantForAccessibility?: string;

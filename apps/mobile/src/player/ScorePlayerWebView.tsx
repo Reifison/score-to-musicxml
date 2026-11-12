@@ -1,10 +1,9 @@
 import { Ionicons } from "@expo/vector-icons";
 import { useFocusEffect } from "expo-router";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { ActivityIndicator, AppState, Pressable, StyleSheet, View } from "react-native";
+import { ActivityIndicator, AppState, Image, NativeModules, Platform, Pressable, StyleSheet, View } from "react-native";
 import WebView, { type WebViewMessageEvent } from "react-native-webview";
 import { AdaptiveText as Text } from "../adaptive/AdaptiveTypography";
-import { api } from "../api/client";
 import { allowsScorePlayback, canDownloadMusicXml, canPlayScore, canPreviewMusicXml } from "../api/scoreAvailability";
 import type { Score } from "../api/types";
 import { useTranslation, type Language } from "../i18n";
@@ -15,6 +14,7 @@ import {
   createPlayerCommandMessage,
   createPlayerLanguageMessage,
   createPlayerFocusMessage,
+  type PlayerReadingPreview,
   type PlayerReadingTarget,
   createScoreLoadMessage,
   parsePlayerToHostMessage,
@@ -23,6 +23,7 @@ import {
 import {
   isTrustedPlayerDocument,
   isTrustedPlayerOrigin,
+  resolveBundledPlayerWebViewConfig,
   resolvePlayerWebViewConfig,
   type PlayerWebViewConfig
 } from "./config";
@@ -32,11 +33,16 @@ import {
   playerCommandForAppState,
   playerCommandForRouteExit
 } from "./lifecycle";
-import { loadCachedPlayerMusicXml, playerCacheIdentity, savePlayerMusicXmlToCache } from "./musicXmlCache";
+import { playerCacheIdentity } from "./musicXmlCache";
+import { loadPreparedPlayerMusicXml } from "./offlineScorePreparation";
 import { playerLoadIdentity } from "./playerLoadIdentity";
+import { IOS_PLAYER_AUDIO_SESSION_SCRIPT } from "./iosAudioSession";
 import {
   createPlayerSessionLease,
+  getMemoryPlayerReadingPreview,
+  loadPlayerReadingPreview,
   loadPlayerSessionSnapshot,
+  savePlayerReadingPreview,
   savePlayerSessionSnapshot,
   type PlayerSessionLease,
   type PlayerPlaybackSnapshot,
@@ -67,6 +73,7 @@ type ScorePlayerWebViewProps = {
   readingTarget?: PlayerReadingTarget;
   height?: number;
   suspended?: boolean;
+  persistSession?: boolean;
   fontScale?: number;
   language?: Language;
   onStateChange?: (state: ScorePlayerWebViewState) => void;
@@ -93,6 +100,7 @@ export function ScorePlayerWebView({
   readingTarget,
   height = DEFAULT_PLAYER_HEIGHT,
   suspended = false,
+  persistSession = true,
   fontScale = 1,
   language: languageOverride,
   onStateChange
@@ -102,6 +110,8 @@ export function ScorePlayerWebView({
   const text = useCallback<PlayerText>((portuguese, english) => (
     language === appLanguage ? t(portuguese, english) : language === "pt" ? portuguese : english
   ), [appLanguage, language, t]);
+  const textRef = useRef(text);
+  textRef.current = text;
   const languageRef = useRef<Language>(language);
   languageRef.current = language;
   const [retryKey, setRetryKey] = useState(0);
@@ -116,7 +126,7 @@ export function ScorePlayerWebView({
     ? JSON.stringify(["first-page-preview", sessionUserId, score.id, firstPagePreview.attemptId, firstPagePreview.revision])
     : playerLoadIdentity(score);
   const reportedLoadIdentityRef = useRef(loadIdentity);
-  const bridgeInstanceKey = `${score.id}-${retryKey}`;
+
   const webViewRef = useRef<WebView>(null);
   const activeRequestIdRef = useRef<string | null>(null);
   const activeRequestLoadIdentityRef = useRef<string | null>(null);
@@ -135,6 +145,7 @@ export function ScorePlayerWebView({
   const [musicXml, setMusicXml] = useState<string | null>(null);
   const [state, setState] = useState<ScorePlayerWebViewState>("downloading");
   const [error, setError] = useState("");
+  const previewLoadGenerationRef = useRef(0);
   const playbackSnapshotRef = useRef<PlayerPlaybackSnapshot>(INITIAL_PLAYBACK_SNAPSHOT);
   const readingSnapshotRef = useRef<PlayerReadingSnapshot>({ page: 1, scrollRatio: 0 });
   const lastSnapshotPersistedAtRef = useRef(0);
@@ -145,20 +156,46 @@ export function ScorePlayerWebView({
     revision: loadIdentity
   }), [loadIdentity, score.id, sessionUserId]);
   const snapshotLease = useMemo<PlayerSessionLease | null>(
-    () => documentPreview ? null : createPlayerSessionLease(sessionUserId),
-    [firstPagePreview?.attemptId, firstPagePreview?.revision, versionPreview?.versionId, versionPreview?.revision, sessionUserId]
+    () => documentPreview || !persistSession ? null : createPlayerSessionLease(sessionUserId),
+    [firstPagePreview?.attemptId, firstPagePreview?.revision, versionPreview?.versionId, versionPreview?.revision, persistSession, sessionUserId, loadIdentity]
   );
+  const previewIdentity = JSON.stringify([snapshotIdentity.userId, snapshotIdentity.scoreId, snapshotIdentity.revision]);
+  const [cachedPreview, setCachedPreview] = useState<{ identity: string; preview: PlayerReadingPreview } | null>(() => {
+    const preview = snapshotLease && canPreview ? getMemoryPlayerReadingPreview(snapshotIdentity, snapshotLease) : null;
+    return preview ? { identity: previewIdentity, preview } : null;
+  });
+  const visiblePreview = snapshotLease && canPreview && cachedPreview?.identity === previewIdentity ? cachedPreview.preview : null;
   const snapshotLoadGenerationRef = useRef(0);
   const sentLanguageRef = useRef<{ requestId: string; language: Language } | null>(null);
-  const bridgeReady = readyBridgeInstance === bridgeInstanceKey;
-  const currentCapabilityHandshake = capabilityHandshake?.bridgeInstance === bridgeInstanceKey ? capabilityHandshake : null;
-  const capabilitiesSettled = currentCapabilityHandshake?.settled === true;
-  const bridgeCapabilities = currentCapabilityHandshake?.capabilities ?? EMPTY_BRIDGE_CAPABILITIES;
   const resolvedHeight = Number.isFinite(height) && height >= 0 ? height : DEFAULT_PLAYER_HEIGHT;
-  const cacheIdentity = useMemo(() => documentPreview ? null : playerCacheIdentity(score), [firstPagePreview?.attemptId, firstPagePreview?.revision, versionPreview?.versionId, versionPreview?.revision, loadIdentity]);
-  const downloadScore = useMemo(() => ({ id: score.id, userId: score.userId }), [score.id, score.userId]);
+  const cacheIdentity = useMemo(() => documentPreview ? null : playerCacheIdentity(score, sessionUserId), [firstPagePreview?.attemptId, firstPagePreview?.revision, versionPreview?.versionId, versionPreview?.revision, loadIdentity, sessionUserId]);
 
+  const usesBundledPlayer = Platform.OS === "ios" && !__DEV__;
+  const [bundledPlayer, setBundledPlayer] = useState<{ retryKey: number; config: PlayerWebViewConfig | null }>();
+  useEffect(() => {
+    if (!usesBundledPlayer || !canPreview) return;
+    let cancelled = false;
+    void (async () => {
+      let config: PlayerWebViewConfig | null = null;
+      try {
+        const url: unknown = await NativeModules.BundledScorePlayer.getURL();
+        config = resolveBundledPlayerWebViewConfig(url);
+      } catch {
+        // The native reader is unavailable. Retry can restart its listener.
+      }
+      if (!cancelled) setBundledPlayer({ retryKey, config });
+    })();
+    return () => { cancelled = true; };
+  }, [canPreview, retryKey, usesBundledPlayer]);
+
+  const bundledPlayerStarting = usesBundledPlayer && bundledPlayer?.retryKey !== retryKey;
   const configResult = useMemo(() => {
+    if (usesBundledPlayer) {
+      if (bundledPlayer?.retryKey === retryKey && bundledPlayer.config) {
+        return { ok: true as const, value: bundledPlayer.config };
+      }
+      return { ok: false as const, message: text("Não foi possível iniciar o leitor do app.", "Could not start the app’s score reader.") };
+    }
     try {
       return {
         ok: true as const,
@@ -170,7 +207,12 @@ export function ScorePlayerWebView({
         message: configError instanceof Error ? configError.message : text("O player não está configurado.", "The player is not configured.")
       };
     }
-  }, [language, text]);
+  }, [bundledPlayer, language, retryKey, text, usesBundledPlayer]);
+  const bridgeInstanceKey = `${score.id}-${retryKey}-${configResult.ok ? configResult.value.origin : ""}`;
+  const bridgeReady = readyBridgeInstance === bridgeInstanceKey;
+  const currentCapabilityHandshake = capabilityHandshake?.bridgeInstance === bridgeInstanceKey ? capabilityHandshake : null;
+  const capabilitiesSettled = currentCapabilityHandshake?.settled === true;
+  const bridgeCapabilities = currentCapabilityHandshake?.capabilities ?? EMPTY_BRIDGE_CAPABILITIES;
 
   useEffect(() => {
     if (reportedLoadIdentityRef.current !== loadIdentity) {
@@ -179,9 +221,9 @@ export function ScorePlayerWebView({
       return;
     }
     if (!canPreview) onStateChange?.("empty");
-    else if (!configResult.ok) onStateChange?.("error");
+    else if (!configResult.ok) onStateChange?.(bundledPlayerStarting ? "waiting-webview" : "error");
     else onStateChange?.(state);
-  }, [canPreview, configResult, loadIdentity, onStateChange, state]);
+  }, [bundledPlayerStarting, canPreview, configResult, loadIdentity, onStateChange, state]);
 
   const sendPlayerCommand = useCallback((command: "pause" | "stop" | "dispose") => {
     const requestId = activeRequestIdRef.current;
@@ -215,9 +257,29 @@ export function ScorePlayerWebView({
   }, [snapshotIdentity]);
 
   useEffect(() => {
+    const generation = ++previewLoadGenerationRef.current;
+    let cancelled = false;
+    const preview = snapshotLease && canPreview ? getMemoryPlayerReadingPreview(snapshotIdentity, snapshotLease) : null;
+    if (preview) {
+      setCachedPreview((current) => current?.identity === previewIdentity && current.preview === preview
+        ? current : { identity: previewIdentity, preview });
+      return () => { cancelled = true; };
+    }
+    setCachedPreview(null);
+    if (snapshotLease && canPreview) {
+      void loadPlayerReadingPreview(snapshotIdentity, snapshotLease).then((preview) => {
+        if (!cancelled && generation === previewLoadGenerationRef.current && preview) {
+          setCachedPreview({ identity: previewIdentity, preview });
+        }
+      }).catch(() => undefined);
+    }
+    return () => { cancelled = true; };
+  }, [canPreview, previewIdentity, snapshotIdentity, snapshotLease]);
+
+  useEffect(() => {
     if (!canPreview || !configResult.ok) return;
     let cancelled = false;
-    sendPlayerCommand("stop");
+    sendPlayerCommand("dispose");
     activeRequestIdRef.current = null;
     setMusicXml(null);
     setError("");
@@ -240,18 +302,9 @@ export function ScorePlayerWebView({
 
     if (!cacheIdentity) return;
 
-    void loadCachedPlayerMusicXml(cacheIdentity)
-      .then((cachedDocument) => cachedDocument ?? api.loadMusicXmlForPlayer(token, downloadScore, previewOnly)
-        .then((downloadedDocument) => {
-          try {
-            savePlayerMusicXmlToCache(cacheIdentity, downloadedDocument);
-          } catch {
-            // The current download remains usable if persistent storage fails.
-          }
-          return downloadedDocument;
-        }))
+    void loadPreparedPlayerMusicXml(token, sessionUserId, score, () => !cancelled)
       .then((document) => {
-        if (cancelled) return;
+        if (cancelled || !document) return;
         setMusicXml(document);
         setState("waiting-webview");
       })
@@ -261,7 +314,7 @@ export function ScorePlayerWebView({
           setError(loadError.message);
           setState(loadError.code === "empty" ? "empty" : "error");
         } else {
-          setError("O player precisa de uma conexão com a internet para abrir a partitura. Verifique sua conexão e tente novamente.");
+          setError(textRef.current("Esta partitura ainda não está preparada para uso sem internet. Conecte-se e abra-a novamente.", "This score is not yet prepared for offline use. Connect to the internet and open it again."));
           setState("error");
         }
       });
@@ -269,7 +322,7 @@ export function ScorePlayerWebView({
     return () => {
       cancelled = true;
     };
-  }, [cacheIdentity, canPreview, configResult.ok, downloadScore, firstPagePreview?.attemptId, firstPagePreview?.musicXml, firstPagePreview?.revision, versionPreview?.versionId, versionPreview?.musicXml, versionPreview?.revision, loadIdentity, previewOnly, retryKey, sendPlayerCommand, token]);
+  }, [cacheIdentity, canPreview, configResult.ok, firstPagePreview?.attemptId, firstPagePreview?.musicXml, firstPagePreview?.revision, versionPreview?.versionId, versionPreview?.musicXml, versionPreview?.revision, loadIdentity, previewOnly, retryKey, sendPlayerCommand, sessionUserId, token]);
 
   useEffect(() => {
     if (!bridgeReady || !capabilitiesSettled || !musicXml || !webViewRef.current) return;
@@ -297,7 +350,8 @@ export function ScorePlayerWebView({
           score.originalFilename,
           playbackPermission,
           canRestore ? storedSnapshot ?? undefined : undefined,
-          languageRef.current
+          languageRef.current,
+          Boolean(snapshotLease && bridgeCapabilities.includes("reading.preview"))
         );
         const webView = webViewRef.current;
         if (!webView) return;
@@ -411,11 +465,14 @@ export function ScorePlayerWebView({
     if (message.type === "bridge.capabilities") {
       if (capabilityTimerRef.current) clearTimeout(capabilityTimerRef.current);
       capabilityTimerRef.current = null;
-      setCapabilityHandshake({
+      setCapabilityHandshake((current) => ({
         bridgeInstance: bridgeInstanceKey,
-        capabilities: message.payload.capabilities,
+        capabilities: [...new Set([
+          ...(current?.bridgeInstance === bridgeInstanceKey ? current.capabilities : []),
+          ...message.payload.capabilities
+        ])],
         settled: true
-      });
+      }));
       return;
     }
     if (message.requestId && message.requestId !== activeRequestIdRef.current) return;
@@ -430,6 +487,14 @@ export function ScorePlayerWebView({
     if (message.type === "reading.state") {
       readingSnapshotRef.current = message.payload;
       scheduleSnapshotPersist();
+      return;
+    }
+
+    if (message.type === "reading.preview") {
+      if (!snapshotLease || !bridgeCapabilities.includes("reading.preview")) return;
+      previewLoadGenerationRef.current += 1;
+      setCachedPreview({ identity: previewIdentity, preview: message.payload });
+      void savePlayerReadingPreview(snapshotIdentity, message.payload, snapshotLease).catch(() => undefined);
       return;
     }
 
@@ -450,7 +515,7 @@ export function ScorePlayerWebView({
         : "O visualizador não conseguiu abrir esta prévia sem reprodução. Verifique a conexão e use uma versão compatível do app.");
       setState("error");
     }
-  }, [bridgeInstanceKey, configResult, canPlay, loadIdentity, scheduleSnapshotPersist]);
+  }, [bridgeCapabilities, bridgeInstanceKey, configResult, canPlay, loadIdentity, previewIdentity, scheduleSnapshotPersist, snapshotIdentity, snapshotLease]);
 
   useEffect(() => {
     if (!bridgeReady || !webViewRef.current) return;
@@ -522,16 +587,34 @@ export function ScorePlayerWebView({
     );
   }
 
-  if (!configResult.ok) {
-    return <PlayerNotice icon="warning-outline" message={configResult.message} title={text("Player indisponível", "Player unavailable")} />;
-  }
-
-  const config = configResult.value;
-  const showBlockingNotice = state !== "ready";
+  const config = configResult.ok ? configResult.value : undefined;
+  const displayState = config ? state : bundledPlayerStarting ? "waiting-webview" : "error";
+  const showBlockingNotice = displayState !== "ready";
+  const displayError = configResult.ok ? error : configResult.message;
+  const noticeContent = <>
+    {displayState === "error" || displayState === "empty" ? (
+      <Ionicons color={displayState === "error" ? colors.danger : colors.muted} name={displayState === "error" ? "warning-outline" : "musical-notes-outline"} size={28} />
+    ) : (
+      <ActivityIndicator color={colors.primary} />
+    )}
+    <Text style={styles.noticeTitle}>{playerStateTitle(displayState, text)}</Text>
+    <Text style={styles.noticeMessage}>{displayState === "error" ? localizeMobilePlayerError(displayError, language, text) : playerStateMessage(displayState, text)}</Text>
+    {displayState === "error" ? (
+      <Pressable
+        accessibilityHint={text("Tenta baixar a partitura e carregar o player novamente", "Downloads the score and loads the player again")}
+        accessibilityRole="button"
+        onPress={() => setRetryKey((current) => current + 1)}
+        style={[sharedStyles.button, styles.retryButton]}
+      >
+        <Ionicons color={colors.onPrimary} name="refresh-outline" size={18} />
+        <Text style={sharedStyles.buttonText}>{text("Tentar novamente", "Try again")}</Text>
+      </Pressable>
+    ) : null}
+  </>;
 
   return (
     <View style={[styles.container, { height: resolvedHeight }]}>
-      <WebView
+      {config ? <WebView
         ref={webViewRef}
         key={bridgeInstanceKey}
         source={{ uri: config.url }}
@@ -542,6 +625,8 @@ export function ScorePlayerWebView({
         onHttpError={failWebView}
         onContentProcessDidTerminate={failWebView}
         javaScriptEnabled
+        injectedJavaScriptBeforeContentLoaded={Platform.OS === "ios" ? IOS_PLAYER_AUDIO_SESSION_SCRIPT : undefined}
+        injectedJavaScriptBeforeContentLoadedForMainFrameOnly
         javaScriptCanOpenWindowsAutomatically={false}
         setSupportMultipleWindows={false}
         sharedCookiesEnabled={false}
@@ -563,27 +648,31 @@ export function ScorePlayerWebView({
         pullToRefreshEnabled={false}
         nestedScrollEnabled
         style={styles.webView}
-      />
-      {showBlockingNotice ? (
-        <View accessibilityLiveRegion="polite" style={styles.overlay}>
-          {state === "error" || state === "empty" ? (
-            <Ionicons color={state === "error" ? colors.danger : colors.muted} name={state === "error" ? "warning-outline" : "musical-notes-outline"} size={28} />
+      /> : null}
+      {showBlockingNotice && visiblePreview ? (
+        <View style={styles.previewOverlay}>
+          <Image
+            accessibilityLabel={text(`Prévia salva da página ${visiblePreview.page}, somente leitura`, `Saved preview of page ${visiblePreview.page}, read only`)}
+            source={{ uri: `data:image/jpeg;base64,${visiblePreview.jpegBase64}` }}
+            onError={() => setCachedPreview(null)}
+            resizeMode="contain"
+            style={styles.previewImage}
+          />
+          {displayState === "error" || displayState === "empty" ? (
+            <View accessibilityLiveRegion="polite" style={styles.previewNotice}>
+              <Text style={styles.previewLabel}>{text(`Prévia salva · página ${visiblePreview.page}`, `Saved preview · page ${visiblePreview.page}`)}</Text>
+              {noticeContent}
+            </View>
           ) : (
-            <ActivityIndicator color={colors.primary} />
+            <View accessibilityLiveRegion="polite" style={styles.previewLoading}>
+              <ActivityIndicator color={colors.primary} size="small" />
+              <Text style={styles.previewLabel}>{text("Preparando controles…", "Preparing controls…")}</Text>
+            </View>
           )}
-          <Text style={styles.noticeTitle}>{playerStateTitle(state, text)}</Text>
-          <Text style={styles.noticeMessage}>{state === "error" ? localizeMobilePlayerError(error, language, text) : playerStateMessage(state, text)}</Text>
-          {state === "error" ? (
-            <Pressable
-              accessibilityHint={text("Tenta baixar a partitura e carregar o player novamente", "Downloads the score and loads the player again")}
-              accessibilityRole="button"
-              onPress={() => setRetryKey((current) => current + 1)}
-              style={[sharedStyles.button, styles.retryButton]}
-            >
-              <Ionicons color={colors.onPrimary} name="refresh-outline" size={18} />
-              <Text style={sharedStyles.buttonText}>{text("Tentar novamente", "Try again")}</Text>
-            </Pressable>
-          ) : null}
+        </View>
+      ) : showBlockingNotice ? (
+        <View accessibilityLiveRegion="polite" style={styles.overlay}>
+          {noticeContent}
         </View>
       ) : null}
     </View>
@@ -678,6 +767,14 @@ const styles = StyleSheet.create({
     justifyContent: "center",
     padding: 24
   },
+  previewOverlay: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: colors.panel
+  },
+  previewImage: { flex: 1, minHeight: 0, width: "100%" },
+  previewLoading: { alignItems: "center", backgroundColor: colors.panel, flexDirection: "row", gap: 8, justifyContent: "center", padding: 6 },
+  previewNotice: { alignItems: "center", backgroundColor: colors.panel, gap: 6, paddingHorizontal: 16, paddingVertical: 10 },
+  previewLabel: { color: colors.muted, fontSize: 12, fontWeight: "600", textAlign: "center" },
   retryButton: {
     marginTop: 8,
     minHeight: 48

@@ -1,4 +1,5 @@
 import Expo
+import AVFoundation
 import React
 import ReactAppDependencyProvider
 
@@ -33,6 +34,13 @@ public class AppDelegate: ExpoAppDelegate {
     reactNativeFactory = factory
     bindReactNativeFactory(factory)
     appLaunchOptions = launchOptions
+
+    // Configure score playback without activating the audio session.
+    do {
+      try AVAudioSession.sharedInstance().setCategory(.playback, mode: .default)
+    } catch {
+      NSLog("Unable to configure score playback audio session: %@", error.localizedDescription)
+    }
 
     // SceneDelegate creates the window and starts React Native after UIKit connects a scene.
 

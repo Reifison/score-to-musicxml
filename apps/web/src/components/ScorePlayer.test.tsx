@@ -65,6 +65,12 @@ class FakeAudioContext {
   }
 }
 
+async function enabledButton(name: string) {
+  const button = await screen.findByRole("button", { name });
+  await waitFor(() => expect(button).toBeEnabled());
+  return button;
+}
+
 function renderer(pageCount = 2) {
   const midi = new Midi();
   midi.header.setTempo(120);
@@ -96,6 +102,36 @@ describe("ScorePlayer", () => {
     FakeResizeObserver.instances = [];
     vi.stubGlobal("AudioContext", FakeAudioContext);
     vi.stubGlobal("matchMedia", vi.fn(() => ({ matches: false })));
+  });
+
+  it("exibe a partitura antes de preparar o MIDI", async () => {
+    const engine = renderer();
+    vi.mocked(createVerovioScoreRenderer).mockResolvedValue(engine as never);
+    const midiCallsWhenReady: number[] = [];
+    render(<ScorePlayer musicXml="<score-partwise />" scoreName="Estudo.musicxml" onStatusChange={(state) => {
+      if (state === "ready") midiCallsWhenReady.push(engine.renderMidiBytes.mock.calls.length);
+    }} />);
+
+    expect(await screen.findByRole("region", { name: "Partitura rolável" })).toBeInTheDocument();
+    await enabledButton("Reproduzir partitura");
+    expect(midiCallsWhenReady).toEqual([0]);
+    expect(engine.renderMidiBytes).toHaveBeenCalledOnce();
+  });
+
+  it("localiza um compasso quando o alvo chega antes do mapa de reprodução", async () => {
+    const engine = renderer();
+    engine.getPageForElement.mockImplementation((id) => {
+      if (id === "review-alert") throw new Error("Identificador do alerta");
+      return 2;
+    });
+    engine.getMeasureOccurrences.mockReturnValue([
+      { id: "measure-2", sourceId: "measure-2", number: "7", occurrence: 1, occurrenceCount: 1, startMs: 0, endMs: 1_000 }
+    ]);
+    vi.mocked(createVerovioScoreRenderer).mockResolvedValue(engine as never);
+    render(<ScorePlayer musicXml="<score-partwise />" scoreName="Estudo.musicxml"
+      readingTarget={{ id: "review-alert", measure: "7" }} />);
+
+    expect(await screen.findByText("Página 2 de 2")).toBeInTheDocument();
   });
 
   it("mostra carregamento enquanto MusicXML e motor são preparados", () => {
@@ -171,7 +207,7 @@ describe("ScorePlayer", () => {
     expect(await screen.findByText("Page 1 of 2")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Play score" })).toBeInTheDocument();
     expect(screen.getByRole("region", { name: "Scrollable score" })).toBeInTheDocument();
-    expect(screen.getByText("Follow the highlighted notes and rests during playback.")).toBeInTheDocument();
+    expect(await screen.findByText("Follow the highlighted notes and rests during playback.")).toBeInTheDocument();
     expect(view.container.querySelector('svg[aria-label="Digital score: Estudo.musicxml"]')).not.toBeNull();
     expect(screen.getByRole("slider", { name: "Tempo" })).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Next page" }));
@@ -195,7 +231,7 @@ describe("ScorePlayer", () => {
       page: 2,
       measure: undefined
     });
-    fireEvent.click(screen.getByRole("button", { name: "Reproduzir partitura" }));
+    fireEvent.click(await enabledButton("Reproduzir partitura"));
     expect(await screen.findByRole("button", { name: "Pausar partitura" })).toBeInTheDocument();
     FakeAudioContext.instances[0].currentTime = 0.6;
     await waitFor(() => expect(screen.getByRole("slider", { name: "Posição da reprodução" })).toHaveValue("600"));
@@ -245,7 +281,7 @@ describe("ScorePlayer", () => {
     vi.mocked(createVerovioScoreRenderer).mockResolvedValue(engine as never);
     const view = render(<ScorePlayer musicXml="<score-partwise />" scoreName="Estudo.musicxml" scoreRevision="revision-a" />);
 
-    const repeatButton = await screen.findByRole("button", { name: "Repetir trecho" });
+    const repeatButton = await enabledButton("Repetir trecho");
     fireEvent.click(repeatButton);
     expect(screen.getByRole("combobox", { name: "Compasso inicial" })).toHaveValue("measure-1:0:0");
     expect(screen.getByRole("combobox", { name: "Compasso final" })).toHaveValue("measure-2:1:500");
@@ -264,8 +300,8 @@ describe("ScorePlayer", () => {
     vi.mocked(createVerovioScoreRenderer).mockResolvedValue(engine as never);
     const view = render(<ScorePlayer musicXml="<score-partwise />" scoreName="Estudo.musicxml" scoreRevision="revision-a" />);
 
-    fireEvent.click(await screen.findByRole("button", { name: "Repetir trecho" }));
-    fireEvent.click(screen.getByRole("button", { name: "Reproduzir partitura" }));
+    fireEvent.click(await enabledButton("Repetir trecho"));
+    fireEvent.click(await enabledButton("Reproduzir partitura"));
     expect(await screen.findByRole("button", { name: "Pausar partitura" })).toBeInTheDocument();
     expect(FakeAudioContext.instances).toHaveLength(1);
 
@@ -326,7 +362,7 @@ describe("ScorePlayer", () => {
     render(<ScorePlayer musicXml="<score-partwise />" scoreName="Prévia.musicxml" previewOnly />);
 
     expect(await screen.findByRole("region", { name: "Partitura rolável" })).toBeInTheDocument();
-    expect(screen.getByRole("alert")).toHaveTextContent("Andamento não sincronizado.");
+    expect(await screen.findByRole("alert")).toHaveTextContent("Andamento não sincronizado.");
     expect(screen.getByRole("button", { name: "Reproduzir partitura" })).toBeDisabled();
     fireEvent.click(screen.getByRole("button", { name: "Próxima página" }));
     expect(await screen.findByText("Página 2 de 2")).toBeInTheDocument();
@@ -341,7 +377,7 @@ describe("ScorePlayer", () => {
     vi.mocked(createVerovioScoreRenderer).mockResolvedValue(engine as never);
     const view = render(<ScorePlayer musicXml='<score-partwise><sound tempo="120"/></score-partwise>' scoreName="Prévia.musicxml" previewOnly />);
 
-    fireEvent.click(await screen.findByRole("button", { name: "Reproduzir partitura" }));
+    fireEvent.click(await enabledButton("Reproduzir partitura"));
     await screen.findByRole("button", { name: "Pausar partitura" });
     expect(view.container.querySelector("#note-1")).toHaveClass("is-playing");
     expect(view.container.querySelector("#measure-1")).toHaveAttribute("aria-current", "true");
@@ -359,7 +395,7 @@ describe("ScorePlayer", () => {
     fireEvent.click(screen.getByRole("button", { name: "Continuar partitura" }));
     await screen.findByRole("button", { name: "Pausar partitura" });
     fireEvent.click(screen.getByRole("button", { name: "Reiniciar partitura" }));
-    await screen.findByRole("button", { name: "Reproduzir partitura" });
+    await enabledButton("Reproduzir partitura");
     expect(screen.getByText("Página 1 de 2")).toBeInTheDocument();
     expect(view.container.querySelector("#note-1")).toHaveClass("is-playing");
     view.unmount();
@@ -370,11 +406,11 @@ describe("ScorePlayer", () => {
     engine.getElementsAtTime.mockReturnValue({ notes: ["note-1"], chords: [], rests: [], page: 1, measure: "measure-1" });
     vi.mocked(createVerovioScoreRenderer).mockResolvedValue(engine as never);
     const view = render(<ScorePlayer musicXml="<score-partwise />" scoreName="Prévia.musicxml" />);
-    fireEvent.click(await screen.findByRole("button", { name: "Reproduzir partitura" }));
+    fireEvent.click(await enabledButton("Reproduzir partitura"));
     await screen.findByRole("button", { name: "Pausar partitura" });
     expect(view.container.querySelector("#note-1")).toHaveClass("is-playing");
     FakeAudioContext.instances[0].currentTime = 2;
-    await screen.findByRole("button", { name: "Reproduzir partitura" });
+    await enabledButton("Reproduzir partitura");
     expect(view.container.querySelector(".is-playing")).toBeNull();
     expect(view.container.querySelector("[aria-current]")).toBeNull();
     view.unmount();
@@ -393,7 +429,7 @@ describe("ScorePlayer", () => {
       />
     );
 
-    const play = await screen.findByRole("button", { name: "Reproduzir partitura" });
+    const play = await enabledButton("Reproduzir partitura");
     expect(fetchMusicXml).not.toHaveBeenCalled();
     await waitFor(() => expect(onStatusChange).toHaveBeenCalledWith("ready", undefined));
 
@@ -409,7 +445,7 @@ describe("ScorePlayer", () => {
       />
     );
 
-    expect(await screen.findByRole("button", { name: "Reproduzir partitura" })).toBeInTheDocument();
+    expect(await enabledButton("Reproduzir partitura")).toBeInTheDocument();
   });
 
   it("restaura andamento, posição e âncora de página sem iniciar áudio automaticamente", async () => {
@@ -433,7 +469,7 @@ describe("ScorePlayer", () => {
 
     expect(await screen.findByText("Página 2 de 3")).toBeInTheDocument();
     expect(engine.getPageForElement).toHaveBeenCalledWith("measure-2");
-    expect(screen.getByRole("button", { name: "Continuar partitura" })).toBeInTheDocument();
+    await enabledButton("Continuar partitura");
     expect(screen.getByRole("slider", { name: "Posição da reprodução" })).toHaveValue("650");
     expect(screen.getByText("88 BPM")).toBeInTheDocument();
     expect(FakeAudioContext.instances).toHaveLength(0);
@@ -545,7 +581,7 @@ describe("ScorePlayer", () => {
     const observer = FakeResizeObserver.instances.at(-1)!;
     observer.notify();
 
-    fireEvent.click(screen.getByRole("button", { name: "Reproduzir partitura" }));
+    fireEvent.click(await enabledButton("Reproduzir partitura"));
     expect(await screen.findByRole("button", { name: "Pausar partitura" })).toBeInTheDocument();
     scrollTo.mockClear();
     FakeAudioContext.instances[0].currentTime = 0.6;
@@ -567,7 +603,7 @@ describe("ScorePlayer", () => {
     vi.mocked(createVerovioScoreRenderer).mockResolvedValue(engine as never);
 
     const view = render(<ScorePlayer scoreId="score-1" scoreName="Estudo.musicxml" />);
-    const play = await screen.findByRole("button", { name: "Reproduzir partitura" });
+    const play = await enabledButton("Reproduzir partitura");
     const sheet = view.container.querySelector<HTMLElement>(".score-sheet");
     const measure = view.container.querySelector<HTMLElement>("#measure-1");
     expect(sheet).not.toBeNull();
@@ -604,7 +640,7 @@ describe("ScorePlayer", () => {
     vi.stubGlobal("matchMedia", vi.fn(() => ({ matches: true })));
 
     const view = render(<ScorePlayer scoreId="score-1" scoreName="Estudo.musicxml" />);
-    const play = await screen.findByRole("button", { name: "Reproduzir partitura" });
+    const play = await enabledButton("Reproduzir partitura");
     const sheet = view.container.querySelector<HTMLElement>(".score-sheet")!;
     const measure = view.container.querySelector<HTMLElement>("#measure-1")!;
     Object.defineProperty(sheet, "clientHeight", { configurable: true, value: 300 });

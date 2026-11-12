@@ -7,6 +7,15 @@ export type PlayerWebViewConfig = {
   url: string;
 };
 
+export function resolveBundledPlayerWebViewConfig(value: unknown): PlayerWebViewConfig {
+  if (typeof value !== "string" || !/^http:\/\/127\.0\.0\.1:[0-9]{1,5}\/mobile\/player$/.test(value)) {
+    throw new Error("Invalid bundled score player endpoint.");
+  }
+  const url = new URL(value);
+  if (Number(url.port) < 1024) throw new Error("Invalid bundled score player port.");
+  return { origin: url.origin, url: url.href };
+}
+
 export function resolvePlayerWebViewConfig(
   configuredUrl: string | undefined,
   allowInsecureDevelopment: boolean,
