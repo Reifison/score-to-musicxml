@@ -139,7 +139,7 @@ describe("cliente HTTP web", () => {
     const signal = new AbortController().signal;
     fetchMock
       .mockResolvedValueOnce(new Response(JSON.stringify({ score: { id: "score-1", reviewRevision: "xml-revision-4" } }), { status: 200 }))
-      .mockResolvedValueOnce(new Response(new Blob(["source-image"]), { status: 200 }));
+      .mockResolvedValueOnce({ ok: true, status: 200, blob: async () => new Blob(["source-image"]) });
 
     await expect(decideVisualReviewProposal("score/1", "xml-revision-4", "proposal-2", "reject", signal))
       .resolves.toMatchObject({ id: "score-1", reviewRevision: "xml-revision-4" });
