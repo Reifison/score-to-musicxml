@@ -4,6 +4,8 @@ import {
   PLAYER_BRIDGE_CHANNEL,
   PLAYER_BRIDGE_VERSION,
   createPlayerCommandMessage,
+  createPlayerFocusMessage,
+  createPlayerLanguageMessage,
   createScoreLoadMessage,
   parsePlayerToHostMessage,
   validatePlayerMusicXml,
@@ -30,6 +32,68 @@ describe("player bridge", () => {
     });
     expect(serialized).not.toContain("Authorization");
     expect(serialized).not.toContain("Bearer");
+  });
+
+  it("marca a prévia parcial sem ativar controles de reprodução", () => {
+    const message = JSON.parse(createScoreLoadMessage(
+      "score-preview",
+      "<score-partwise />",
+      "Estudo parcial.musicxml",
+      false
+    ));
+
+    expect(message.payload.allowPlayback).toBe(false);
+    expect(createScoreLoadMessage("score-complete", "<score-partwise />", "Estudo.musicxml"))
+      .not.toContain("allowPlayback");
+  });
+
+  it("inclui restauração somente quando a página anunciou essa extensão", () => {
+    const restoreSnapshot = {
+      playback: { state: "paused", positionMs: 1_200, durationMs: 5_000, tempo: 96 },
+      reading: { page: 2, scrollRatio: 0.25, anchorMeasureId: "measure-7", anchorViewportRatio: 0.1 }
+    } as const;
+    const payload = JSON.parse(createScoreLoadMessage(
+      "load-restore",
+      "<score-partwise />",
+      "Estudo.musicxml",
+      true,
+      restoreSnapshot
+    )).payload;
+
+    expect(payload.restoreSnapshot).toEqual(restoreSnapshot);
+    expect(createScoreLoadMessage("load-legacy", "<score-partwise />", "Estudo.musicxml"))
+      .not.toContain("restoreSnapshot");
+    expect(() => createScoreLoadMessage("load-bad", "<score-partwise />", "Estudo.musicxml", true, {
+      ...restoreSnapshot,
+      token: "secret"
+    } as never)).toThrow(/posição salva/);
+  });
+
+  it("envia o idioma inicial e atualiza os rótulos da sessão sem recarregar o MusicXML", () => {
+    expect(JSON.parse(createScoreLoadMessage(
+      "load-en",
+      "<score-partwise />",
+      "Study.musicxml",
+      true,
+      undefined,
+      "en"
+    ))).toEqual({
+      channel: PLAYER_BRIDGE_CHANNEL,
+      version: PLAYER_BRIDGE_VERSION,
+      type: "score.load",
+      requestId: "load-en",
+      payload: { musicXml: "<score-partwise />", scoreName: "Study.musicxml", language: "en" }
+    });
+    expect(JSON.parse(createPlayerLanguageMessage("load-en", "pt"))).toEqual({
+      channel: PLAYER_BRIDGE_CHANNEL,
+      version: PLAYER_BRIDGE_VERSION,
+      type: "player.language",
+      requestId: "load-en",
+      payload: { language: "pt" }
+    });
+    expect(() => createPlayerLanguageMessage("load-en", "es" as never)).toThrow(/idioma/);
+    expect(() => createScoreLoadMessage("load-bad-en", " ", "Study.musicxml", true, undefined, "en"))
+      .toThrow("This score's MusicXML is empty.");
   });
 
   it("limita os comandos enviados ao player", () => {
@@ -68,6 +132,27 @@ describe("player bridge", () => {
     expect(ready).toEqual(expect.objectContaining({ ok: true }));
     expect(status).toEqual(expect.objectContaining({ ok: true }));
     expect(playback).toEqual(expect.objectContaining({ ok: true }));
+    expect(parsePlayerToHostMessage(JSON.stringify({
+      channel: PLAYER_BRIDGE_CHANNEL,
+      version: PLAYER_BRIDGE_VERSION,
+      type: "bridge.capabilities",
+      payload: { capabilities: ["session.snapshot", "session.restore"] }
+    }))).toEqual({
+      ok: true,
+      message: {
+        channel: PLAYER_BRIDGE_CHANNEL,
+        version: PLAYER_BRIDGE_VERSION,
+        type: "bridge.capabilities",
+        payload: { capabilities: ["session.snapshot", "session.restore"] }
+      }
+    });
+    expect(parsePlayerToHostMessage(JSON.stringify({
+      channel: PLAYER_BRIDGE_CHANNEL,
+      version: PLAYER_BRIDGE_VERSION,
+      type: "reading.state",
+      requestId: "load-1",
+      payload: { page: 4, scrollRatio: 0.3, anchorMeasureId: "measure-11", anchorViewportRatio: 0.2 }
+    }))).toMatchObject({ ok: true, message: { type: "reading.state", requestId: "load-1" } });
   });
 
   it("rejeita canal, versão, tipo, campos extras e números suspeitos", () => {
@@ -82,6 +167,19 @@ describe("player bridge", () => {
         type: "playback.state",
         requestId: "score-1",
         payload: { state: "playing", positionMs: Number.NaN, durationMs: 5000, tempo: 120 }
+      },
+      {
+        channel: PLAYER_BRIDGE_CHANNEL,
+        version: 1,
+        type: "reading.state",
+        requestId: "load-1",
+        payload: { page: 2, scrollRatio: 1.2 }
+      },
+      {
+        channel: PLAYER_BRIDGE_CHANNEL,
+        version: 1,
+        type: "bridge.capabilities",
+        payload: { capabilities: ["session.restore", "session.restore"] }
       }
     ];
 
@@ -120,4 +218,12 @@ describe("validatePlayerMusicXml", () => {
     expect(() => validatePlayerMusicXml("<score-partwise />", MAX_PLAYER_MUSICXML_BYTES + 1)).toThrow(/grande demais/);
     expect(() => validatePlayerMusicXmlSize(Number.NaN)).toThrow(/tamanho/);
   });
+  it("sends review locations only with a bounded page or measure", () => {
+    expect(JSON.parse(createPlayerFocusMessage("load-1", { id: "review-1", measure: "0" }))).toMatchObject({
+      type: "score.focus", requestId: "load-1", payload: { target: { id: "review-1", measure: "0" } }
+    });
+    expect(() => createPlayerFocusMessage("load-1", { id: "review-1", page: -1 })).toThrow();
+    expect(() => createPlayerFocusMessage("load-1", { id: "review-1" })).toThrow();
+  });
+
 });

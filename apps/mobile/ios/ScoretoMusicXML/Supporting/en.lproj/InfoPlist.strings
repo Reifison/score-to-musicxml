@@ -1,0 +1,4 @@
+CFBundleDisplayName = "Sheet Music Converter";
+NSCameraUsageDescription = "Use the camera to scan sheet music and adjust pages.";
+NSPhotoLibraryUsageDescription = "Select sheet music photos to convert to MusicXML.";
+NSPhotoLibraryAddUsageDescription = "The app can save temporary exported files when you choose to share them.";

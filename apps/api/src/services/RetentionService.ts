@@ -25,7 +25,11 @@ export class RetentionService {
 
     for (const score of [...expiredScores, ...expiredTrash]) {
       await this.storage.deleteUpload(score.storedFilename);
-      await this.storage.deleteExport(score.musicxmlFilename);
+      await this.storage.deleteExportHistory(score.musicxmlFilename);
+      for (const attempt of await this.scores.listAttempts(score.id)) if (attempt.musicxmlFilename !== score.musicxmlFilename) await this.storage.deleteExport(attempt.musicxmlFilename);
+      for (const filename of new Set((score.validation?.visualReview?.history ?? []).flatMap((entry) => [entry.exportFilename, entry.previousExportFilename]))) {
+        if (filename) await this.storage.deleteExport(filename);
+      }
       await this.scores.delete(score.id);
       await this.audits.create({
         action: "score_deleted",

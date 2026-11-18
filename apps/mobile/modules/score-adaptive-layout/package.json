@@ -1,0 +1,6 @@
+{
+  "name": "@score-to-musicxml/adaptive-layout",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Native iOS window bounds, safe area, and reserved-region snapshots"
+}

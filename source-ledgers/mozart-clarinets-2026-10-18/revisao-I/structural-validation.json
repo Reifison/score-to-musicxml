@@ -1,0 +1,21 @@
+{
+  "file": "/Users/reifison/Desktop/Apps/score-to-musicxml/output/mozart-clarinets-2026-10-18/Clarinet-I-reviewed.musicxml",
+  "sha256": "ff6c04bd144ee5c2dd3d1e2b14c5c6f76cee1b43292e60dbac5e98208c34d40d",
+  "measures": 538,
+  "movements": {
+    "I": 295,
+    "III": 243
+  },
+  "mainNotes": 716,
+  "cueNotes": 274,
+  "graces": 9,
+  "tieStarts": 61,
+  "slurStarts": 80,
+  "measuresWithCues": 59,
+  "multirestGroups": 27,
+  "issues": [],
+  "quarterBeats": 2152,
+  "allMeasuresExactlyFourQuarterBeats": true,
+  "tiesContiguousAndBalanced": true,
+  "slursBalanced": true
+}

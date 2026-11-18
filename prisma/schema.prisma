@@ -21,6 +21,38 @@ enum ScoreStatus {
   failed
 }
 
+enum ScoreType {
+  melody
+  piano
+  guitar_solo
+  guitar_duo
+}
+
+enum ConversionResultStatus {
+  complete
+  partial
+}
+
+enum ReviewStatus {
+  unverified
+  needs_review
+  approved
+}
+
+enum ConversionAttemptKind {
+  initial
+  automatic
+  manual
+}
+
+enum ConversionAttemptStatus {
+  queued
+  processing
+  complete
+  partial
+  failed
+}
+
 enum EntitlementPlan {
   free
   paid
@@ -53,6 +85,7 @@ enum AuditAction {
   score_deleted
   score_restored
   score_renamed
+  score_reviewed
   purchase_started
   purchase_completed
   purchase_failed
@@ -74,6 +107,7 @@ model User {
   sessions     Session[]
   scores       Score[]
   entitlement  Entitlement?
+  applePurchases ApplePurchase[]
   grantsMade   Entitlement[] @relation("EntitlementGrantedBy")
   scanUsages   ScanUsage[]
   audits       AuditLog[] @relation("AuditActor")
@@ -104,12 +138,24 @@ model Score {
   mimeType         String
   fileSize         Int
   preprocessingProfile String?
+  scoreType        ScoreType   @default(melody)
+  scoreTypeSelected Boolean    @default(false)
+  resultStatus     ConversionResultStatus?
+  coverage         Json?
+  conversionProgress Json?
+  conversionPreview Json?
+  lastErrorCode    String?
   uploadStatus     ScoreStatus @default(uploaded)
   conversionStatus ScoreStatus @default(uploaded)
   errorMessage     String?
   warnings         Json?
   confidence       Float?
   musicxmlFilename String?
+  reviewStatus     ReviewStatus @default(unverified)
+  reviewRevision   String?
+  validation       Json?
+  reviewedAt       DateTime?
+  reviewedById     String?
   isFavorite       Boolean     @default(false)
   deletedAt        DateTime?
   purgeAt          DateTime?
@@ -117,12 +163,33 @@ model Score {
   updatedAt        DateTime    @updatedAt
   convertedAt      DateTime?
   scanUsage        ScanUsage?
+  attempts         ConversionAttempt[]
 
   @@index([userId])
   @@index([conversionStatus])
   @@index([createdAt])
   @@index([userId, deletedAt])
   @@index([purgeAt])
+}
+
+model ConversionAttempt {
+  id               String                  @id @default(uuid())
+  scoreId          String
+  score            Score                   @relation(fields: [scoreId], references: [id], onDelete: Cascade)
+  kind             ConversionAttemptKind
+  status           ConversionAttemptStatus @default(queued)
+  errorCode        String?
+  errorMessage     String?
+  coverage         Json?
+  musicxmlFilename String?
+  createdAt        DateTime                @default(now())
+  startedAt        DateTime?
+  finishedAt       DateTime?
+  claimToken       String?
+
+  @@index([scoreId, createdAt])
+  @@unique([scoreId, kind])
+  @@index([status, createdAt])
 }
 
 model Entitlement {
@@ -132,7 +199,8 @@ model Entitlement {
   plan                       EntitlementPlan @default(free)
   source                     EntitlementSource @default(free)
   freeScansUsed              Int             @default(0)
-  appleOriginalTransactionId String?         @unique
+  appleOriginalTransactionId String?
+  appleEnvironment           String?
   appleProductId             String?
   googlePurchaseToken        String?         @unique
   googleProductId            String?
@@ -147,6 +215,27 @@ model Entitlement {
   @@index([plan])
   @@index([source])
   @@index([grantedById])
+  @@unique([appleEnvironment, appleOriginalTransactionId])
+}
+
+// Durable claims survive entitlement changes so an older signed receipt cannot
+// restore a refunded purchase. Sandbox and production IDs are separate domains.
+model ApplePurchase {
+  id                         String   @id @default(uuid())
+  userId                     String?
+  user                       User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
+  environment                String
+  originalTransactionId      String
+  productId                  String
+  purchasedAt                DateTime?
+  revoked                    Boolean  @default(false)
+  lastNotificationId         String?
+  lastNotificationSignedAt   DateTime?
+  createdAt                  DateTime @default(now())
+  updatedAt                  DateTime @updatedAt
+
+  @@unique([environment, originalTransactionId])
+  @@index([userId])
 }
 
 model GooglePlayNotification {

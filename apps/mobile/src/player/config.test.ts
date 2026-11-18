@@ -2,8 +2,19 @@ import { describe, expect, it } from "vitest";
 import {
   isTrustedPlayerDocument,
   isTrustedPlayerOrigin,
+  resolveBundledPlayerWebViewConfig,
   resolvePlayerWebViewConfig
 } from "./config";
+
+describe("bundled iOS player endpoint", () => {
+  it("trusts only the precise loopback document returned by the native module", () => {
+    const config = resolveBundledPlayerWebViewConfig("http://127.0.0.1:41567/mobile/player");
+    expect(isTrustedPlayerDocument("http://127.0.0.1:41567/mobile/player", config)).toBe(true);
+    expect(isTrustedPlayerDocument("http://127.0.0.1:41568/mobile/player", config)).toBe(false);
+    expect(() => resolveBundledPlayerWebViewConfig("http://127.0.0.1:41567/mobile/player?key=abc")).toThrow();
+    expect(() => resolveBundledPlayerWebViewConfig("http://192.168.0.4:41567/mobile/player")).toThrow();
+  });
+});
 
 describe("resolvePlayerWebViewConfig", () => {
   it("adiciona o caminho dedicado a uma origem HTTPS", () => {
@@ -21,6 +32,15 @@ describe("resolvePlayerWebViewConfig", () => {
     expect(() => resolvePlayerWebViewConfig("http://192.168.1.10:5173/mobile/player", false)).toThrow(/HTTPS/);
   });
 
+  it("localiza erros de configuração em inglês quando o app está em inglês", () => {
+    expect(() => resolvePlayerWebViewConfig("not-a-url", false, "en"))
+      .toThrow("The player URL is not configured correctly.");
+    expect(() => resolvePlayerWebViewConfig("https://user:secret@example.com", false, "en"))
+      .toThrow("The player URL cannot contain credentials, query parameters, or fragments.");
+    expect(() => resolvePlayerWebViewConfig("http://app.example.com", false, "en"))
+      .toThrow("The app player requires an HTTPS connection.");
+  });
+
   it("rejeita URL com token, query, hash, credencial ou caminho diferente", () => {
     const invalid = [
       "https://app.example.com/mobile/player?token=secret",
@@ -31,6 +51,7 @@ describe("resolvePlayerWebViewConfig", () => {
     for (const value of invalid) {
       expect(() => resolvePlayerWebViewConfig(value, false)).toThrow();
     }
+    expect(() => resolvePlayerWebViewConfig("file:///app/player/index.html", false)).toThrow(/HTTPS/);
   });
 });
 

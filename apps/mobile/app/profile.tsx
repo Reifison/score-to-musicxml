@@ -1,46 +1,47 @@
 import { useMutation } from "@tanstack/react-query";
 import { useState } from "react";
-import { ActivityIndicator, Pressable, Text, TextInput, View } from "react-native";
+import { ActivityIndicator, Pressable, ScrollView, View } from "react-native";
+import { AdaptiveText as Text, AdaptiveTextInput as TextInput } from "../src/adaptive/AdaptiveTypography";
 import { api } from "../src/api/client";
 import { useAuth } from "../src/auth/AuthProvider";
-import { BottomNav, bottomNavHeight } from "../src/components/BottomNav";
+import { AdaptiveScreen } from "../src/components/AdaptiveScreen";
+import { useTranslation } from "../src/i18n";
 import { colors, sharedStyles } from "../src/theme/styles";
 
 export default function ProfileScreen() {
+  const { t } = useTranslation();
   const { token, user } = useAuth();
   const [password, setPassword] = useState("");
-  const [message, setMessage] = useState("");
+  const [passwordUpdated, setPasswordUpdated] = useState(false);
 
   const passwordMutation = useMutation({
     mutationFn: () => api.updatePassword(token!, password),
     onSuccess: () => {
       setPassword("");
-      setMessage("Senha atualizada.");
+      setPasswordUpdated(true);
     },
-    onError: () => setMessage("")
+    onError: () => setPasswordUpdated(false)
   });
 
   const error = passwordMutation.error instanceof Error ? passwordMutation.error.message : null;
 
   return (
-    <View style={sharedStyles.screen}>
-      <View style={[sharedStyles.content, { paddingBottom: bottomNavHeight + 24 }]}>
-        <View style={{ gap: 6 }}>
-          <Text style={sharedStyles.title}>Perfil</Text>
-          <Text style={sharedStyles.subtitle}>Dados da sua conta no Conversor de Partituras.</Text>
-        </View>
+    <AdaptiveScreen title={t("Perfil", "Profile")} back>
+      <ScrollView contentContainerStyle={[sharedStyles.content, profileStyles.content]}>
+        <Text style={sharedStyles.subtitle}>{t("Dados da sua conta no Conversor de Partituras.", "Your Score Converter account details.")}</Text>
 
         <View style={sharedStyles.panel}>
-          <Text style={profileStyles.label}>Nome</Text>
-          <TextInput editable={false} style={sharedStyles.input} value={user?.name ?? ""} />
+          <Text style={profileStyles.label}>{t("Nome", "Name")}</Text>
+          <Text accessibilityLabel={`${t("Nome", "Name")}: ${user?.name ?? ""}`} selectable style={[sharedStyles.input, profileStyles.value]}>{user?.name ?? ""}</Text>
 
-          <Text style={profileStyles.label}>E-mail</Text>
-          <TextInput editable={false} style={sharedStyles.input} value={user?.email ?? ""} />
+          <Text style={profileStyles.label}>{t("E-mail", "Email")}</Text>
+          <Text accessibilityLabel={`${t("E-mail", "Email")}: ${user?.email ?? ""}`} selectable style={[sharedStyles.input, profileStyles.value]}>{user?.email ?? ""}</Text>
 
-          <Text style={profileStyles.label}>Nova senha</Text>
+          <Text style={profileStyles.label}>{t("Nova senha", "New password")}</Text>
           <TextInput
+            accessibilityLabel={t("Nova senha", "New password")}
             onChangeText={setPassword}
-            placeholder="Minimo de 8 caracteres"
+            placeholder={t("Mínimo de 8 caracteres", "At least 8 characters")}
             secureTextEntry
             style={sharedStyles.input}
             value={password}
@@ -51,21 +52,29 @@ export default function ProfileScreen() {
             onPress={() => passwordMutation.mutate()}
             style={[sharedStyles.button, (!token || password.length < 8 || passwordMutation.isPending) && profileStyles.disabled]}
           >
-            {passwordMutation.isPending ? <ActivityIndicator color={colors.onPrimary} /> : <Text style={sharedStyles.buttonText}>Salvar senha</Text>}
+            {passwordMutation.isPending ? <ActivityIndicator color={colors.onPrimary} /> : <Text style={sharedStyles.buttonText}>{t("Salvar senha", "Save password")}</Text>}
           </Pressable>
 
-          {message ? <Text style={{ color: colors.success }}>{message}</Text> : null}
+          {passwordUpdated ? <Text style={{ color: colors.success }}>{t("Senha atualizada.", "Password updated.")}</Text> : null}
           {error ? <Text style={sharedStyles.error}>{error}</Text> : null}
         </View>
-      </View>
-      <BottomNav />
-    </View>
+      </ScrollView>
+    </AdaptiveScreen>
   );
 }
 
 const profileStyles = {
+  content: {
+    alignSelf: "center" as const,
+    maxWidth: 680,
+    paddingBottom: 24,
+    width: "100%" as const
+  },
   disabled: {
     opacity: 0.55
+  },
+  value: {
+    paddingVertical: 12
   },
   label: {
     color: colors.ink,

@@ -2,39 +2,47 @@ import { Directory, File, Paths } from "expo-file-system";
 import type { Score } from "../api/types";
 import { safeCacheKey } from "../files/exportFilenames";
 import { validatePlayerMusicXml } from "./bridge";
-import { isPlayerMusicXmlCacheFresh } from "./musicXmlCachePolicy";
 
-type CacheableScore = Pick<Score, "id" | "userId">;
+type CacheableScore = Pick<Score, "id" | "userId"> & { cacheRevision: string };
+
+export function playerCacheIdentity(score: Score, sessionUserId = score.userId): CacheableScore {
+  return {
+    id: score.id,
+    userId: sessionUserId,
+    // A list response has no conversion attempts. The content revision must
+    // therefore use fields shared by list and detail responses.
+    cacheRevision: score.reviewRevision && /^[a-f0-9]{64}$/i.test(score.reviewRevision)
+      ? `review-${score.reviewRevision}`
+      : `result-${stableRevisionKey(JSON.stringify([score.musicxmlFilename ?? null, score.convertedAt ?? null, score.resultStatus ?? null]))}`
+  };
+}
 
 /**
- * Keeps the source notation in the app's persistent storage. The file's
- * modification time doubles as its last-opened timestamp: every successful
- * cache read writes the same validated MusicXML back to renew the seven days.
+ * Prepared notation stays available offline until the app's data is removed.
+ * A different content revision gets its own file and cannot replace this one.
  */
 export async function loadCachedPlayerMusicXml(score: CacheableScore): Promise<string | null> {
   const file = fileFor(score);
   if (!file.exists) return null;
 
-  if (!isPlayerMusicXmlCacheFresh(file.modificationTime)) {
-    removeFile(file);
-    return null;
-  }
-
   try {
     const musicXml = await file.text();
     validatePlayerMusicXml(musicXml, file.size);
-    // Refresh the expiry from this opening. If the touch fails, the valid
-    // document is still safe to show and will naturally expire on schedule.
-    try {
-      file.write(musicXml);
-    } catch {
-      // Best-effort timestamp refresh.
-    }
     return musicXml;
   } catch {
-    removeFile(file);
     return null;
   }
+}
+
+// The full fallback identity is hashed before it becomes a filename: the
+// earlier truncation to 80 characters could hide a change near the end.
+function stableRevisionKey(value: string): string {
+  const seeds = [0x811c9dc5, 0x6d2b79f5, 0x1b873593, 0x85ebca6b];
+  return seeds.map((seed) => {
+    let hash = seed;
+    for (let i = 0; i < value.length; i += 1) hash = Math.imul(hash ^ value.charCodeAt(i), 0x01000193);
+    return (hash >>> 0).toString(16).padStart(8, "0");
+  }).join("");
 }
 
 export function savePlayerMusicXmlToCache(score: CacheableScore, musicXml: string): void {
@@ -49,13 +57,5 @@ function directoryFor(score: CacheableScore): Directory {
 }
 
 function fileFor(score: CacheableScore): File {
-  return new File(directoryFor(score), `${safeCacheKey(score.id)}.musicxml`);
-}
-
-function removeFile(file: File): void {
-  try {
-    if (file.exists) file.delete();
-  } catch {
-    // A later open overwrites the entry; cleanup does not block the player.
-  }
+  return new File(directoryFor(score), `${safeCacheKey(score.id)}-${safeCacheKey(score.cacheRevision)}.musicxml`);
 }

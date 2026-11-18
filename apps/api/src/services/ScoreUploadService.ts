@@ -1,6 +1,7 @@
-import type { User } from "../domain.js";
+import type { ScoreType, User } from "../domain.js";
 import { env } from "../config/env.js";
 import type { AuditRepository } from "../repositories/contracts.js";
+import type { ScoreRepository } from "../repositories/contracts.js";
 import type { ScoreConversionQueue } from "../queues/ScoreConversionQueue.js";
 import { AppError } from "../errors/AppError.js";
 import { validateUploadedFile } from "../utils/fileValidation.js";
@@ -14,10 +15,11 @@ export class ScoreUploadService {
     private storage: FileStorageService,
     private queue: ScoreConversionQueue,
     private entitlements: EntitlementService,
-    private fileSecurity: FileSecurityService
+    private fileSecurity: FileSecurityService,
+    private scores: ScoreRepository
   ) {}
 
-  async upload(input: { user: User; filename: string; buffer: Buffer; ipAddress?: string; preprocessingProfile?: string | null }) {
+  async upload(input: { user: User; filename: string; buffer: Buffer; ipAddress?: string; preprocessingProfile?: string | null; scoreType?: ScoreType }) {
     const validated = validateUploadedFile(input.filename, input.buffer, env.MAX_UPLOAD_BYTES);
     const preprocessingProfile = validated.fileType === "image" ? parsePreprocessingProfile(input.preprocessingProfile) : null;
     await this.entitlements.assertCanUpload(input.user);
@@ -38,6 +40,8 @@ export class ScoreUploadService {
         mimeType: validated.mimeType,
         fileSize: safeBuffer.length,
         preprocessingProfile,
+        scoreType: input.scoreType ?? "melody",
+        scoreTypeSelected: input.scoreType !== undefined,
         uploadStatus: "uploaded",
         conversionStatus: "queued"
       }, input.ipAddress);
@@ -45,9 +49,11 @@ export class ScoreUploadService {
       await this.storage.deleteUpload(storedFilename);
       throw error;
     }
-    await this.audits.create({ actorId: input.user.id, action: "score_uploaded", entity: "score", entityId: score.id, ipAddress: input.ipAddress, metadata: { originalFilename: validated.originalFilename } });
-    await this.audits.create({ actorId: input.user.id, action: "conversion_queued", entity: "score", entityId: score.id, ipAddress: input.ipAddress });
-    await this.queue.enqueue(score.id);
+    const [initial] = await this.scores.listAttempts(score.id);
+    if (!initial) throw new Error("Initial conversion attempt was not persisted");
+    await this.audits.create({ actorId: input.user.id, action: "score_uploaded", entity: "score", entityId: score.id, ipAddress: input.ipAddress, metadata: { originalFilename: validated.originalFilename, attemptId: initial.id } }).catch(() => undefined);
+    await this.audits.create({ actorId: input.user.id, action: "conversion_queued", entity: "score", entityId: score.id, ipAddress: input.ipAddress, metadata: { attemptId: initial.id } }).catch(() => undefined);
+    await this.queue.enqueue(score.id, initial.id).catch(() => undefined);
     return score;
   }
 }

@@ -1,9 +1,10 @@
-import { Guitar, Pause, Piano, Play, RotateCcw } from "lucide-react";
+import { Pause, Play, RotateCcw } from "lucide-react";
+import { playerCopy, type PlayerLanguage } from "../i18n/player.js";
 
 export type PlaybackState = "stopped" | "playing" | "paused";
-export type PlaybackInstrument = "piano" | "guitar";
 
 type PlaybackControlsProps = {
+  language?: PlayerLanguage;
   state: PlaybackState;
   positionMs: number;
   durationMs: number;
@@ -11,17 +12,15 @@ type PlaybackControlsProps = {
   tempoMin?: number;
   tempoMax?: number;
   tempoAssumed: boolean;
-  instrument?: PlaybackInstrument;
-  sampleStatus?: string;
   disabled?: boolean;
   onPlayPause: () => void;
   onRestart: () => void;
   onSeek: (positionMs: number) => void;
   onTempoChange: (tempoBpm: number) => void;
-  onInstrumentChange?: (instrument: PlaybackInstrument) => void;
 };
 
 export function PlaybackControls({
+  language = "pt",
   state,
   positionMs,
   durationMs,
@@ -29,33 +28,30 @@ export function PlaybackControls({
   tempoMin = 40,
   tempoMax = 240,
   tempoAssumed,
-  instrument = "piano",
-  sampleStatus,
   disabled = false,
   onPlayPause,
   onRestart,
   onSeek,
-  onTempoChange,
-  onInstrumentChange = () => undefined
+  onTempoChange
 }: PlaybackControlsProps) {
   const isPlaying = state === "playing";
   const safeDuration = Math.max(0, durationMs);
   const safePosition = Math.min(Math.max(0, positionMs), safeDuration);
 
   return (
-    <div className="playback-controls" aria-label="Controles de reprodução">
+    <div className="playback-controls" aria-label={playerCopy(language, "playbackControls")}>
       <div className="playback-transport">
-        <button className="play-button" type="button" onClick={onPlayPause} disabled={disabled} aria-label={isPlaying ? "Pausar partitura" : state === "paused" ? "Continuar partitura" : "Reproduzir partitura"}>
+        <button className="play-button" type="button" onClick={onPlayPause} disabled={disabled} aria-label={isPlaying ? playerCopy(language, "pauseScore") : state === "paused" ? playerCopy(language, "continueScore") : playerCopy(language, "playScore")}>
           {isPlaying ? <Pause aria-hidden="true" size={20} /> : <Play aria-hidden="true" size={20} fill="currentColor" />}
-          <span>{isPlaying ? "Pausar" : state === "paused" ? "Continuar" : "Reproduzir"}</span>
+          <span>{isPlaying ? playerCopy(language, "pause") : state === "paused" ? playerCopy(language, "continue") : playerCopy(language, "play")}</span>
         </button>
-        <button className="secondary-button" type="button" onClick={onRestart} disabled={state === "stopped" && safePosition === 0} aria-label="Reiniciar partitura">
-          <RotateCcw aria-hidden="true" size={18} /> Reiniciar
+        <button className="secondary-button" type="button" onClick={onRestart} disabled={state === "stopped" && safePosition === 0} aria-label={playerCopy(language, "restartScore")}>
+          <RotateCcw aria-hidden="true" size={18} /> {playerCopy(language, "restart")}
         </button>
       </div>
 
       <label className="playback-progress">
-        <span className="sr-only">Posição da reprodução</span>
+        <span className="sr-only">{playerCopy(language, "playbackPosition")}</span>
         <input
           type="range"
           min={0}
@@ -64,14 +60,14 @@ export function PlaybackControls({
           value={safePosition}
           disabled={disabled}
           onChange={(event) => onSeek(Number(event.target.value))}
-          aria-label="Posição da reprodução"
-          aria-valuetext={`${formatTime(safePosition)} de ${formatTime(safeDuration)}`}
+          aria-label={playerCopy(language, "playbackPosition")}
+          aria-valuetext={`${formatTime(safePosition)} ${playerCopy(language, "of")} ${formatTime(safeDuration)}`}
         />
         <span aria-live="off">{formatTime(safePosition)} / {formatTime(safeDuration)}</span>
       </label>
 
       <label className="tempo-control">
-        <span>Andamento</span>
+        <span>{playerCopy(language, "tempo")}</span>
         <input
           type="range"
           min={tempoMin}
@@ -80,37 +76,12 @@ export function PlaybackControls({
           value={tempoBpm}
           disabled={disabled}
           onChange={(event) => onTempoChange(Number(event.target.value))}
-          aria-label="Andamento"
+          aria-label={playerCopy(language, "tempo")}
         />
-        <output>{tempoBpm} BPM{tempoAssumed ? " · assumido" : ""}</output>
+        <output>{tempoBpm} BPM{tempoAssumed ? ` · ${playerCopy(language, "assumed")}` : ""}</output>
       </label>
 
-      <fieldset className="instrument-control" disabled={disabled}>
-        <legend>Timbre</legend>
-        <div className="instrument-options" role="group" aria-label="Escolha o timbre">
-          <button
-            className={`instrument-option${instrument === "piano" ? " is-selected" : ""}`}
-            type="button"
-            aria-pressed={instrument === "piano"}
-            onClick={() => onInstrumentChange("piano")}
-          >
-            <Piano aria-hidden="true" size={17} />
-            Piano
-          </button>
-          <button
-            className={`instrument-option${instrument === "guitar" ? " is-selected" : ""}`}
-            type="button"
-            aria-pressed={instrument === "guitar"}
-            onClick={() => onInstrumentChange("guitar")}
-          >
-            <Guitar aria-hidden="true" size={17} />
-            Violão
-          </button>
-        </div>
-      </fieldset>
-      <p className="sample-credit" aria-live="polite">
-        {sampleStatus ?? "Timbres gravados locais: Piano Salamander Grand (CC BY 3.0) e Violão Shinyguitar (CC0)."}
-      </p>
+
     </div>
   );
 }

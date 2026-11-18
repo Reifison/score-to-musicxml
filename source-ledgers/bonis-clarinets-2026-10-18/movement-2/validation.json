@@ -1,0 +1,105 @@
+{
+  "parserErrors": [],
+  "checkedMeasures": 156,
+  "voiceChecks": 312,
+  "metricIssues": [],
+  "structureIssues": [],
+  "tiePairs": 57,
+  "slurPairs": 115,
+  "beamGroups": 48,
+  "xmlMeasures": 156,
+  "staffCount": 2,
+  "cues": 25,
+  "eventComparison": {
+    "expected": 655,
+    "actual": 655,
+    "changed": 0,
+    "missing": 0,
+    "extra": 0
+  },
+  "editorialEmendations": [
+    {
+      "measure": 147,
+      "staff": 1,
+      "printed": "Bb4 half, 2 quarters; dot absent",
+      "adopted": "Bb4 dotted half, 3 quarters",
+      "reason": "Parent reviewer independently confirmed source omission; second staff fills 3/4. One existing attack extended by one quarter, no new note or rest.",
+      "evidence": "/Users/reifison/Desktop/Apps/score-to-musicxml/tmp/bonis-review/movement-2/p4-m147.png"
+    }
+  ],
+  "sourceReviewScope": [
+    {
+      "page": 3,
+      "system": 1,
+      "first": 1,
+      "last": 9
+    },
+    {
+      "page": 3,
+      "system": 2,
+      "first": 10,
+      "last": 21
+    },
+    {
+      "page": 3,
+      "system": 3,
+      "first": 22,
+      "last": 30
+    },
+    {
+      "page": 3,
+      "system": 4,
+      "first": 31,
+      "last": 41
+    },
+    {
+      "page": 3,
+      "system": 5,
+      "first": 42,
+      "last": 51
+    },
+    {
+      "page": 3,
+      "system": 6,
+      "first": 52,
+      "last": 79
+    },
+    {
+      "page": 4,
+      "system": 1,
+      "first": 80,
+      "last": 93
+    },
+    {
+      "page": 4,
+      "system": 2,
+      "first": 94,
+      "last": 104
+    },
+    {
+      "page": 4,
+      "system": 3,
+      "first": 105,
+      "last": 116
+    },
+    {
+      "page": 4,
+      "system": 4,
+      "first": 117,
+      "last": 128
+    },
+    {
+      "page": 4,
+      "system": 5,
+      "first": 129,
+      "last": 143
+    },
+    {
+      "page": 4,
+      "system": 6,
+      "first": 144,
+      "last": 156
+    }
+  ],
+  "limits": "Metric and event/ledger checks do not independently prove source pitch accuracy; visual source reading is documented separately."
+}

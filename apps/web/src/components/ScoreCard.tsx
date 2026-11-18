@@ -1,5 +1,7 @@
 import { Download, Eye, Heart, Trash2 } from "lucide-react";
+import { canDownloadScoreMusicXml } from "../score/availability.js";
 import type { Score } from "../types/domain.js";
+import { ScoreConversionProgress } from "./ScoreConversionProgress.js";
 import { StatusBadge } from "./StatusBadge.js";
 
 export function ScoreCard({
@@ -22,6 +24,7 @@ export function ScoreCard({
   onSelect?: () => void;
 }) {
   const hasLongError = score.errorMessage && score.errorMessage.length > 120;
+  const canDownload = canDownloadScoreMusicXml(score);
 
   return (
     <article className="card score-card">
@@ -51,7 +54,8 @@ export function ScoreCard({
           <Heart fill={score.isFavorite ? "currentColor" : "none"} size={20} />
         </button>
       </div>
-      <StatusBadge status={score.conversionStatus} />
+      <StatusBadge status={score.conversionStatus} resultStatus={score.resultStatus} recognitionQuality={score.recognitionQuality} />
+      <ScoreConversionProgress score={score} />
       {score.errorMessage && (
         <div className="card-error">
           <p className="error-text">{score.errorMessage}</p>
@@ -67,7 +71,7 @@ export function ScoreCard({
           <Eye size={18} />
           <span>Detalhes</span>
         </button>
-        <button className={`icon-button ${score.conversionStatus !== "converted" ? "disabled" : ""}`} title="Baixar MusicXML" aria-label="Baixar MusicXML" onClick={() => onDownload(score)} disabled={score.conversionStatus !== "converted"}>
+        <button className={`icon-button ${!canDownload ? "disabled" : ""}`} title="Baixar MusicXML" aria-label="Baixar MusicXML" onClick={() => onDownload(score)} disabled={!canDownload}>
           <Download size={18} />
           <span>Baixar</span>
         </button>

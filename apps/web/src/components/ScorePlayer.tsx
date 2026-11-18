@@ -1,12 +1,16 @@
 import { ChevronLeft, ChevronRight, FileWarning, RefreshCw } from "lucide-react";
-import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { fetchMusicXml } from "../api/client.js";
-import type { Instrument, PlaybackSnapshot, WebAudioMidiEngine } from "../audio/index.js";
-import { SAMPLE_BANK_RELEASE } from "../audio/index.js";
+import type { PlaybackSnapshot } from "../audio/types.js";
+import type { WebAudioMidiEngine } from "../audio/WebAudioMidiEngine.js";
+import type { PerformedMeasureOccurrence } from "../score/VerovioScoreRenderer.js";
 import { sanitizeScoreSvg } from "../score/sanitizeScoreSvg.js";
 import { applyDefaultTempo, DEFAULT_TEMPO_BPM, hasExplicitTempo } from "../score/musicXmlTempo.js";
 import type { VerovioScoreRenderer } from "../score/VerovioScoreRenderer.js";
 import { PlaybackControls, type PlaybackState } from "./PlaybackControls.js";
+import type { PlayerReadingPreview, PlayerSessionSnapshot } from "../webview/playerBridgeContract.js";
+import { localizePlayerError, playerCopy, playerPageLabel, type PlayerLanguage } from "../i18n/player.js";
+import { MeasureLoopControls, type MeasureLoopOption } from "./MeasureLoopControls.js";
 
 export type ScorePlayerState = "loading" | "ready" | "empty" | "error";
 
@@ -18,10 +22,18 @@ export type ScorePlayerCommand = {
 type ScorePlayerProps = {
   scoreName: string;
   scoreId?: string;
+  scoreRevision?: string;
   musicXml?: string;
+  language?: PlayerLanguage;
+  allowPlayback?: boolean;
+  previewOnly?: boolean;
   command?: ScorePlayerCommand;
+  initialSnapshot?: PlayerSessionSnapshot;
+  readingTarget?: { id: string; page?: number; measure?: string };
   onStatusChange?: (state: ScorePlayerState, message?: string) => void;
   onPlaybackChange?: (snapshot: PlaybackSnapshot) => void;
+  onReadingChange?: (snapshot: PlayerSessionSnapshot["reading"]) => void;
+  onReadingPreview?: (preview: PlayerReadingPreview) => void;
 };
 
 const INITIAL_PLAYBACK: PlaybackSnapshot = {
@@ -38,12 +50,22 @@ const PLAYBACK_UI_UPDATE_INTERVAL_MS = 50;
 
 export function ScorePlayer({
   scoreId,
+  scoreRevision,
   scoreName,
   musicXml: providedMusicXml,
+  language = "pt",
+  allowPlayback = true,
+  previewOnly = false,
   command,
+  initialSnapshot,
+  readingTarget,
   onStatusChange,
-  onPlaybackChange
+  onPlaybackChange,
+  onReadingChange,
+  onReadingPreview
 }: ScorePlayerProps) {
+  const languageRef = useRef<PlayerLanguage>(language);
+  languageRef.current = language;
   const rendererRef = useRef<VerovioScoreRenderer | null>(null);
   const audioRef = useRef<WebAudioMidiEngine | null>(null);
   const unsubscribeAudioRef = useRef<(() => void) | null>(null);
@@ -53,26 +75,47 @@ export function ScorePlayer({
   const playbackStateRef = useRef<PlaybackSnapshot["state"]>("idle");
   const desiredActiveIdsRef = useRef<string[]>([]);
   const appliedActiveIdsRef = useRef<string[]>([]);
+  const highlightedMeasureRef = useRef<string | undefined>(undefined);
   const desiredMeasureRef = useRef<string | undefined>(undefined);
   const appliedMeasureRef = useRef<string | undefined>(undefined);
   const lastPlaybackUiUpdateRef = useRef<{ positionMs: number; state: PlaybackSnapshot["state"] } | null>(null);
+  const restoredPausedRef = useRef(false);
+  const pendingReadingRestoreRef = useRef<PlayerSessionSnapshot["reading"] | null>(initialSnapshot?.reading ?? null);
+  const lastReadingSnapshotRef = useRef<PlayerSessionSnapshot["reading"]>(initialSnapshot?.reading ?? { page: 1, scrollRatio: 0 });
+  const lastReadingTargetKeyRef = useRef("");
   const [state, setState] = useState<ScorePlayerState>("loading");
   const [error, setError] = useState("");
   const [audioError, setAudioError] = useState("");
-  const [sampleStatus, setSampleStatus] = useState(`${SAMPLE_BANK_RELEASE} · o primeiro play prepara os timbres.`);
   const [audioAvailable, setAudioAvailable] = useState(false);
+  const [audioPreparing, setAudioPreparing] = useState(allowPlayback);
+  const [measureOccurrences, setMeasureOccurrences] = useState<PerformedMeasureOccurrence[]>([]);
+  const [loopStartKey, setLoopStartKey] = useState("");
+  const [loopEndKey, setLoopEndKey] = useState("");
+  const [loopEnabled, setLoopEnabled] = useState(false);
+  const [loopError, setLoopError] = useState("");
   const [tempoAssumed, setTempoAssumed] = useState(true);
   const [baseTempoBpm, setBaseTempoBpm] = useState(DEFAULT_TEMPO_BPM);
-  const [instrument, setInstrument] = useState<Instrument>("piano");
   const [playback, setPlayback] = useState<PlaybackSnapshot>(INITIAL_PLAYBACK);
   const [page, setPage] = useState(1);
   const [pageCount, setPageCount] = useState(0);
   const [svg, setSvg] = useState("");
+  const scoreSvgMarkup = useMemo(() => ({ __html: svg }), [svg]);
+  const measureLoopOptions = useMemo<MeasureLoopOption[]>(() => measureOccurrences.map((occurrence, index) => ({
+    key: `${occurrence.id}:${index}:${occurrence.startMs}`,
+    position: index + 1,
+    number: occurrence.number,
+    occurrence: occurrence.occurrence,
+    occurrenceCount: occurrence.occurrenceCount
+  })), [measureOccurrences]);
+  const selectedStartIndex = measureLoopOptions.findIndex((option) => option.key === loopStartKey);
+  const selectedEndIndex = measureLoopOptions.findIndex((option) => option.key === loopEndKey);
   const [reloadKey, setReloadKey] = useState(0);
+  const [restoreReady, setRestoreReady] = useState(!initialSnapshot);
 
   useEffect(() => {
-    onStatusChange?.(state, error || undefined);
-  }, [error, onStatusChange, state]);
+    if (state === "ready" && !restoreReady) return;
+    onStatusChange?.(state, error ? localizePlayerError(error, language) : undefined);
+  }, [error, language, onStatusChange, restoreReady, state]);
 
   useEffect(() => {
     onPlaybackChange?.(playback);
@@ -82,7 +125,10 @@ export function ScorePlayer({
     const audio = audioRef.current;
     if (!audio || !command) return;
     if (command.action === "pause") audio.pause();
-    else audio.stop();
+    else {
+      restoredPausedRef.current = false;
+      audio.stop();
+    }
   }, [command]);
 
   const applyHighlights = useCallback((ids: string[]) => {
@@ -97,6 +143,22 @@ export function ScorePlayer({
       if (element && sheet.contains(element)) element.classList.add("is-playing");
     }
     appliedActiveIdsRef.current = ids;
+  }, []);
+
+  const highlightMeasure = useCallback((measureId?: string) => {
+    const sheet = sheetRef.current;
+    if (!sheet) return;
+    const previous = highlightedMeasureRef.current && sheet.ownerDocument.getElementById(highlightedMeasureRef.current);
+    if (previous && sheet.contains(previous)) {
+      previous.classList.remove("is-current-measure");
+      previous.removeAttribute("aria-current");
+    }
+    const current = measureId && sheet.ownerDocument.getElementById(measureId);
+    if (current && sheet.contains(current)) {
+      current.classList.add("is-current-measure");
+      current.setAttribute("aria-current", "true");
+    }
+    highlightedMeasureRef.current = measureId;
   }, []);
 
   const scrollToMeasure = useCallback((measureId?: string) => {
@@ -131,48 +193,160 @@ export function ScorePlayer({
     if (!renderer) return;
     try {
       const elements = renderer.getElementsAtTime(positionMs);
-      const activeIds = [...elements.notes, ...elements.chords];
+      const activeIds = [...elements.notes, ...elements.chords, ...elements.rests];
       desiredActiveIdsRef.current = activeIds;
       desiredMeasureRef.current = elements.measure ?? desiredMeasureRef.current;
       if (elements.page && elements.page !== pageRef.current) {
         pageRef.current = elements.page;
         const cachedSvg = pageSvgCacheRef.current.get(elements.page);
-        const nextSvg = cachedSvg ?? sanitizeScoreSvg(renderer.renderPage(elements.page), scoreName);
-        if (!cachedSvg) pageSvgCacheRef.current.set(elements.page, nextSvg);
+        const renderedSvg = cachedSvg ?? sanitizeScoreSvg(renderer.renderPage(elements.page), scoreName);
+        if (!cachedSvg) pageSvgCacheRef.current.set(elements.page, renderedSvg);
+        const nextSvg = localizeScoreSvgLabel(renderedSvg, languageRef.current);
         setPage(elements.page);
         setSvg(nextSvg);
         return;
       }
       applyHighlights(activeIds);
+      highlightMeasure(elements.measure);
       scrollToMeasure(elements.measure);
     } catch {
       applyHighlights([]);
+      highlightMeasure();
     }
-  }, [applyHighlights, scoreName, scrollToMeasure]);
+  }, [applyHighlights, highlightMeasure, scoreName, scrollToMeasure]);
 
-  const renderPage = useCallback((nextPage: number) => {
+  const renderPage = useCallback((nextPage: number, targetMeasureId?: string) => {
     const renderer = rendererRef.current;
     if (!renderer) return;
     try {
       desiredActiveIdsRef.current = [];
+      desiredMeasureRef.current = targetMeasureId;
       applyHighlights([]);
+      highlightMeasure();
+      appliedMeasureRef.current = undefined;
       const cachedSvg = pageSvgCacheRef.current.get(nextPage);
-      const nextSvg = cachedSvg ?? sanitizeScoreSvg(renderer.renderPage(nextPage), scoreName);
-      if (!cachedSvg) pageSvgCacheRef.current.set(nextPage, nextSvg);
+      const renderedSvg = cachedSvg ?? sanitizeScoreSvg(renderer.renderPage(nextPage), scoreName);
+      if (!cachedSvg) pageSvgCacheRef.current.set(nextPage, renderedSvg);
+      const nextSvg = localizeScoreSvgLabel(renderedSvg, language);
       setSvg(nextSvg);
       pageRef.current = nextPage;
       setPage(nextPage);
       setError("");
     } catch (renderError) {
-      setError(renderError instanceof Error ? renderError.message : "Não foi possível renderizar esta página.");
+      setError(renderError instanceof Error ? renderError.message : playerCopy(language, "renderPageError"));
       setState("error");
     }
-  }, [applyHighlights, scoreName]);
+  }, [applyHighlights, highlightMeasure, language, scoreName]);
+
+  useLayoutEffect(() => {
+    // A page replacement creates new DOM nodes even if the measure ID is unchanged.
+    appliedMeasureRef.current = undefined;
+  }, [svg]);
 
   useLayoutEffect(() => {
     applyHighlights(desiredActiveIdsRef.current);
+    highlightMeasure(desiredMeasureRef.current);
     scrollToMeasure(desiredMeasureRef.current);
-  }, [applyHighlights, playback.positionMs, playback.state, scrollToMeasure, svg]);
+  }, [applyHighlights, highlightMeasure, playback.positionMs, playback.state, scrollToMeasure, svg]);
+
+  const readingSnapshot = useCallback((): PlayerSessionSnapshot["reading"] => {
+    const sheet = sheetRef.current;
+    const maxScroll = sheet ? Math.max(0, sheet.scrollHeight - sheet.clientHeight) : 0;
+    const scrollRatio = sheet && maxScroll > 0 ? clamp(sheet.scrollTop / maxScroll, 0, 1) : 0;
+    if (!sheet || sheet.clientHeight <= 0) return { page: pageRef.current, scrollRatio };
+
+    const sheetRect = sheet.getBoundingClientRect();
+    const measures = [...sheet.querySelectorAll<SVGElement>(".measure[id]")];
+    const anchor = measures.find((measure) => measure.getBoundingClientRect().bottom >= sheetRect.top) ?? measures.at(-1);
+    if (!anchor?.id || anchor.id.length > 128) return { page: pageRef.current, scrollRatio };
+    const anchorViewportRatio = clamp((anchor.getBoundingClientRect().top - sheetRect.top) / sheet.clientHeight, -1, 1);
+    return {
+      page: pageRef.current,
+      scrollRatio,
+      anchorMeasureId: anchor.id,
+      anchorViewportRatio
+    };
+  }, []);
+
+  const reportReadingSnapshot = useCallback(() => {
+    const snapshot = readingSnapshot();
+    lastReadingSnapshotRef.current = snapshot;
+    onReadingChange?.(snapshot);
+  }, [onReadingChange, readingSnapshot]);
+
+  useEffect(() => {
+    if (state !== "ready" || !initialSnapshot || restoreReady) return;
+    const renderer = rendererRef.current;
+    const savedReading = initialSnapshot.reading;
+    lastReadingSnapshotRef.current = savedReading;
+    let targetPage = Math.min(Math.max(1, savedReading.page), Math.max(1, pageCount));
+    if (renderer && savedReading.anchorMeasureId) {
+      try {
+        targetPage = renderer.getPageForElement(savedReading.anchorMeasureId);
+      } catch {
+        // The page number and scroll fraction remain useful if an old anchor was removed.
+      }
+    }
+    pendingReadingRestoreRef.current = savedReading;
+    renderPage(targetPage);
+    setRestoreReady(true);
+  }, [initialSnapshot, pageCount, renderPage, restoreReady, state]);
+
+  useLayoutEffect(() => {
+    const savedReading = pendingReadingRestoreRef.current;
+    const sheet = sheetRef.current;
+    if (!savedReading || !sheet || !svg) return;
+    applyReadingSnapshot(sheet, savedReading);
+    pendingReadingRestoreRef.current = null;
+  }, [page, restoreReady, state, svg]);
+
+  useEffect(() => {
+    if (state !== "ready" || !restoreReady) return;
+    const sheet = sheetRef.current;
+    if (!sheet) return;
+
+    let previousSize = readSheetSize(sheet);
+    let skippedInitialObserverNotification = false;
+    const restoreAfterResize = () => {
+      if (playbackStateRef.current === "playing") {
+        const audio = audioRef.current;
+        if (!audio) return;
+        try {
+          appliedMeasureRef.current = undefined;
+          syncVisualAtTime(audio.positionMs());
+        } catch {
+          // The renderer can be between pages while the latest audio clock remains valid.
+        }
+        return;
+      }
+      applyReadingSnapshot(sheet, lastReadingSnapshotRef.current);
+    };
+    const observerConstructor = globalThis.ResizeObserver;
+    if (typeof observerConstructor === "function") {
+      const observer = new observerConstructor(() => {
+        const nextSize = readSheetSize(sheet);
+        if (!skippedInitialObserverNotification) {
+          skippedInitialObserverNotification = true;
+          previousSize = nextSize;
+          return;
+        }
+        if (sameSheetSize(previousSize, nextSize)) return;
+        previousSize = nextSize;
+        restoreAfterResize();
+      });
+      observer.observe(sheet);
+      return () => observer.disconnect();
+    }
+
+    const handleWindowResize = () => {
+      const nextSize = readSheetSize(sheet);
+      if (sameSheetSize(previousSize, nextSize)) return;
+      previousSize = nextSize;
+      restoreAfterResize();
+    };
+    window.addEventListener("resize", handleWindowResize);
+    return () => window.removeEventListener("resize", handleWindowResize);
+  }, [restoreReady, state, syncVisualAtTime]);
 
   useEffect(() => {
     let cancelled = false;
@@ -186,13 +360,23 @@ export function ScorePlayer({
     void audioRef.current?.dispose();
     audioRef.current = null;
     applyHighlights([]);
+    highlightMeasure();
+    desiredActiveIdsRef.current = [];
+    desiredMeasureRef.current = undefined;
+    appliedMeasureRef.current = undefined;
     setState("loading");
     setError("");
     setAudioError("");
-    setSampleStatus(`${SAMPLE_BANK_RELEASE} · o primeiro play prepara os timbres.`);
     setAudioAvailable(false);
-    setInstrument("piano");
+    setAudioPreparing(allowPlayback);
+    setMeasureOccurrences([]);
+    setLoopStartKey("");
+    setLoopEndKey("");
+    setLoopEnabled(false);
+    setLoopError("");
+    lastReadingTargetKeyRef.current = "";
     playbackStateRef.current = "idle";
+    restoredPausedRef.current = false;
     pageSvgCacheRef.current.clear();
     lastPlaybackUiUpdateRef.current = null;
     setPlayback(INITIAL_PLAYBACK);
@@ -206,13 +390,13 @@ export function ScorePlayer({
         const musicXmlSource = providedMusicXml !== undefined
           ? Promise.resolve(providedMusicXml)
           : scoreId
-            ? fetchMusicXml(scoreId)
+            ? fetchMusicXml(scoreId, previewOnly)
             : Promise.reject(new Error("Nenhuma partitura foi informada."));
-        const [musicXml, scoreModule, audioModule] = await Promise.all([
+        const [musicXml, scoreModule] = await Promise.all([
           musicXmlSource,
-          import("../score/index.js"),
-          import("../audio/index.js")
+          import("../score/index.js")
         ]);
+        if (cancelled) return;
         if (!musicXml.trim()) {
           if (!cancelled) setState("empty");
           return;
@@ -221,50 +405,107 @@ export function ScorePlayer({
         const tempoAssumedForScore = !hasExplicitTempo(musicXml);
         const playableMusicXml = applyDefaultTempo(musicXml);
         pendingRenderer = await scoreModule.createVerovioScoreRenderer(playableMusicXml);
-        const midi = audioModule.parseMidiPlayback(pendingRenderer.renderMidiBytes());
-        const renderedDurationMs = pendingRenderer.getDurationMs();
-        const initialTempo = tempoAssumedForScore ? DEFAULT_TEMPO_BPM : midi.initialTempoBpm || DEFAULT_TEMPO_BPM;
-        pendingAudio = new audioModule.WebAudioMidiEngine({ baseTempoBpm: initialTempo });
-        pendingAudio.load(midi.events, Math.max(midi.durationMs, renderedDurationMs));
-
         if (cancelled) {
           pendingRenderer.destroy();
-          await pendingAudio.dispose();
           return;
         }
 
+        const renderedInitialSvg = sanitizeScoreSvg(pendingRenderer.renderPage(1), scoreName);
         rendererRef.current = pendingRenderer;
+        pageSvgCacheRef.current.set(1, renderedInitialSvg);
+        setTempoAssumed(tempoAssumedForScore);
+        setPageCount(pendingRenderer.pageCount);
+        setSvg(localizeScoreSvgLabel(renderedInitialSvg, languageRef.current));
+        setState("ready");
+
+        if (!allowPlayback) return;
+        // Leave a frame for the notation before synchronous MIDI and timing work.
+        const [audioModule] = await Promise.all([
+          import("../audio/index.js"),
+          new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve())))
+        ]);
+        if (cancelled) return;
+        let hasPlaybackEvents = false;
+        let initialTempo = DEFAULT_TEMPO_BPM;
+        let nextMeasureOccurrences: PerformedMeasureOccurrence[] = [];
+        let nextLoopError = "";
+        try {
+          const midi = audioModule.parseMidiPlayback(pendingRenderer.renderMidiBytes());
+          const renderedDurationMs = pendingRenderer.getDurationMs();
+          initialTempo = tempoAssumedForScore ? DEFAULT_TEMPO_BPM : midi.initialTempoBpm || DEFAULT_TEMPO_BPM;
+          pendingAudio = new audioModule.WebAudioMidiEngine({ baseTempoBpm: initialTempo, instrument: "piano" });
+          pendingAudio.load(midi.events, Math.max(midi.durationMs, renderedDurationMs));
+          hasPlaybackEvents = midi.events.length > 0;
+        } catch (midiError) {
+          await pendingAudio?.dispose();
+          pendingAudio = null;
+          // A playback failure must not hide the notation needed to review the score.
+          if (!cancelled) setAudioError(midiError instanceof Error ? midiError.message : playerCopy(languageRef.current, "genericAudioError"));
+        }
+        if (pendingAudio) {
+          try {
+            nextMeasureOccurrences = pendingRenderer.getMeasureOccurrences();
+          } catch (measureError) {
+            nextLoopError = measureError instanceof Error
+              ? measureError.message
+              : playerCopy(languageRef.current, "measureLoopUnavailable");
+          }
+        }
+
+        if (cancelled) return;
+
         audioRef.current = pendingAudio;
         setBaseTempoBpm(initialTempo);
-        setTempoAssumed(tempoAssumedForScore);
-        setAudioAvailable(midi.events.length > 0);
-        const initialSvg = sanitizeScoreSvg(pendingRenderer.renderPage(1), scoreName);
-        pageSvgCacheRef.current.set(1, initialSvg);
-        setPageCount(pendingRenderer.pageCount);
-        setSvg(initialSvg);
-        unsubscribeAudioRef.current = pendingAudio.subscribe((snapshot) => {
-          if (cancelled) return;
-          playbackStateRef.current = snapshot.state;
-          const previous = lastPlaybackUiUpdateRef.current;
-          const shouldUpdateUi = previous === null
-            || snapshot.state !== "playing"
-            || previous.state !== "playing"
-            || snapshot.positionMs < previous.positionMs
-            || snapshot.positionMs - previous.positionMs >= PLAYBACK_UI_UPDATE_INTERVAL_MS;
-          if (!shouldUpdateUi) return;
-          lastPlaybackUiUpdateRef.current = {
-            positionMs: snapshot.positionMs,
-            state: snapshot.state
-          };
-          setPlayback(snapshot);
-          syncVisualAtTime(snapshot.positionMs);
-        });
-        setState("ready");
+        setAudioAvailable(hasPlaybackEvents);
+        setAudioPreparing(false);
+        setMeasureOccurrences(nextMeasureOccurrences);
+        setLoopError(nextLoopError);
+        if (pendingAudio) {
+          const savedPlayback = initialSnapshot?.playback;
+          if (savedPlayback) {
+            try {
+              pendingAudio.setTempo(savedPlayback.tempo);
+              pendingAudio.seek(Math.min(savedPlayback.positionMs, pendingAudio.getSnapshot().durationMs));
+            } catch {
+              // Stale saved controls do not prevent playback.
+            }
+            restoredPausedRef.current = savedPlayback.state === "playing" || savedPlayback.state === "paused";
+          }
+          unsubscribeAudioRef.current = pendingAudio.subscribe((snapshot) => {
+            if (cancelled) return;
+            const effectiveSnapshot = restoredPausedRef.current && snapshot.state === "idle"
+              ? { ...snapshot, state: "paused" as const }
+              : snapshot;
+            playbackStateRef.current = effectiveSnapshot.state;
+            const previous = lastPlaybackUiUpdateRef.current;
+            const shouldUpdateUi = previous === null
+              || effectiveSnapshot.state !== "playing"
+              || previous.state !== "playing"
+              || effectiveSnapshot.positionMs < previous.positionMs
+              || snapshot.positionMs - previous.positionMs >= PLAYBACK_UI_UPDATE_INTERVAL_MS;
+            if (!shouldUpdateUi) return;
+            lastPlaybackUiUpdateRef.current = {
+              positionMs: effectiveSnapshot.positionMs,
+              state: effectiveSnapshot.state
+            };
+            setPlayback(effectiveSnapshot);
+            if (effectiveSnapshot.state === "ended") {
+              desiredActiveIdsRef.current = [];
+              desiredMeasureRef.current = undefined;
+              applyHighlights([]);
+              highlightMeasure();
+            } else if (previous !== null) syncVisualAtTime(effectiveSnapshot.positionMs);
+          });
+        }
       } catch (loadError) {
-        pendingRenderer?.destroy();
-        await pendingAudio?.dispose();
         if (cancelled) return;
-        setError(loadError instanceof Error ? loadError.message : "Não foi possível abrir a partitura digital.");
+        if (rendererRef.current && rendererRef.current === pendingRenderer) {
+          setAudioPreparing(false);
+          setAudioError(playerCopy(languageRef.current, "genericAudioError"));
+          return;
+        }
+        pendingRenderer?.destroy();
+        setError(loadError instanceof Error ? loadError.message : playerCopy(languageRef.current, "genericLoadError"));
         setState("error");
       }
     })();
@@ -278,8 +519,98 @@ export function ScorePlayer({
       void audioRef.current?.dispose();
       audioRef.current = null;
       applyHighlights([]);
+      highlightMeasure();
     };
-  }, [applyHighlights, providedMusicXml, reloadKey, scoreId, scoreName, syncVisualAtTime]);
+  }, [allowPlayback, applyHighlights, highlightMeasure, initialSnapshot, previewOnly, providedMusicXml, reloadKey, scoreId, scoreName, scoreRevision, syncVisualAtTime]);
+
+  useEffect(() => {
+    const audio = audioRef.current;
+    if (!audio) return;
+    if (!loopEnabled) {
+      if (audio.getLoopRange()) audio.setLoopRange(null);
+      return;
+    }
+    const start = measureOccurrences[selectedStartIndex];
+    const end = measureOccurrences[selectedEndIndex];
+    if (!start || !end || selectedEndIndex < selectedStartIndex) {
+      audio.setLoopRange(null);
+      return;
+    }
+    try {
+      audio.setLoopRange({ startMs: start.startMs, endMs: end.endMs });
+      setLoopError("");
+    } catch (rangeError) {
+      setLoopEnabled(false);
+      setLoopError(rangeError instanceof Error ? rangeError.message : playerCopy(language, "measureLoopUnavailable"));
+    }
+  }, [language, loopEnabled, measureOccurrences, selectedEndIndex, selectedStartIndex, state]);
+
+  useEffect(() => {
+    if (state !== "ready" || !readingTarget?.id) return;
+    const targetKey = `${scoreRevision ?? ""}:${readingTarget.id}:${readingTarget.page ?? ""}:${readingTarget.measure ?? ""}`;
+    if (lastReadingTargetKeyRef.current === targetKey) return;
+    const renderer = rendererRef.current;
+    if (!renderer) return;
+
+    let targetMeasureId: string | undefined;
+    let targetPage = readingTarget.page;
+    try {
+      targetMeasureId = renderer.getMeasureForElement(readingTarget.id);
+      targetPage ??= renderer.getPageForElement(readingTarget.id);
+    } catch {
+      // Review targets can refer to source segments that do not have a Verovio ID.
+    }
+    if (!targetMeasureId && readingTarget.measure) {
+      const matchingOccurrence = measureOccurrences.find((occurrence) => occurrence.number === readingTarget.measure);
+      targetMeasureId = matchingOccurrence?.id;
+      if (!targetPage && targetMeasureId) {
+        try {
+          targetPage = renderer.getPageForElement(targetMeasureId);
+        } catch {
+          // A page supplied by the caller can still be used without a measure highlight.
+        }
+      }
+    }
+    if (!targetMeasureId && readingTarget.measure && audioPreparing) return;
+    lastReadingTargetKeyRef.current = targetKey;
+    if (targetPage && targetPage >= 1 && targetPage <= renderer.pageCount) {
+      renderPage(targetPage, targetMeasureId);
+    } else if (targetMeasureId) {
+      try {
+        renderPage(renderer.getPageForElement(targetMeasureId), targetMeasureId);
+      } catch {
+        // Leave the current page in place when the location cannot be resolved.
+      }
+    }
+  }, [audioPreparing, measureOccurrences, readingTarget?.id, readingTarget?.measure, readingTarget?.page, renderPage, scoreRevision, state]);
+
+  useEffect(() => {
+    if (state === "ready" && restoreReady) reportReadingSnapshot();
+  }, [page, reportReadingSnapshot, restoreReady, state, svg]);
+
+  useEffect(() => {
+    if (!onReadingPreview || state !== "ready" || !restoreReady || !svg) return;
+    let cancelled = false;
+    const timer = window.setTimeout(() => {
+      const currentSvg = sheetRef.current?.querySelector("svg");
+      if (!currentSvg) return;
+      void captureReadingPreview(currentSvg, page)
+        .then((preview) => { if (!cancelled && preview) onReadingPreview(preview); })
+        .catch(() => { /* A missing preview does not affect the interactive reader. */ });
+    }, 300);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
+  }, [onReadingPreview, page, restoreReady, state, svg]);
+
+  useEffect(() => {
+    const scoreSvg = sheetRef.current?.querySelector("svg");
+    const currentLabel = scoreSvg?.getAttribute("aria-label");
+    if (!scoreSvg || !currentLabel) return;
+    const scoreTitle = currentLabel.replace(/^(?:Partitura digital|Digital score):\s*/, "");
+    scoreSvg.setAttribute("aria-label", `${playerCopy(language, "scoreLabel")}: ${scoreTitle}`);
+  }, [language, page, svg]);
 
   async function togglePlayback() {
     const audio = audioRef.current;
@@ -287,21 +618,20 @@ export function ScorePlayer({
     setAudioError("");
     try {
       if (playback.state === "playing") audio.pause();
-      else if (playback.state === "paused") await audio.resume();
-      else await audio.play();
-      const selectedBank = audio.getSampleBankSnapshot(instrument);
-      if (selectedBank.status === "ready") {
-        const instrumentLabel = instrument === "piano" ? "Piano" : "Violão";
-        setSampleStatus(`${SAMPLE_BANK_RELEASE} · timbre gravado ativo (${selectedBank.loadedSamples} samples de ${instrumentLabel}).`);
-      } else {
-        setSampleStatus(`${SAMPLE_BANK_RELEASE} · fallback técnico ativo; verifique a conexão local.`);
+      else if (playback.state === "paused") {
+        if (restoredPausedRef.current) {
+          restoredPausedRef.current = false;
+          await audio.play(undefined, audio.positionMs());
+        } else await audio.resume();
       }
+      else await audio.play();
     } catch (playError) {
-      setAudioError(playError instanceof Error ? playError.message : "Não foi possível iniciar o áudio.");
+      setAudioError(playError instanceof Error ? playError.message : playerCopy(language, "genericStartError"));
     }
   }
 
   function restartPlayback() {
+    restoredPausedRef.current = false;
     audioRef.current?.stop();
     syncVisualAtTime(0);
   }
@@ -309,6 +639,9 @@ export function ScorePlayer({
   function seekPlayback(positionMs: number) {
     lastPlaybackUiUpdateRef.current = null;
     audioRef.current?.seek(positionMs);
+    if (restoredPausedRef.current && audioRef.current) {
+      setPlayback({ ...audioRef.current.getSnapshot(), state: "paused" });
+    }
     syncVisualAtTime(positionMs);
   }
 
@@ -317,17 +650,7 @@ export function ScorePlayer({
       audioRef.current?.setTempo(tempoBpm);
       setAudioError("");
     } catch (tempoError) {
-      setAudioError(tempoError instanceof Error ? tempoError.message : "Não foi possível alterar o andamento.");
-    }
-  }
-
-  function changeInstrument(nextInstrument: Instrument) {
-    try {
-      audioRef.current?.setInstrument(nextInstrument);
-      setInstrument(nextInstrument);
-      setAudioError("");
-    } catch (instrumentError) {
-      setAudioError(instrumentError instanceof Error ? instrumentError.message : "Não foi possível alterar o timbre.");
+      setAudioError(tempoError instanceof Error ? tempoError.message : playerCopy(language, "genericTempoError"));
     }
   }
 
@@ -337,7 +660,7 @@ export function ScorePlayer({
         <span className="score-skeleton score-skeleton-heading" />
         <span className="score-skeleton score-skeleton-staff" />
         <span className="score-skeleton score-skeleton-staff" />
-        <span>Preparando a partitura digital...</span>
+        <span>{playerCopy(language, "loading")}</span>
       </div>
     );
   }
@@ -347,11 +670,11 @@ export function ScorePlayer({
       <div className="score-player-state score-player-error" role="alert">
         <FileWarning aria-hidden="true" size={26} />
         <div>
-          <strong>Não foi possível mostrar a partitura digital</strong>
-          <p>{error}</p>
+            <strong>{playerCopy(language, "renderErrorTitle")}</strong>
+            <p>{localizePlayerError(error, language)}</p>
         </div>
         <button className="secondary-button" type="button" onClick={() => setReloadKey((current) => current + 1)}>
-          <RefreshCw aria-hidden="true" size={17} /> Tentar novamente
+          <RefreshCw aria-hidden="true" size={17} /> {playerCopy(language, "retry")}
         </button>
       </div>
     );
@@ -362,8 +685,8 @@ export function ScorePlayer({
       <div className="score-player-state score-player-empty" role="status">
         <FileWarning aria-hidden="true" size={26} />
         <div>
-          <strong>Partitura digital indisponível</strong>
-          <p>O MusicXML desta partitura está vazio. Converta o arquivo novamente para gerar a visualização.</p>
+          <strong>{playerCopy(language, "emptyTitle")}</strong>
+          <p>{playerCopy(language, "emptyMessage")}</p>
         </div>
       </div>
     );
@@ -378,8 +701,9 @@ export function ScorePlayer({
   const tempoMax = Math.min(400, Math.floor(baseTempoBpm * 4));
 
   return (
-    <section className="score-player" aria-label="Visualizador da partitura">
-      <PlaybackControls
+    <section className="score-player" aria-label={playerCopy(language, "viewer")} tabIndex={0}>
+      {allowPlayback ? <PlaybackControls
+        language={language}
         state={controlState}
         positionMs={playback.positionMs}
         durationMs={playback.durationMs}
@@ -387,36 +711,136 @@ export function ScorePlayer({
         tempoMin={tempoMin}
         tempoMax={tempoMax}
         tempoAssumed={tempoAssumed}
-        instrument={instrument}
-        sampleStatus={sampleStatus}
         disabled={!audioAvailable}
         onPlayPause={() => void togglePlayback()}
         onRestart={restartPlayback}
         onSeek={seekPlayback}
         onTempoChange={changeTempo}
-        onInstrumentChange={changeInstrument}
-      />
-      {!audioAvailable && <p className="playback-message">Esta partitura não contém notas reproduzíveis.</p>}
-      {audioError && <p className="playback-message playback-message-error" role="alert">{audioError}</p>}
+      /> : <p className="playback-message">{playerCopy(language, "playbackUnavailable")}</p>}
+      {allowPlayback && <MeasureLoopControls
+        language={language}
+        options={measureLoopOptions}
+        selectedStart={loopStartKey}
+        selectedEnd={loopEndKey}
+        enabled={loopEnabled}
+        disabled={state !== "ready" || !audioAvailable}
+        error={loopError ? localizePlayerError(loopError, language, "measureLoopUnavailable") : undefined}
+        onEnabledChange={(enabled) => {
+          if (enabled && measureLoopOptions.length > 0) {
+            setLoopStartKey((current) => current || measureLoopOptions[0].key);
+            setLoopEndKey((current) => current || measureLoopOptions.at(-1)!.key);
+          }
+          setLoopEnabled(enabled);
+        }}
+        onStartChange={(key) => {
+          const nextStartIndex = measureLoopOptions.findIndex((option) => option.key === key);
+          setLoopStartKey(key);
+          if (selectedEndIndex < nextStartIndex) setLoopEndKey(key);
+        }}
+        onEndChange={setLoopEndKey}
+        onClear={() => {
+          audioRef.current?.setLoopRange(null);
+          setLoopEnabled(false);
+          setLoopStartKey("");
+          setLoopEndKey("");
+          setLoopError("");
+        }}
+      />}
+      {allowPlayback && <p className="playback-message playback-guidance" role={audioPreparing ? "status" : undefined}>
+        {playerCopy(language, audioPreparing ? "audioPreparing" : "playbackGuide")}
+      </p>}
+      {allowPlayback && !audioPreparing && !audioAvailable && !audioError && <p className="playback-message">{playerCopy(language, "noPlayableNotes")}</p>}
+      {audioError && <p className="playback-message playback-message-error" role="alert">{localizePlayerError(audioError, language, "genericAudioError")}</p>}
       <div
         ref={sheetRef}
         className="score-sheet"
         role="region"
-        aria-label="Partitura rolável"
+        aria-label={playerCopy(language, "sheet")}
         tabIndex={0}
-        dangerouslySetInnerHTML={{ __html: svg }}
+        onScroll={reportReadingSnapshot}
+        dangerouslySetInnerHTML={scoreSvgMarkup}
       />
       {pageCount > 1 && (
-        <nav className="score-pagination" aria-label="Páginas da partitura">
-          <button className="secondary-button" type="button" disabled={playback.state === "playing" || page === 1} onClick={() => renderPage(page - 1)} aria-label="Página anterior" title={playback.state === "playing" ? "Pause para navegar manualmente" : undefined}>
-            <ChevronLeft aria-hidden="true" size={18} /> Anterior
+        <nav className="score-pagination" aria-label={playerCopy(language, "pages")}>
+          <button className="secondary-button" type="button" disabled={playback.state === "playing" || page === 1} onClick={() => renderPage(page - 1)} aria-label={playerCopy(language, "previousPage")} title={playback.state === "playing" ? playerCopy(language, "pauseToNavigate") : undefined}>
+            <ChevronLeft aria-hidden="true" size={18} /> {playerCopy(language, "previous")}
           </button>
-          <span aria-live="polite">Página {page} de {pageCount}</span>
-          <button className="secondary-button" type="button" disabled={playback.state === "playing" || page === pageCount} onClick={() => renderPage(page + 1)} aria-label="Próxima página" title={playback.state === "playing" ? "Pause para navegar manualmente" : undefined}>
-            Próxima <ChevronRight aria-hidden="true" size={18} />
+          <span aria-live="polite">{playerPageLabel(language, page, pageCount)}</span>
+          <button className="secondary-button" type="button" disabled={playback.state === "playing" || page === pageCount} onClick={() => renderPage(page + 1)} aria-label={playerCopy(language, "nextPage")} title={playback.state === "playing" ? playerCopy(language, "pauseToNavigate") : undefined}>
+            {playerCopy(language, "next")} <ChevronRight aria-hidden="true" size={18} />
           </button>
         </nav>
       )}
     </section>
   );
+}
+
+function clamp(value: number, minimum: number, maximum: number): number {
+  return Math.min(Math.max(value, minimum), maximum);
+}
+
+async function captureReadingPreview(svg: SVGSVGElement, page: number): Promise<PlayerReadingPreview | undefined> {
+  const { width, height } = svg.viewBox.baseVal;
+  if (!Number.isFinite(width) || !Number.isFinite(height) || width <= 0 || height <= 0) return;
+  const scale = 1600 / Math.max(width, height);
+  const canvas = document.createElement("canvas");
+  canvas.width = Math.max(1, Math.round(width * scale));
+  canvas.height = Math.max(1, Math.round(height * scale));
+  const context = canvas.getContext("2d");
+  if (!context) return;
+
+  const copy = svg.cloneNode(true) as SVGSVGElement;
+  copy.setAttribute("width", String(canvas.width));
+  copy.setAttribute("height", String(canvas.height));
+  const image = new Image();
+  const url = URL.createObjectURL(new Blob([new XMLSerializer().serializeToString(copy)], { type: "image/svg+xml" }));
+  try {
+    image.src = url;
+    await image.decode();
+    const prefix = "data:image/jpeg;base64,";
+    for (const [size, quality] of [[1, 0.72], [0.8, 0.62], [0.6, 0.52], [0.45, 0.45]]) {
+      canvas.width = Math.max(1, Math.round(width * scale * size));
+      canvas.height = Math.max(1, Math.round(height * scale * size));
+      context.fillStyle = "#fff";
+      context.fillRect(0, 0, canvas.width, canvas.height);
+      context.drawImage(image, 0, 0, canvas.width, canvas.height);
+      const jpeg = canvas.toDataURL("image/jpeg", quality);
+      if (jpeg.startsWith(prefix) && jpeg.length <= prefix.length + 200 * 1024) {
+        return { page, width: canvas.width, height: canvas.height, jpegBase64: jpeg.slice(prefix.length) };
+      }
+    }
+  } finally {
+    URL.revokeObjectURL(url);
+  }
+}
+
+function applyReadingSnapshot(sheet: HTMLElement, snapshot: PlayerSessionSnapshot["reading"]): void {
+  const anchor = snapshot.anchorMeasureId
+    ? sheet.ownerDocument.getElementById(snapshot.anchorMeasureId)
+    : null;
+  if (anchor && sheet.contains(anchor) && snapshot.anchorViewportRatio !== undefined) {
+    const sheetRect = sheet.getBoundingClientRect();
+    const anchorRect = anchor.getBoundingClientRect();
+    const nextTop = sheet.scrollTop + anchorRect.top - sheetRect.top - snapshot.anchorViewportRatio * sheet.clientHeight;
+    sheet.scrollTop = clamp(nextTop, 0, Math.max(0, sheet.scrollHeight - sheet.clientHeight));
+  } else {
+    sheet.scrollTop = snapshot.scrollRatio * Math.max(0, sheet.scrollHeight - sheet.clientHeight);
+  }
+}
+
+function readSheetSize(sheet: HTMLElement): { width: number; height: number } {
+  const rect = sheet.getBoundingClientRect();
+  return {
+    width: rect.width || sheet.clientWidth,
+    height: rect.height || sheet.clientHeight
+  };
+}
+
+function sameSheetSize(left: { width: number; height: number }, right: { width: number; height: number }): boolean {
+  return Math.abs(left.width - right.width) < 0.5 && Math.abs(left.height - right.height) < 0.5;
+}
+
+function localizeScoreSvgLabel(svg: string, language: PlayerLanguage): string {
+  const label = playerCopy(language, "scoreLabel");
+  return svg.replace(/aria-label="(?:Partitura digital|Digital score): ([^"]*)"/, `aria-label="${label}: $1"`);
 }

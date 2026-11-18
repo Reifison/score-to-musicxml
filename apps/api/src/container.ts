@@ -13,6 +13,7 @@ import { RetentionService } from "./services/RetentionService.js";
 import { ScoreConversionService } from "./services/ScoreConversionService.js";
 import { ScoreService } from "./services/ScoreService.js";
 import { ScoreUploadService } from "./services/ScoreUploadService.js";
+import { QueueReconciler } from "./services/QueueReconciler.js";
 import { UserService } from "./services/UserService.js";
 import { TemporaryFileCleanupService } from "./services/TemporaryFileCleanupService.js";
 
@@ -33,6 +34,7 @@ export function createServices(repositories: Repositories = createPrismaReposito
   } else {
     queue = new BullMqScoreConversionQueue();
   }
+  conversion.setQueue(queue);
   return {
     repositories,
     storage,
@@ -44,7 +46,9 @@ export function createServices(repositories: Repositories = createPrismaReposito
     users: new UserService(repositories.users, repositories.audits, auth),
     retention: new RetentionService(repositories.scores, repositories.audits, storage, temporaryFiles),
     conversion,
-    scores: new ScoreService(repositories.scores, repositories.audits, storage, midiExport),
-    uploads: new ScoreUploadService(repositories.audits, storage, queue, entitlements, fileSecurity)
+    queue,
+    reconciler: new QueueReconciler(repositories.scores, queue),
+    scores: new ScoreService(repositories.scores, repositories.audits, storage, midiExport, queue),
+    uploads: new ScoreUploadService(repositories.audits, storage, queue, entitlements, fileSecurity, repositories.scores)
   };
 }

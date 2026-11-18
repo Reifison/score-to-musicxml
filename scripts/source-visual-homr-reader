@@ -1,0 +1,10 @@
+#!/bin/sh
+# Administrative local reader. Inference runs offline; model setup is separate.
+set -eu
+reader_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+reader_python=${HOMR_PYTHON:-"$reader_dir/../.local/source-visual-homr/venv/bin/python"}
+if [ ! -x "$reader_python" ]; then
+  echo "HOMR Python environment is unavailable. See docs/SOURCE_VISUAL_REVIEW.md." >&2
+  exit 1
+fi
+exec "$reader_python" "$reader_dir/source-visual-homr-reader.py" "$@"

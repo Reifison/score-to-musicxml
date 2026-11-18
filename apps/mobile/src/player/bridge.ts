@@ -1,13 +1,19 @@
+import { isPlayerSessionSnapshot, type PlayerReadingSnapshot, type PlayerSessionSnapshot } from "./sessionSnapshotContract";
+import { getLanguage, t } from "../i18n";
+
 export const PLAYER_BRIDGE_CHANNEL = "score-to-musicxml/player";
 export const PLAYER_BRIDGE_VERSION = 1 as const;
 export const MAX_PLAYER_MUSICXML_BYTES = 12 * 1024 * 1024;
-
 const MAX_INCOMING_MESSAGE_LENGTH = 16 * 1024;
+export const MAX_PLAYER_PREVIEW_BASE64_LENGTH = 200 * 1024;
 const MAX_REQUEST_ID_LENGTH = 128;
 const MAX_SCORE_NAME_LENGTH = 256;
 const MAX_ERROR_MESSAGE_LENGTH = 512;
 
 export type PlayerHostCommand = "pause" | "stop" | "dispose";
+export type PlayerBridgeCapability = "session.snapshot" | "session.restore" | "score.focus" | "reading.preview";
+export type PlayerReadingTarget = { id: string; page?: number; measure?: string };
+export type PlayerLanguage = "pt" | "en";
 export type PlayerScoreState = "loading" | "ready" | "empty" | "error" | "disposed";
 export type PlayerPlaybackState = "idle" | "playing" | "paused" | "stopped" | "ended";
 export type PlayerBridgeErrorCode =
@@ -27,12 +33,20 @@ export class PlayerMusicXmlError extends Error {
   }
 }
 
+export type PlayerReadingPreview = { page: number; width: number; height: number; jpegBase64: string };
+
 export type PlayerToHostMessage =
   | {
       channel: typeof PLAYER_BRIDGE_CHANNEL;
       version: typeof PLAYER_BRIDGE_VERSION;
       type: "bridge.ready";
       payload: { commands: PlayerHostCommand[] };
+    }
+  | {
+      channel: typeof PLAYER_BRIDGE_CHANNEL;
+      version: typeof PLAYER_BRIDGE_VERSION;
+      type: "bridge.capabilities";
+      payload: { capabilities: PlayerBridgeCapability[] };
     }
   | {
       channel: typeof PLAYER_BRIDGE_CHANNEL;
@@ -56,6 +70,20 @@ export type PlayerToHostMessage =
   | {
       channel: typeof PLAYER_BRIDGE_CHANNEL;
       version: typeof PLAYER_BRIDGE_VERSION;
+      type: "reading.state";
+      requestId: string;
+      payload: PlayerReadingSnapshot;
+    }
+  | {
+      channel: typeof PLAYER_BRIDGE_CHANNEL;
+      version: typeof PLAYER_BRIDGE_VERSION;
+      type: "reading.preview";
+      requestId: string;
+      payload: PlayerReadingPreview;
+    }
+  | {
+      channel: typeof PLAYER_BRIDGE_CHANNEL;
+      version: typeof PLAYER_BRIDGE_VERSION;
       type: "bridge.error";
       requestId?: string;
       payload: { code: PlayerBridgeErrorCode; message: string };
@@ -68,21 +96,59 @@ export type PlayerMessageParseResult =
 export function createScoreLoadMessage(
   requestId: string,
   musicXml: string,
-  scoreName: string
+  scoreName: string,
+  allowPlayback?: boolean,
+  restoreSnapshot?: PlayerSessionSnapshot,
+  language?: PlayerLanguage,
+  capturePreview?: boolean
 ): string {
   assertRequestId(requestId);
   const normalizedName = scoreName.trim();
   if (!normalizedName || normalizedName.length > MAX_SCORE_NAME_LENGTH) {
-    throw new Error("O nome da partitura não é válido para o player.");
+    throw new Error(localized("O nome da partitura não é válido para o player.", "The score name is invalid for the player.", language));
   }
-  validatePlayerMusicXml(musicXml);
+  validatePlayerMusicXml(musicXml, undefined, language);
+  if (restoreSnapshot !== undefined && !isPlayerSessionSnapshot(restoreSnapshot)) {
+    throw new Error(localized("A posição salva do player não é válida.", "The saved player position is invalid.", language));
+  }
   return JSON.stringify({
     channel: PLAYER_BRIDGE_CHANNEL,
     version: PLAYER_BRIDGE_VERSION,
     type: "score.load",
     requestId,
-    payload: { musicXml, scoreName: normalizedName }
+    payload: {
+      musicXml,
+      scoreName: normalizedName,
+      ...(allowPlayback === false ? { allowPlayback: false } : {}),
+      ...(restoreSnapshot ? { restoreSnapshot } : {}),
+      ...(language ? { language } : {}),
+      ...(capturePreview ? { capturePreview: true } : {})
+    }
   });
+}
+
+export function createPlayerLanguageMessage(requestId: string, language: PlayerLanguage): string {
+  assertRequestId(requestId);
+  if (!isPlayerLanguage(language)) throw new Error(t("O idioma do player não é válido.", "The player language is invalid."));
+  return JSON.stringify({
+    channel: PLAYER_BRIDGE_CHANNEL,
+    version: PLAYER_BRIDGE_VERSION,
+    type: "player.language",
+    requestId,
+    payload: { language }
+  });
+}
+
+export function createPlayerFocusMessage(requestId: string, target: PlayerReadingTarget): string {
+  assertRequestId(requestId);
+  assertRequestId(target.id);
+  if ((target.page === undefined && target.measure === undefined)
+    || (target.page !== undefined && (!Number.isInteger(target.page) || target.page < 1 || target.page > 10_000))
+    || (target.measure !== undefined && (!target.measure.trim() || target.measure.length > 128))) {
+    throw new Error(t("A localização da partitura é inválida.", "The score location is invalid."));
+  }
+  return JSON.stringify({ channel: PLAYER_BRIDGE_CHANNEL, version: PLAYER_BRIDGE_VERSION,
+    type: "score.focus", requestId, payload: { target } });
 }
 
 export function createPlayerCommandMessage(
@@ -90,7 +156,7 @@ export function createPlayerCommandMessage(
   command: PlayerHostCommand
 ): string {
   assertRequestId(requestId);
-  if (!isPlayerHostCommand(command)) throw new Error("O comando do player não é válido.");
+  if (!isPlayerHostCommand(command)) throw new Error(t("O comando do player não é válido.", "The player command is invalid."));
   return JSON.stringify({
     channel: PLAYER_BRIDGE_CHANNEL,
     version: PLAYER_BRIDGE_VERSION,
@@ -101,7 +167,7 @@ export function createPlayerCommandMessage(
 }
 
 export function parsePlayerToHostMessage(raw: unknown): PlayerMessageParseResult {
-  if (typeof raw !== "string" || raw.length === 0 || raw.length > MAX_INCOMING_MESSAGE_LENGTH) {
+  if (typeof raw !== "string" || raw.length === 0 || raw.length > MAX_PLAYER_PREVIEW_BASE64_LENGTH + 512) {
     return invalid("invalid-message");
   }
 
@@ -115,6 +181,15 @@ export function parsePlayerToHostMessage(raw: unknown): PlayerMessageParseResult
   if (!isRecord(value) || value.channel !== PLAYER_BRIDGE_CHANNEL || value.version !== PLAYER_BRIDGE_VERSION) {
     return invalid("invalid-message");
   }
+
+  if (value.type === "reading.preview") {
+    if (!validEnvelopeWithRequest(value) || !isPlayerReadingPreview(value.payload)) return invalid("invalid-message");
+    return { ok: true, message: {
+      channel: PLAYER_BRIDGE_CHANNEL, version: PLAYER_BRIDGE_VERSION,
+      type: "reading.preview", requestId: value.requestId, payload: value.payload
+    } };
+  }
+  if (raw.length > MAX_INCOMING_MESSAGE_LENGTH) return invalid("invalid-message");
 
   if (value.type === "bridge.ready") {
     if (!hasOnlyKeys(value, ["channel", "version", "type", "payload"]) || !isRecord(value.payload)) {
@@ -130,6 +205,24 @@ export function parsePlayerToHostMessage(raw: unknown): PlayerMessageParseResult
         version: PLAYER_BRIDGE_VERSION,
         type: "bridge.ready",
         payload: { commands: value.payload.commands }
+      }
+    };
+  }
+
+  if (value.type === "bridge.capabilities") {
+    if (!hasOnlyKeys(value, ["channel", "version", "type", "payload"]) || !isRecord(value.payload)) {
+      return invalid("invalid-message");
+    }
+    if (!hasExactKeys(value.payload, ["capabilities"]) || !validCapabilities(value.payload.capabilities)) {
+      return invalid("invalid-message");
+    }
+    return {
+      ok: true,
+      message: {
+        channel: PLAYER_BRIDGE_CHANNEL,
+        version: PLAYER_BRIDGE_VERSION,
+        type: "bridge.capabilities",
+        payload: { capabilities: value.payload.capabilities }
       }
     };
   }
@@ -186,6 +279,34 @@ export function parsePlayerToHostMessage(raw: unknown): PlayerMessageParseResult
     };
   }
 
+  if (value.type === "reading.state") {
+    if (!validEnvelopeWithRequest(value) || !isRecord(value.payload)) return invalid("invalid-message");
+    if (
+      !hasExactRequiredAndOptionalKeys(value.payload, ["page", "scrollRatio"], ["anchorMeasureId", "anchorViewportRatio"])
+      || !Number.isInteger(value.payload.page)
+      || !validFiniteNumber(value.payload.page, 1, 10_000)
+      || !validFiniteNumber(value.payload.scrollRatio, 0, 1)
+      || (value.payload.anchorMeasureId !== undefined && !validAnchorId(value.payload.anchorMeasureId))
+      || (value.payload.anchorViewportRatio !== undefined && !validFiniteNumber(value.payload.anchorViewportRatio, -1, 1))
+      || (value.payload.anchorMeasureId === undefined) !== (value.payload.anchorViewportRatio === undefined)
+    ) return invalid("invalid-message");
+    return {
+      ok: true,
+      message: {
+        channel: PLAYER_BRIDGE_CHANNEL,
+        version: PLAYER_BRIDGE_VERSION,
+        type: "reading.state",
+        requestId: value.requestId,
+        payload: {
+          page: value.payload.page,
+          scrollRatio: value.payload.scrollRatio,
+          ...(typeof value.payload.anchorMeasureId === "string" ? { anchorMeasureId: value.payload.anchorMeasureId } : {}),
+          ...(typeof value.payload.anchorViewportRatio === "number" ? { anchorViewportRatio: value.payload.anchorViewportRatio } : {})
+        }
+      }
+    };
+  }
+
   if (value.type === "bridge.error") {
     if (!validOptionalRequestEnvelope(value) || !isRecord(value.payload)) return invalid("invalid-message");
     if (
@@ -210,22 +331,26 @@ export function parsePlayerToHostMessage(raw: unknown): PlayerMessageParseResult
   return invalid("invalid-message");
 }
 
-export function validatePlayerMusicXml(musicXml: string, knownBytes?: number | null): void {
+export function validatePlayerMusicXml(
+  musicXml: string,
+  knownBytes?: number | null,
+  language: PlayerLanguage = getLanguage()
+): void {
   if (typeof musicXml !== "string" || !musicXml.trim()) {
-    throw new PlayerMusicXmlError("empty", "O MusicXML desta partitura está vazio.");
+    throw new PlayerMusicXmlError("empty", localized("O MusicXML desta partitura está vazio.", "This score's MusicXML is empty.", language));
   }
-  validatePlayerMusicXmlSize(knownBytes ?? utf8ByteLength(musicXml));
+  validatePlayerMusicXmlSize(knownBytes ?? utf8ByteLength(musicXml), language);
   if (!/<score-(?:partwise|timewise)\b/i.test(musicXml)) {
-    throw new PlayerMusicXmlError("invalid", "O arquivo recebido não contém uma partitura MusicXML válida.");
+    throw new PlayerMusicXmlError("invalid", localized("O arquivo recebido não contém uma partitura MusicXML válida.", "The received file does not contain valid MusicXML.", language));
   }
 }
 
-export function validatePlayerMusicXmlSize(bytes: number): void {
+export function validatePlayerMusicXmlSize(bytes: number, language: PlayerLanguage = getLanguage()): void {
   if (!Number.isFinite(bytes) || bytes < 0) {
-    throw new PlayerMusicXmlError("invalid", "O tamanho do MusicXML recebido é inválido.");
+    throw new PlayerMusicXmlError("invalid", localized("O tamanho do MusicXML recebido é inválido.", "The received MusicXML size is invalid.", language));
   }
   if (bytes > MAX_PLAYER_MUSICXML_BYTES) {
-    throw new PlayerMusicXmlError("too-large", "Esta partitura é grande demais para abrir no player do app.");
+    throw new PlayerMusicXmlError("too-large", localized("Esta partitura é grande demais para abrir no player do app.", "This score is too large to open in the app player.", language));
   }
 }
 
@@ -244,7 +369,12 @@ function validOptionalRequestEnvelope(value: Record<string, unknown>): value is 
 }
 
 function assertRequestId(value: string): void {
-  if (!validRequestId(value)) throw new Error("O identificador da mensagem não é válido.");
+  if (!validRequestId(value)) throw new Error(t("O identificador da mensagem não é válido.", "The message identifier is invalid."));
+}
+
+function localized(portuguese: string, english: string, language?: PlayerLanguage): string {
+  if (language === undefined) return t(portuguese, english);
+  return language === "en" ? english : portuguese;
 }
 
 function validRequestId(value: unknown): value is string {
@@ -263,8 +393,34 @@ function validCommands(value: unknown): value is PlayerHostCommand[] {
     && new Set(value).size === value.length;
 }
 
+export function isPlayerReadingPreview(value: unknown): value is PlayerReadingPreview {
+  if (!isRecord(value) || !hasExactKeys(value, ["page", "width", "height", "jpegBase64"])) return false;
+  return validFiniteNumber(value.page, 1, 10_000) && Number.isInteger(value.page)
+    && validFiniteNumber(value.width, 1, 1600) && Number.isInteger(value.width)
+    && validFiniteNumber(value.height, 1, 1600) && Number.isInteger(value.height)
+    && typeof value.jpegBase64 === "string" && value.jpegBase64.length >= 16
+    && value.jpegBase64.length <= MAX_PLAYER_PREVIEW_BASE64_LENGTH
+    && value.jpegBase64.length % 4 === 0
+    && /^\/9j\/[A-Za-z0-9+/]+={0,2}$/.test(value.jpegBase64);
+}
+
+function validCapabilities(value: unknown): value is PlayerBridgeCapability[] {
+  return Array.isArray(value)
+    && value.length <= 4
+    && value.every((capability) => capability === "session.snapshot" || capability === "session.restore" || capability === "score.focus" || capability === "reading.preview")
+    && new Set(value).size === value.length;
+}
+
+function validAnchorId(value: unknown): value is string {
+  return typeof value === "string" && value.length > 0 && value.length <= 128 && !/[\u0000-\u001f\u007f]/.test(value);
+}
+
 function isPlayerHostCommand(value: unknown): value is PlayerHostCommand {
   return value === "pause" || value === "stop" || value === "dispose";
+}
+
+function isPlayerLanguage(value: unknown): value is PlayerLanguage {
+  return value === "pt" || value === "en";
 }
 
 function isPlayerScoreState(value: unknown): value is PlayerScoreState {
@@ -293,6 +449,20 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function hasOnlyKeys(value: Record<string, unknown>, allowed: readonly string[]): boolean {
   return Object.keys(value).every((key) => allowed.includes(key));
+}
+
+function hasExactKeys(value: Record<string, unknown>, allowed: readonly string[]): boolean {
+  return Object.keys(value).length === allowed.length && hasOnlyKeys(value, allowed);
+}
+
+function hasExactRequiredAndOptionalKeys(
+  value: Record<string, unknown>,
+  required: readonly string[],
+  optional: readonly string[]
+): boolean {
+  const keys = Object.keys(value);
+  return required.every((key) => keys.includes(key))
+    && keys.every((key) => required.includes(key) || optional.includes(key));
 }
 
 function utf8ByteLength(value: string): number {

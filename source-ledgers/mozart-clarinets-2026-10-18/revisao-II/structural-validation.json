@@ -1,0 +1,15 @@
+{
+  "measures": 538,
+  "sourceMovementCounts": {
+    "I": 295,
+    "III": 243
+  },
+  "mainNotes": 694,
+  "cueNotes": 274,
+  "tiePairs": 72,
+  "slurPairs": 67,
+  "parserErrors": [],
+  "issues": [],
+  "complete": true,
+  "limits": "Structural checks do not independently certify visual source fidelity."
+}

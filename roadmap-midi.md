@@ -1,6 +1,15 @@
 # Roadmap — Exportação MIDI e reprodução visual da partitura
 
-Última atualização: 2026-07-28.
+## Reconciliação em 2026-10-06
+
+O [roadmap central](docs/PROJECT_ROADMAP.md) controla a ordem e o estado atual. **Feita?** é indicada por cada checkbox. Marcações antigas preservam a evidência datada daquela entrega; não comprovam homologação do candidato atual. Implementação, validação local e liberação em aparelhos/produção são registradas separadamente no roadmap central.
+
+A cobertura agora substitui porcentagens de confiança: parcial somente por página inteira ausente, prévia/MusicXML disponíveis com aviso, áudio/MIDI bloqueados; falta de parte ou pauta obrigatória falha. Exercícios curtos são aceitos. A nova persistência de tentativas exige migration. O player mobile depende de internet para abrir; samples locais no bundle e cache de sessão não garantem abertura offline.
+
+Apple consultada em 2026-10-06: versão 1.0 REJECTED, build 6 VALID e IAP premium_unlock READY_TO_SUBMIT. Esse registro substitui expectativas antigas de aprovação; compra/restauração reais e nova submissão continuam pendentes. O contato definitivo é reifison@hotmail.com.
+
+
+Registro das entregas históricas: 2026-07-28. Reconciliação atual acima: 2026-10-06.
 
 ## Objetivo
 

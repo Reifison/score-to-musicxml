@@ -35,7 +35,7 @@ Nunca copiar para esse registro MusicXML, token, cookie, caminho interno de stor
 5. Confirmar build Release assinado, instalacao em dispositivo real e processamento das partituras de referencia.
 6. Verificar em ambiente de homologacao `Cache-Control: private, no-store, max-age=0`, `Pragma: no-cache` e `Expires: 0` nos dois downloads, o limite MIDI de 30 requisicoes por 5 minutos e a limpeza de diretorios temporarios mais antigos que `TEMP_FILE_RETENTION_HOURS`.
 7. Inspecionar amostra dos eventos `midi_export` de sucesso e falha para confirmar ausencia de conteudo musical e credenciais.
-8. Confirmar que o endpoint `/health` responde e que os sinais descritos abaixo podem ser consultados.
+8. Confirmar `/health` para liveness e `/ready` para banco, Redis e heartbeat do worker. O deploy não deve declarar conversão pronta com dependência indisponível. Executar um job controlado e conferir cobertura, resultado e arquivos antes da liberação.
 
 Se qualquer gate falhar, a liberacao permanece bloqueada; registrar o resultado e corrigir antes de formar um novo candidato.
 
@@ -85,7 +85,7 @@ Como gatilho operacional inicial, investigar e pausar a fase quando houver pelo 
 1. Parar novos convites TestFlight, a ampliacao do grupo ou a liberacao gradual.
 2. Registrar horario, versao, sintoma e ultimo artefato saudavel, sem incluir conteudo musical.
 3. Para falha web, restaurar o artefato web anterior e executar smoke test de login, lista e MusicXML.
-4. Para falha de API, restaurar o artefato anterior compativel, validar `/health`, login, MusicXML e conversao. Esta feature nao exige migration; ainda assim, confirmar a compatibilidade do candidato antes do deploy.
+4. Para falha de API, restaurar o artefato anterior compatível, validar `/health`, `/ready`, login, MusicXML e conversão. A entrega de confiabilidade de outubro inclui migration aditiva para tipos, cobertura e tentativas: executar e testar a migration em homologação; preservar essas tabelas/colunas ao restaurar código e não executar downgrade destrutivo durante o incidente.
 5. Um build iOS ja instalado nao pode ser removido remotamente. Interromper sua distribuicao, manter a API retrocompativel e preparar um build corretivo. Se a falha depender do novo endpoint, restaurar uma API segura que responda de maneira controlada sem afetar os fluxos existentes.
 6. Apos o rollback, confirmar que login, upload, conversao, preview e MusicXML voltaram ao estado saudavel e que nao ha audio ativo ao sair do player.
 7. Documentar causa, impacto, duracao e condicao para uma nova tentativa.
@@ -101,3 +101,19 @@ A liberacao controlada so pode ser considerada concluida depois de:
 - os limites permanecerem saudaveis durante a janela acordada;
 - suporte e politica de privacidade publicados corresponderem ao comportamento entregue;
 - o responsavel registrar a decisao de disponibilidade geral.
+
+## Evidência operacional da rodada de 2026-10-06
+
+- [x] **Feita? Sim — Preparar preflight de domínios.** Hosts distintos ou únicos produzem endereços Caddy deduplicados, e as URLs HTTPS precisam corresponder aos hosts. Cinco testes locais verificaram validade, divergências, configuração literal e ausência de execução de comandos do arquivo de ambiente.
+- [x] **Feita? Sim — Integrar readiness ao deploy.** Scripts usam `/ready`, verificam três dependências e mantêm o smoke test como gate separado. Caddy encaminha `/ready` e `/health` nos hosts configurados.
+- [x] **Feita? Sim — Validar a configuração no Caddy real.** A imagem oficial validou os dois hosts de teste, sem publicar portas ou emitir certificados.
+- [x] **Feita? Sim — Aplicar migrations em PostgreSQL temporário.** As 12 migrations e cinco testes de transação/concorrência passaram; dados fictícios removidos. Não houve migration em banco existente.
+- [ ] **Feita? Não — Validar HTTPS e cookies no ambiente alvo.** A configuração local validada não comprova certificados, DNS ou sessão no serviço publicado; não houve deploy.
+- [ ] **Feita? Não — Executar job controlado com OMR real após migration.** Registrar tentativa, páginas, partes e resultado sem conteúdo musical nos logs.
+- [x] **Feita? Sim — Exercitar quedas locais com dependências reais isoladas.** Banco pausado, Redis recriado e worker parado/retomado alteraram readiness entre 503 e 200. Uma tentativa salva sem Redis foi recuperada uma vez, sem novo débito. OMR stub produziu falha esperada; [evidências](validation/implementation-2026-10-06/REPORT.md).
+- [ ] **Feita? Não — Repetir o exercício com OMR no ambiente alvo.** Confirmar tentativa persistida, retornar Redis e comprovar uma publicação MusicXML sem novo débito; o teste local de fila não produziu reconhecimento musical.
+- [ ] **Feita? Não — Exercitar storage indisponível.** Em homologação isolada, negar escrita no volume temporário, verificar erro recuperável e ausência de processos/arquivos órfãos, restaurar acesso e retentar dentro do limite.
+- [ ] **Feita? Não — Ensaiar rollback com migration aplicada.** Salvar backup de homologação, validar o código anterior contra o schema aditivo e repetir login/lista/download/conversão. Não restaurar backup sobre banco de produção nesta etapa.
+- [ ] **Feita? Não — Configurar alerta de jobs presos.** Alertar sobre tentativas processing além do orçamento global mais a tolerância do reconciler, heartbeat ausente e fila que cresce sem conclusões; limiares precisam de observação do ambiente.
+
+O player mobile usa uma superfície HTTPS e precisa de internet para a primeira abertura e os recursos. Samples servidos pelo próprio bundle não significam que o player inteiro esteja empacotado no app. Testar a mensagem sem rede e a retomada sem áudio automático em release.

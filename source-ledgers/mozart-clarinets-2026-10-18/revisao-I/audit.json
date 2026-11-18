@@ -1,0 +1,370 @@
+{
+  "output": "/Users/reifison/Desktop/Apps/score-to-musicxml/output/mozart-clarinets-2026-10-18/Clarinet-I-reviewed.musicxml",
+  "stats": {
+    "mainNotes": 716,
+    "cueNotes": 266,
+    "mainRests": 376,
+    "tieStarts": 61,
+    "slurStarts": 80,
+    "graces": 9,
+    "measures": 538
+  },
+  "sources": [
+    {
+      "page": 1,
+      "mv": "I",
+      "start": 1,
+      "end": 89,
+      "systems": [
+        1,
+        10,
+        19,
+        26,
+        36,
+        42,
+        50,
+        58,
+        70,
+        77
+      ]
+    },
+    {
+      "page": 2,
+      "mv": "I",
+      "start": 90,
+      "end": 193,
+      "systems": [
+        90,
+        96,
+        102,
+        110,
+        118,
+        127,
+        138,
+        147,
+        155,
+        162,
+        170,
+        179,
+        187
+      ]
+    },
+    {
+      "page": 3,
+      "mv": "I",
+      "start": 194,
+      "end": 295,
+      "systems": [
+        194,
+        201,
+        211,
+        221,
+        231,
+        237,
+        248,
+        255,
+        266,
+        272,
+        280,
+        288
+      ]
+    },
+    {
+      "page": 4,
+      "mv": "III",
+      "start": 1,
+      "end": 118,
+      "systems": [
+        1,
+        8,
+        20,
+        27,
+        36,
+        43,
+        58,
+        67,
+        81,
+        89,
+        101,
+        110
+      ]
+    },
+    {
+      "page": 5,
+      "mv": "III",
+      "start": 119,
+      "end": 243,
+      "systems": [
+        119,
+        138,
+        147,
+        154,
+        170,
+        178,
+        186,
+        197,
+        208,
+        216,
+        229,
+        237
+      ]
+    }
+  ],
+  "multiRests": [
+    {
+      "mv": "I",
+      "start": 5,
+      "count": 2
+    },
+    {
+      "mv": "I",
+      "start": 13,
+      "count": 2
+    },
+    {
+      "mv": "I",
+      "start": 27,
+      "count": 5
+    },
+    {
+      "mv": "I",
+      "start": 52,
+      "count": 3
+    },
+    {
+      "mv": "I",
+      "start": 59,
+      "count": 7
+    },
+    {
+      "mv": "I",
+      "start": 80,
+      "count": 1
+    },
+    {
+      "mv": "I",
+      "start": 84,
+      "count": 6
+    },
+    {
+      "mv": "I",
+      "start": 99,
+      "count": 1
+    },
+    {
+      "mv": "I",
+      "start": 118,
+      "count": 1
+    },
+    {
+      "mv": "I",
+      "start": 123,
+      "count": 2
+    },
+    {
+      "mv": "I",
+      "start": 132,
+      "count": 4
+    },
+    {
+      "mv": "I",
+      "start": 147,
+      "count": 1
+    },
+    {
+      "mv": "I",
+      "start": 149,
+      "count": 1
+    },
+    {
+      "mv": "I",
+      "start": 153,
+      "count": 2
+    },
+    {
+      "mv": "I",
+      "start": 168,
+      "count": 2
+    },
+    {
+      "mv": "I",
+      "start": 186,
+      "count": 1
+    },
+    {
+      "mv": "I",
+      "start": 195,
+      "count": 1
+    },
+    {
+      "mv": "I",
+      "start": 206,
+      "count": 3
+    },
+    {
+      "mv": "I",
+      "start": 213,
+      "count": 4
+    },
+    {
+      "mv": "I",
+      "start": 225,
+      "count": 3
+    },
+    {
+      "mv": "I",
+      "start": 238,
+      "count": 6
+    },
+    {
+      "mv": "I",
+      "start": 257,
+      "count": 6
+    },
+    {
+      "mv": "III",
+      "start": 1,
+      "count": 8
+    },
+    {
+      "mv": "III",
+      "start": 13,
+      "count": 6
+    },
+    {
+      "mv": "III",
+      "start": 45,
+      "count": 7
+    },
+    {
+      "mv": "III",
+      "start": 62,
+      "count": 1
+    },
+    {
+      "mv": "III",
+      "start": 64,
+      "count": 1
+    },
+    {
+      "mv": "III",
+      "start": 69,
+      "count": 3
+    },
+    {
+      "mv": "III",
+      "start": 76,
+      "count": 5
+    },
+    {
+      "mv": "III",
+      "start": 90,
+      "count": 1
+    },
+    {
+      "mv": "III",
+      "start": 92,
+      "count": 1
+    },
+    {
+      "mv": "III",
+      "start": 94,
+      "count": 4
+    },
+    {
+      "mv": "III",
+      "start": 102,
+      "count": 1
+    },
+    {
+      "mv": "III",
+      "start": 106,
+      "count": 1
+    },
+    {
+      "mv": "III",
+      "start": 110,
+      "count": 1
+    },
+    {
+      "mv": "III",
+      "start": 127,
+      "count": 9
+    },
+    {
+      "mv": "III",
+      "start": 140,
+      "count": 3
+    },
+    {
+      "mv": "III",
+      "start": 155,
+      "count": 9
+    },
+    {
+      "mv": "III",
+      "start": 182,
+      "count": 2
+    },
+    {
+      "mv": "III",
+      "start": 185,
+      "count": 1
+    },
+    {
+      "mv": "III",
+      "start": 187,
+      "count": 1
+    },
+    {
+      "mv": "III",
+      "start": 192,
+      "count": 3
+    },
+    {
+      "mv": "III",
+      "start": 199,
+      "count": 1
+    },
+    {
+      "mv": "III",
+      "start": 204,
+      "count": 4
+    },
+    {
+      "mv": "III",
+      "start": 215,
+      "count": 1
+    },
+    {
+      "mv": "III",
+      "start": 217,
+      "count": 1
+    },
+    {
+      "mv": "III",
+      "start": 219,
+      "count": 5
+    },
+    {
+      "mv": "III",
+      "start": 227,
+      "count": 1
+    },
+    {
+      "mv": "III",
+      "start": 231,
+      "count": 1
+    },
+    {
+      "mv": "III",
+      "start": 237,
+      "count": 1
+    }
+  ],
+  "measureCounts": {
+    "I": 295,
+    "III": 243
+  },
+  "openTies": []
+}

@@ -10,9 +10,10 @@ if [[ ! -f "$ENV_FILE" ]]; then
   exit 1
 fi
 
-set -a
-source "$ENV_FILE"
-set +a
+bash scripts/validate-prod-env.sh "$ENV_FILE"
+source scripts/lib/production-env.sh
+load_production_env "$ENV_FILE"
+resolve_public_domains
 
 export VITE_API_URL="${VITE_API_URL:-https://converter.nossateoria.com.br}"
 
@@ -32,6 +33,9 @@ npm run build -w apps/web
 echo "==> Reiniciando PM2"
 pm2 restart converter-api converter-worker --update-env
 
+echo "==> Verificando banco, fila e worker"
+node scripts/check-readiness.mjs "https://${API_DOMAIN}/ready"
+
 echo
-echo "Deploy concluído."
+echo "Serviços prontos. Execute e registre o smoke test de conversão antes de liberar."
 echo "Web/API: ${VITE_API_URL}"

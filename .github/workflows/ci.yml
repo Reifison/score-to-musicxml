@@ -28,6 +28,9 @@ jobs:
       - name: Test API, Web and Mobile
         run: npm test
 
+      - name: Test conversion and reference scripts
+        run: node --test --test-concurrency=2 scripts/tests/*.test.mjs
+
   android-debug:
     runs-on: ubuntu-latest
     steps:

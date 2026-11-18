@@ -4,6 +4,7 @@ export type PlayerLifecycleCommand = "pause" | "dispose";
 // boots. Keep a bounded wait so a stale/misconfigured web deployment cannot
 // leave the score detail screen showing an endless loading indicator.
 export const PLAYER_BRIDGE_READY_TIMEOUT_MS = 15_000;
+export const PLAYER_BRIDGE_CAPABILITY_TIMEOUT_MS = 250;
 
 export function playerCommandForAppState(state: string): PlayerLifecycleCommand | null {
   return state === "active" ? null : "pause";
